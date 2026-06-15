@@ -45,7 +45,7 @@ flag lists below remain valid as a reference and for one-off runs.
 
 `taccap_gripper` / `bi_taccap_gripper` are **self-driven** (sensors only) — there is
 no taccap teleoperator. `lerobot-teleoperate` just streams `get_observation()` to
-Rerun; `--teleop.type=mock_teleop` is an **ignored placeholder**. Everything is
+Rerun; **no `--teleop` is required** (`teleop` is optional). Everything is
 addressed **by serial** — tactile via xensesdk (`Sensor.create(serial)` resolves the
 video port), wrist via `/dev/v4l/by-id`. Prerequisite: `xense.taccap` importable
 (`bash ./setup_env.sh --install`).
@@ -63,7 +63,6 @@ lerobot-teleoperate \
     --robot.right_wrist_camera_serial=XCA24Z0004m \
     --robot.left_tactile_serials='[GSPS01A24Z0003, GSPS01A24Z0004]' \
     --robot.right_tactile_serials='[GSPS01A24Z0005, GSPS01A24Z0006]' \
-    --teleop.type=mock_teleop \
     --fps=30 \
     --display_data=true
 ```
@@ -86,7 +85,6 @@ lerobot-teleoperate \
     --robot.enable_tracker=false \
     --robot.wrist_camera_serial=XCA24Z0003m \
     --robot.tactile_serials='[GSPS01A24Z0003, GSPS01A24Z0004]' \
-    --teleop.type=mock_teleop \
     --fps=30 \
     --display_data=true
 ```

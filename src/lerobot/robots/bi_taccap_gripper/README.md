@@ -39,7 +39,7 @@ serials committed. Everything is addressed **by serial** on the CLI:
 
 ## Usage
 
-- **Live Rerun visualization** (`lerobot-teleoperate` + `mock_teleop` placeholder)
+- **Live Rerun visualization** (`lerobot-teleoperate`, no teleop required)
   and **recording** (`lerobot-record`, no teleop → `self_driven_record_loop`,
   shifted-frame) — see ready-to-run commands with this station's serials in
   [`../../scripts/client_commands.md`](../../scripts/client_commands.md).

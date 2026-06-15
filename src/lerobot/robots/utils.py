@@ -23,53 +23,12 @@ from .robot import Robot
 
 
 def make_robot_from_config(config: RobotConfig) -> Robot:
-    # TODO(Steven): Consider just using the make_device_from_device_class for all types
-    if config.type == "koch_follower":
-        from .koch_follower import KochFollower
-
-        return KochFollower(config)
-    elif config.type == "omx_follower":
-        from .omx_follower import OmxFollower
-
-        return OmxFollower(config)
-    elif config.type == "so100_follower":
-        from .so_follower import SO100Follower
-
-        return SO100Follower(config)
-    elif config.type == "so101_follower":
-        from .so_follower import SO101Follower
-
-        return SO101Follower(config)
-    elif config.type == "lekiwi":
-        from .lekiwi import LeKiwi
-
-        return LeKiwi(config)
-    elif config.type == "hope_jr_hand":
-        from .hope_jr import HopeJrHand
-
-        return HopeJrHand(config)
-    elif config.type == "hope_jr_arm":
-        from .hope_jr import HopeJrArm
-
-        return HopeJrArm(config)
-    elif config.type == "bi_so_follower":
-        from .bi_so_follower import BiSOFollower
-
-        return BiSOFollower(config)
-    elif config.type == "reachy2":
-        from .reachy2 import Reachy2Robot
-
-        return Reachy2Robot(config)
-    elif config.type == "mock_robot":
-        # from tests.mocks.mock_robot import MockRobot
-        from .mock_robot import MockRobot
-
-        return MockRobot(config)
-    else:
-        try:
-            return cast(Robot, make_device_from_device_class(config))
-        except Exception as e:
-            raise ValueError(f"Error creating robot with config {config}: {e}") from e
+    # All robots (taccap_gripper / bi_taccap_gripper) resolve through the
+    # draccus ChoiceRegistry + config_class lookup.
+    try:
+        return cast(Robot, make_device_from_device_class(config))
+    except Exception as e:
+        raise ValueError(f"Error creating robot with config {config}: {e}") from e
 
 
 # TODO(pepijn): Move to pipeline step to make sure we don't have to do this in the robot code and send action to robot is clean for use in dataset

@@ -1,5 +1,0 @@
-timestamp
-actual_TCP_pose
-actual_joint_positions
-actual_joint_speeds
-actual_joint_torques

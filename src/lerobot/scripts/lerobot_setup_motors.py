@@ -35,7 +35,6 @@ from lerobot.robots import (  # noqa: F401
 from lerobot.teleoperators import (  # noqa: F401
     TeleoperatorConfig,
     make_teleoperator_from_config,
-    mock_teleop,
 )
 
 COMPATIBLE_DEVICES = [
