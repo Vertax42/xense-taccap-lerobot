@@ -74,9 +74,9 @@ class Pico4(Teleoperator):
       * Origin: Set as the headset position when the Unity application starts (when Unity app launches)
       * NOT when xrt.init() is called, and NOT when clicking connect button in Unity
       * This means the coordinate system is fixed when Unity app launches, and remains constant until Unity restarts
-    - World: Right-handed, X forward (away from base), Y left, Z up (Flexiv-aligned)
+    - World: Right-handed, X forward (away from base), Y left, Z up (gravity-aligned)
 
-    Output action format (world-frame TCP, shared by Flexiv & Elite):
+    Output action format (world-frame TCP):
     - tcp.x, tcp.y, tcp.z: absolute EEF target position (meters)
     - tcp.r1-r6: absolute EEF target orientation (6D rotation representation)
     - gripper.pos: absolute gripper position (meters, from trigger)
@@ -451,10 +451,10 @@ class Pico4(Teleoperator):
 
         This is Step 2: Coordinate transformation after filtering.
 
-        The "world" frame is the shared, gravity-aligned convention every robot now
-        reports in (originally the Flexiv axes): X forward (away from base), Y left,
-        Z up. Elite CS66 lifts its tilted base frame into this same convention, so
-        the same transform drives any of these robots.
+        The "world" frame is our shared, gravity-aligned convention: X forward
+        (away from base), Y left, Z up. The same transform is reused by the
+        TacCap-Gripper motion-tracker reader so its recorded poses land in this
+        same world frame.
 
         Pico4:  Right-handed, X right, Y up, Z in (toward user)
         World:  Right-handed, X forward (away from base), Y left, Z up

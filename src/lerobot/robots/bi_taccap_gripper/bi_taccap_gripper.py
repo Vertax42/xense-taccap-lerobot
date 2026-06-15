@@ -217,7 +217,7 @@ class BiTaccapGripper(Robot):
                     )
                 else:
                     self.logger.info(
-                        f"  [{side}] ✅ Pico4 tracker connected (raw xrt frame)"
+                        f"  [{side}] ✅ Pico4 tracker connected (world frame)"
                     )
 
         # 4. Cameras (tactile + the wrist cameras added above).

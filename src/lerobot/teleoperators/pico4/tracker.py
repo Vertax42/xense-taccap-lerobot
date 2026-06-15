@@ -23,29 +23,26 @@ the service reports at index 0.
 
 Coordinate frame
 ----------------
-The tracker pose this reader emits is in the **same xrt-native frame
-as the controller poses** that ``teleop_pico4.get_*_controller_pose()``
-returns — both come from the same XenseVR PC Service via the same
-pybind, just different endpoint calls (``get_motion_tracker_pose`` vs.
-``get_left/right_controller_pose``). So if you want this reader to act
-as a drop-in replacement for the controller in a teleop flow, apply
-the same coordinate transform that the controller-based teleop applies
-(e.g. ``teleop_pico4`` does a Pico→world remap in
-``_transform_pico_to_world_coordinate``; you'd reuse that on top of ``get_pose_raw()``).
+The raw tracker pose comes from the **same xrt-native Pico frame as the
+controller poses** (``get_motion_tracker_pose`` vs.
+``get_left/right_controller_pose`` on the same XenseVR PC Service). By
+default (``pico_to_world=True``) this reader applies the **same Pico→world
+remap the controller applies** (cf.
+``teleop_pico4._transform_pico_to_world_coordinate``):
 
-For pure handheld data collection (taccap_gripper) there is no arm,
-so we don't remap — we emit the raw xrt frame and leave reframing to
-post-processing.
+    Pico4:  X right,   Y up, Z toward user
+    World:  X forward, Y left, Z up   (gravity-aligned)
+
+so ``get_pose_ee()`` / ``get_action()`` emit **world-frame** poses, matching
+the controller convention (position ``[x,y,z] → [-z,-x,y]``, orientation
+conjugated by the same rotation). Set ``pico_to_world=False`` to emit the
+untouched xrt frame instead. The optional ``tracker_to_ee_pos`` /
+``tracker_to_ee_quat`` rigid offset is then applied in the tracker's local
+frame on top of the world pose.
 
 The world origin is the headset position the moment the Unity VR app
 started — *not* when xrt.init() ran, *not* when you clicked Connect in
 Unity. Restarting Unity mid-session relocates the origin.
-
-The axis convention (handedness, Z direction) is documented inconsistently
-upstream — Pico docs say right-handed, SDK example notes left-handed.
-Treat this as **TBD pending live verification on real hardware**. The
-reader returns what xrt gives us, untouched apart from the configurable
-rigid mount transform (``tracker_to_ee_pos`` / ``tracker_to_ee_quat``).
 
 Concurrency
 -----------
@@ -103,6 +100,21 @@ STALE_WARN_THRESHOLD_S = 0.5
 # the log readable when the service is up but a tracker is unplugged.
 MISSING_SN_WARN_INTERVAL_S = 5.0
 
+# Fixed Pico→world frame remap, identical to the controller's
+# ``teleop_pico4._transform_pico_to_world_coordinate``:
+#   Pico4:  X right,   Y up, Z toward user
+#   World:  X forward, Y left, Z up   (gravity-aligned)
+# Position [x, y, z] → [-z, -x, y]; orientation conjugated by the same rotation
+# (applied below as the 4x4 conjugation G · T · Gᵀ).
+_PICO_TO_WORLD_R = np.array(
+    [
+        [0.0, 0.0, -1.0],
+        [-1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ],
+    dtype=np.float64,
+)
+
 
 class Pico4TrackerReader:
     """Read a single Pico4 Ultra motion tracker via the XenseVR PC Service.
@@ -122,6 +134,10 @@ class Pico4TrackerReader:
             non-negative. Prevents discontinuities in the 6D rotation
             representation when the quaternion crosses a hemisphere
             boundary. See commit af2b2939.
+        pico_to_world: If True (default), remap each raw tracker pose from
+            the Pico xrt frame into our world frame (the same transform the
+            controller applies in ``teleop_pico4``). Set False to emit the
+            untouched xrt-native frame.
         poll_hz: Background poll rate. Default ``TRACKER_POLL_HZ`` (90).
         logger_name: Optional logger name suffix.
     """
@@ -143,6 +159,7 @@ class Pico4TrackerReader:
         tracker_to_ee_quat: tuple[float, float, float, float] | list[float] = (1.0, 0.0, 0.0, 0.0),
         device_wait_timeout: float = 10.0,
         hemisphere_fix: bool = True,
+        pico_to_world: bool = True,
         poll_hz: float = TRACKER_POLL_HZ,
         logger_name: str | None = None,
     ):
@@ -160,7 +177,15 @@ class Pico4TrackerReader:
         self.tracker_to_ee_quat = np.asarray(tracker_to_ee_quat, dtype=np.float64)
         self.device_wait_timeout = float(device_wait_timeout)
         self.hemisphere_fix = bool(hemisphere_fix)
+        self.pico_to_world = bool(pico_to_world)
         self._poll_period = 1.0 / max(1e-3, float(poll_hz))
+
+        # Pre-build the 4x4 Pico→world frame remap (pure rotation; inverse =
+        # transpose). Applied to every raw tracker pose when pico_to_world.
+        self._pico_to_world = np.eye(4, dtype=np.float64)
+        self._pico_to_world[:3, :3] = _PICO_TO_WORLD_R
+        self._pico_to_world_inv = np.eye(4, dtype=np.float64)
+        self._pico_to_world_inv[:3, :3] = _PICO_TO_WORLD_R.T
 
         suffix = logger_name or (tracker_sn if tracker_sn else "auto")
         with Pico4TrackerReader._counter_lock:
@@ -408,8 +433,14 @@ class Pico4TrackerReader:
                 dtype=np.float64,
             )
 
-            # Apply tracker→EE rigid transform.
+            # Remap the raw Pico tracker pose into our world frame (same
+            # convention the controller uses), then apply the local tracker→EE
+            # rigid offset. With pico_to_world=False the raw xrt frame is kept.
             t_world_tracker = quaternion_to_matrix(raw_wxyz, input_format="wxyz")
+            if self.pico_to_world:
+                t_world_tracker = (
+                    self._pico_to_world @ t_world_tracker @ self._pico_to_world_inv
+                )
             t_world_ee = t_world_tracker @ self._tracker_to_ee_matrix
 
             # UMI alignment: snapshot the first valid pose so all
@@ -491,7 +522,8 @@ class Pico4TrackerReader:
             return self._latest_raw_wxyz.copy()
 
     def get_pose_ee(self) -> np.ndarray | None:
-        """Latest pose of the end-effector frame (rigid-transformed,
+        """Latest pose of the end-effector frame in the **world frame**
+        (Pico→world remapped when ``pico_to_world``, then rigid-transformed and
         hemisphere-corrected) as ``[x, y, z, qw, qx, qy, qz]``.
 
         Logs a stale-pose warning once if the cached pose is older than
@@ -513,7 +545,8 @@ class Pico4TrackerReader:
 
     def get_action(self) -> dict[str, Any]:
         """Return the same 9-field dict that ``ViveTrackerTeleop.get_action()``
-        produces (no gripper field — callers add it from their own source).
+        produces (no gripper field — callers add it from their own source), in
+        the **world frame** (see ``pico_to_world``).
 
         Keys: ``tcp.x``, ``tcp.y``, ``tcp.z``, ``tcp.r1``..``tcp.r6``.
 

@@ -249,7 +249,7 @@ class TaccapGripper(Robot):
                     f"(init_tcp_pose={init_pose.tolist()})"
                 )
             else:
-                self.logger.info("  ✅ Pico4 tracker connected (raw xrt frame)")
+                self.logger.info("  ✅ Pico4 tracker connected (world frame)")
 
         # 3. Cameras (tactile + wrist).
         for cam_name, cam in self.cameras.items():
