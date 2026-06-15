@@ -22,9 +22,10 @@ Tactile and wrist cameras are wired through the standard LeRobot
 ``cameras`` framework (not the SDK's bundled streams), so they appear
 as normal swappable ``cameras.<name>=...`` CLI entries.
 
-Recorded frame: raw Pico4 native (X right, Y up, Z toward the headset
-operator at Unity-launch time). The recorded pose is **not** in any
-robot's base frame; downstream policies must reframe explicitly.
+Recorded pose frame: our world frame (X forward away from base, Y left,
+Z up, gravity-aligned) — ``Pico4TrackerReader`` applies the same Pico→world
+remap the controller uses. The world origin is the headset position at
+Unity-app launch time.
 """
 
 from dataclasses import dataclass, field
@@ -76,9 +77,13 @@ class TaccapGripperConfig(RobotConfig):
 
     # ---- Pico4 Ultra tracker ---------------------------------------------
     enable_tracker: bool = True
+    """Read the Pico4 tracker for 6-DoF pose. Gated on ``tracker_sn``: with no
+    serial the tracker is force-disabled in ``__post_init__`` — pass
+    ``tracker_sn`` to record pose, omit it to record tactile/gripper only."""
 
     tracker_sn: str | None = None
-    """Pico4 motion-tracker serial number. None = first available."""
+    """Pico4 motion-tracker serial number. Provide it to enable pose; ``None``
+    disables pose (no serial → no unambiguously-selected tracker)."""
 
     tracker_to_ee_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
     """Translation from the tracker frame to the gripper end-effector frame
@@ -98,14 +103,14 @@ class TaccapGripperConfig(RobotConfig):
     in the same frame as ``init_tcp_pose`` (typically the deployment
     robot's base frame at the home configuration). Mirrors
     ``vive_tracker``'s UMI behaviour. Off by default
-    pending live verification on real Flexiv hardware."""
+    pending live verification on real deployment hardware."""
 
     init_tcp_pose: tuple[float, float, float, float, float, float, float] = (
         0.693307, -0.114902, 0.14589, 0.004567, 0.003238, 0.999984, 0.001246,
     )
     """Robot TCP pose at the operator's "init" stance, as
-    ``[x, y, z, qw, qx, qy, qz]``. Default is Flexiv Rizon4's home
-    pose. Only consumed when
+    ``[x, y, z, qw, qx, qy, qz]``, in the world frame. Default is an example
+    deployment robot's home pose. Only consumed when
     ``enable_init_pose_alignment`` is True."""
 
     # ---- Tactile sensors (Xense; opened by serial via xensesdk) ----------
@@ -147,6 +152,12 @@ class TaccapGripperConfig(RobotConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        # Pose is gated on the tracker serial: pass tracker_sn to record 6-DoF
+        # pose, omit it to record tactile/gripper only (no serial → no pose).
+        if self.tracker_sn is None:
+            self.enable_tracker = False
+
         if self.enable_gripper and self.gripper_open_rad <= 0:
             raise ValueError(
                 f"gripper_open_rad must be positive, got {self.gripper_open_rad}. "

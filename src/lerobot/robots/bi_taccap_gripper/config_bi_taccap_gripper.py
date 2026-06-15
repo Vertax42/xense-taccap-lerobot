@@ -23,8 +23,9 @@ prefixed the same way so the flat dict stays unique.
 Per-side identity / cameras come from the operator (the MCU-only SDK no longer
 reports them):
 - ``{side}_firmware_sn`` pins the gripper (None => find_one, errors on 0 or >1).
-- ``{side}_tracker_sn`` pins the Pico4 tracker (None => first available — ambiguous
-  when two trackers are present, so pin both for a real bimanual rig).
+- ``{side}_tracker_sn`` pins the Pico4 tracker AND gates that side's pose: pass
+  the SN to record that side's 6-DoF pose, omit it (None) to disable pose for
+  that side (no serial → no unambiguously-selected tracker).
 - ``{side}_wrist_camera_index_or_path`` is the wrist UVC V4L2 path.
 - tactile sensors go in ``cameras`` with pre-prefixed keys
   (``left_tactile_0``/``left_tactile_1``/``right_tactile_0``/``right_tactile_1``).
@@ -138,6 +139,11 @@ class BiTaccapGripperConfig(RobotConfig):
     def __post_init__(self):
         super().__post_init__()
         for side in _SIDES:
+            # Pose is gated per side on the tracker serial: pass {side}_tracker_sn
+            # to record that side's pose, omit it to disable pose for that side.
+            if getattr(self, f"{side}_tracker_sn") is None:
+                setattr(self, f"{side}_enable_tracker", False)
+
             if getattr(self, f"{side}_enable_gripper") and getattr(
                 self, f"{side}_gripper_open_rad"
             ) <= 0:
