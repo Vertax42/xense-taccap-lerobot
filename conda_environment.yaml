@@ -1,4 +1,4 @@
-name: lerobot-xense-py312
+name: lerobot-xense
 channels:
   - robostack-staging # ros-humble-kdl-parser, ros-humble-ament-cmake for ARX5
   - conda-forge
