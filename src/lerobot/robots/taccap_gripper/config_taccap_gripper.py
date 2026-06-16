@@ -9,7 +9,7 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 """
-Configuration for TacCap-Gripper handheld data-collection device.
+Configuration for the TacCap-Gripper handheld data-collection device.
 
 Hardware:
 - TacCap-Gripper handheld unit (XenseRobotics): motor-driven jaw, two
@@ -18,9 +18,12 @@ Hardware:
 - Pico4 Ultra independent motion tracker physically mounted on top to
   provide 6-DoF pose. Reached via ``xensevr_pc_service_sdk``.
 
-Tactile and wrist cameras are wired through the standard LeRobot
-``cameras`` framework (not the SDK's bundled streams), so they appear
-as normal swappable ``cameras.<name>=...`` CLI entries.
+**Serial auto-discovery.** The gripper, its two tactile sensors and its wrist
+camera are scanned from the connected hardware and matched by the Xense serial
+rule (odd sequence → left, even → right; patch ``m`` → Master/Leader, ``s`` →
+Slave/Follower) — no serials are listed here (see ``serial_discovery.py``). With
+both grippers connected, set ``side`` to pick one; otherwise the single connected
+gripper is used. A non-conforming serial raises a clear error.
 
 Recorded pose frame: our world frame (X forward away from base, Y left,
 Z up, gravity-aligned) — ``Pico4TrackerReader`` applies the same Pico→world
@@ -30,9 +33,6 @@ Unity-app launch time.
 
 from dataclasses import dataclass, field
 
-from lerobot.cameras.utils import CameraConfig
-from lerobot.cameras.xense.configuration_xense import XenseTactileCameraConfig
-
 from ..config import RobotConfig
 
 
@@ -41,16 +41,7 @@ from ..config import RobotConfig
 class TaccapGripperConfig(RobotConfig):
     """Configuration for the TacCap-Gripper handheld data-collection device.
 
-    Discovery uses the firmware-burned serial (stable across CH343 chip
-    swaps, which the MCU serial is not):
-    - ``firmware_sn=None`` => ``xense.taccap.find_one()`` (errors on 0 or >1).
-    - ``firmware_sn="SN000..."`` => ``scan_grippers()`` filtered to that SN.
-
-    Pose is sourced from a single Pico4 Ultra motion tracker:
-    - ``tracker_sn=None`` => the first tracker the service reports.
-    - ``tracker_sn="..."`` => match by serial; fails fast with the available
-      SNs if not found.
-
+    Gripper, tactile sensors and wrist camera are auto-discovered by serial rule.
     Gripper position is normalised via ``clip(position_rad / open_rad, 0, 1)``.
     ``position_rad`` is the SDK's cooked (post-zero, >=0-clamped) reading.
     The closed endpoint is **always 0** -- the SDK's ``Encoder.set_zero()``
@@ -60,11 +51,20 @@ class TaccapGripperConfig(RobotConfig):
     1.7 = TC-GU-01 hardware stop).
     """
 
-    # ---- TacCap gripper ---------------------------------------------------
-    firmware_sn: str | None = None
-    """Firmware SN reported by ``GripperEndpoints.firmware_sn`` (None =
-    find_one). Stable across CH343 chip swaps."""
+    # ---- Discovery --------------------------------------------------------
+    role: str = "leader"
+    """Device role to bind: ``leader`` (Master, patch ``m``) or ``follower``
+    (Slave, patch ``s``)."""
 
+    side: str | None = None
+    """Which gripper to use, ``left`` or ``right``. ``None`` = auto when exactly
+    one matching gripper/camera is connected; required when both sides are present."""
+
+    expected_tactiles_per_side: int = 2
+    """How many tactile sensors the gripper carries (obs keys ``tactile_0`` /
+    ``tactile_1``). Discovery errors on a different count."""
+
+    # ---- TacCap gripper ---------------------------------------------------
     enable_gripper: bool = True
     enable_imu: bool = False
     """If True, also publish ``imu.{accel,gyro,mag}.{x,y,z}`` per observation."""
@@ -113,38 +113,18 @@ class TaccapGripperConfig(RobotConfig):
     deployment robot's home pose. Only consumed when
     ``enable_init_pose_alignment`` is True."""
 
-    # ---- Tactile sensors (Xense; opened by serial via xensesdk) ----------
-    tactile_serials: list[str] = field(default_factory=list)
-    """Xense tactile sensor serial numbers, e.g.
-    ``["GSPS01A24Z0003", "GSPS01A24Z0004"]``. Each becomes an observation key
-    ``tactile_0`` / ``tactile_1`` / … . xensesdk's ``Sensor.create(serial)``
-    resolves the V4L2 video port from the serial — no device path needed."""
-
+    # ---- Tactile sensors (Xense; auto-discovered by serial) --------------
     tactile_fps: int = 30
     tactile_output_types: list[str] = field(default_factory=lambda: ["rectify"])
-    """Defaults applied to every ``tactile_serials`` entry. A single output type
+    """Defaults applied to every discovered tactile sensor. A single output type
     yields one (H, W, 3) image; ``rectify`` is inference-free. Width/height are
     auto-derived from the SDK's rectify_size (do not hard-code them — the rectify
     array is (400, 700, 3))."""
 
-    cameras: dict[str, CameraConfig] = field(default_factory=dict)
-    """Advanced/extra camera configs, merged after the ones built from
-    ``tactile_serials``. Normally leave empty and use ``tactile_serials``.
-    The wrist UVC camera does NOT belong here — see ``wrist_camera_serial``."""
-
-    # ---- Wrist camera (OpenCV UVC; opened by serial or explicit path) ----
+    # ---- Wrist camera (OpenCV UVC; auto-discovered by serial) ------------
     enable_wrist_camera: bool = True
-    """Wire the wrist UVC camera under observation key ``wrist_cam``. Requires
-    ``wrist_camera_serial`` (preferred) or ``wrist_camera_index_or_path``."""
-
-    wrist_camera_serial: str = ""
-    """Wrist UVC camera serial, e.g. ``"XCA24Z0003m"``. Resolved to its V4L2
-    device at connect via ``/dev/v4l/by-id/*<serial>*-video-index0``. Use this
-    OR ``wrist_camera_index_or_path``."""
-
-    wrist_camera_index_or_path: str = ""
-    """Explicit V4L2 device path/index override (wins over ``wrist_camera_serial``),
-    e.g. ``/dev/v4l/by-id/usb-...-index0`` or ``"4"``."""
+    """Wire the wrist UVC camera under observation key ``wrist_cam`` (resolved
+    from /dev/v4l/by-id by the discovered XC… serial)."""
 
     wrist_camera_width: int = 640
     wrist_camera_height: int = 480
@@ -152,6 +132,13 @@ class TaccapGripperConfig(RobotConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.role.strip().lower() not in ("leader", "master", "follower", "slave"):
+            raise ValueError(
+                f"role must be leader/master or follower/slave, got {self.role!r}."
+            )
+        if self.side is not None and self.side.strip().lower() not in ("left", "right"):
+            raise ValueError(f"side must be left, right, or None, got {self.side!r}.")
 
         # Pose is gated on the tracker serial: pass tracker_sn to record 6-DoF
         # pose, omit it to record tactile/gripper only (no serial → no pose).
@@ -163,30 +150,4 @@ class TaccapGripperConfig(RobotConfig):
                 f"gripper_open_rad must be positive, got {self.gripper_open_rad}. "
                 "Closed=0 is fixed by the SDK's Encoder.set_zero(); open_rad "
                 "is the mechanical-max angle (TC-GU-01 default 1.7)."
-            )
-
-        # Build tactile camera configs from serials (xensesdk resolves the video
-        # port from the serial). Keyed tactile_0, tactile_1, … . width/height are
-        # left to the SDK config to auto-derive (correct rectify orientation).
-        for i, sn in enumerate(self.tactile_serials):
-            key = f"tactile_{i}"
-            if key not in self.cameras:
-                self.cameras[key] = XenseTactileCameraConfig(
-                    serial_number=sn,
-                    fps=self.tactile_fps,
-                    output_types=list(self.tactile_output_types),
-                )
-
-        if self.enable_wrist_camera and "wrist_cam" in self.cameras:
-            raise ValueError(
-                "wrist_cam is wired by enable_wrist_camera=True; "
-                "remove it from `cameras` or set enable_wrist_camera=False."
-            )
-        if self.enable_wrist_camera and not (
-            self.wrist_camera_serial or self.wrist_camera_index_or_path
-        ):
-            raise ValueError(
-                "enable_wrist_camera=True requires wrist_camera_serial "
-                "(e.g. 'XCA24Z0003m') or wrist_camera_index_or_path. Set one, or "
-                "disable with enable_wrist_camera=false."
             )

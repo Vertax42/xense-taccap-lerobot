@@ -17,17 +17,18 @@ no-op (the jaw motors stay disabled; we read encoders only). Pose comes from a
 per-side Pico4 Ultra tracker (``Pico4TrackerReader``); tactile + wrist cameras go
 through the standard ``cameras`` framework.
 
-Implemented with the *reimplement-with-prefixes* pattern (cf. ``bi_elite_cs66_rt``):
-per-side hardware handles live in dicts keyed ``"left"``/``"right"`` and every
-observation/action key is ``left_``/``right_`` prefixed. The per-side reading logic
-is the same as the single ``TaccapGripper``.
+Devices are **auto-discovered by serial rule** (``serial_discovery.py``): the two
+grippers, four tactile sensors and two wrist cameras are scanned from the
+connected hardware and assigned to ``left``/``right`` by serial (odd → left, even
+→ right) and role (Master/Leader vs Slave/Follower). No serials are listed in the
+config; a non-conforming or missing/duplicated device raises a clear error.
 
 Observation features (per side ``{s}`` in left/right):
     {s}_tcp.x/y/z, {s}_tcp.r1..r6   -- Pico4 tracker → EE 6D pose (if enable_tracker)
     {s}_gripper.pos                 -- normalised jaw [0=closed, 1=open]
     {s}_imu.accel/gyro/mag.{x,y,z}  -- optional
     {s}_wrist                       -- wrist UVC frame (if enable_wrist_camera)
-    {s}_tactile_0 / {s}_tactile_1   -- tactile frames (from `cameras`)
+    {s}_tactile_0 / {s}_tactile_1   -- tactile frames
 """
 
 from __future__ import annotations
@@ -39,10 +40,12 @@ import numpy as np
 
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.cameras.utils import make_cameras_from_configs
+from lerobot.cameras.xense.configuration_xense import XenseTactileCameraConfig
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.utils.robot_utils import get_logger
 
 from ..robot import Robot
+from ..taccap_gripper import serial_discovery as disco
 from ..taccap_gripper.taccap_gripper import resolve_wrist_camera_path
 from .config_bi_taccap_gripper import BiTaccapGripperConfig
 
@@ -51,9 +54,8 @@ _SIDES = ("left", "right")
 # ---- TacCap-Gripper SDK -----------------------------------------------------
 try:
     from xense.taccap import (
+        FollowerGripper,
         LeaderGripper,
-        find_one,
-        scan_grippers,
     )
 
     TACCAP_SDK_AVAILABLE = True
@@ -87,6 +89,7 @@ class BiTaccapGripper(Robot):
         super().__init__(config)
         self.config = config
         self.logger = get_logger(f"BiTaccapGripper-{config.id or 'default'}")
+        self._role = disco.normalize_role(config.role)
 
         any_gripper = any(getattr(config, f"{s}_enable_gripper") for s in _SIDES)
         any_tracker = any(getattr(config, f"{s}_enable_tracker") for s in _SIDES)
@@ -102,14 +105,61 @@ class BiTaccapGripper(Robot):
             )
 
         # Per-side hardware handles, populated on connect.
-        self._gripper: dict[str, Any] = {s: None for s in _SIDES}  # LeaderGripper
+        self._gripper: dict[str, Any] = {s: None for s in _SIDES}  # Leader/FollowerGripper
         self._endpoints: dict[str, Any] = {s: None for s in _SIDES}  # GripperEndpoints
         self._tracker: dict[str, Pico4TrackerReader | None] = {s: None for s in _SIDES}
 
-        # Tactile cameras (wrist cameras are added per side in connect()).
-        self.cameras = make_cameras_from_configs(config.cameras)
+        # Auto-discover tactile + wrist cameras (filesystem only) and build their
+        # configs so the observation schema is ready before connect().
+        self._camera_configs = self._discover_camera_configs()
+        self.cameras = make_cameras_from_configs(self._camera_configs)
 
         self._is_connected = False
+
+    # ------------------------------------------------------------------ discovery
+
+    def _discover_camera_configs(self) -> dict[str, Any]:
+        """Build the tactile + wrist camera configs from serial auto-discovery.
+
+        Tactiles (``{side}_tactile_i``) and wrist cameras (``{side}_wrist``) are
+        resolved from ``/dev/v4l/by-id`` by the serial rule; counts are validated
+        per side so a mis-installed sensor is caught here, not mid-episode.
+        """
+        n_exp = self.config.expected_tactiles_per_side
+        tactiles = disco.discover_tactiles() if n_exp else {"left": [], "right": []}
+        want_wrist = any(getattr(self.config, f"{s}_enable_wrist_camera") for s in _SIDES)
+        cameras = disco.discover_wrist_cameras(self._role) if want_wrist else {}
+
+        configs: dict[str, Any] = {}
+        for side in _SIDES:
+            parity = "odd" if side == "left" else "even"
+            if n_exp:
+                got = tactiles.get(side, [])
+                if len(got) != n_exp:
+                    raise ValueError(
+                        f"Expected {n_exp} {side} tactile sensors ({parity} sequence), "
+                        f"found {len(got)}: {got}."
+                    )
+                for i, sn in enumerate(got):
+                    configs[f"{side}_tactile_{i}"] = XenseTactileCameraConfig(
+                        serial_number=sn,
+                        fps=self.config.tactile_fps,
+                        output_types=list(self.config.tactile_output_types),
+                    )
+            if getattr(self.config, f"{side}_enable_wrist_camera"):
+                sn = cameras.get(side)
+                if not sn:
+                    raise ValueError(
+                        f"No {self._role} wrist camera found for the {side} side "
+                        f"(rule: {side} == {parity} sequence)."
+                    )
+                configs[f"{side}_wrist"] = OpenCVCameraConfig(
+                    index_or_path=resolve_wrist_camera_path(sn),
+                    width=self.config.wrist_camera_width,
+                    height=self.config.wrist_camera_height,
+                    fps=self.config.wrist_camera_fps,
+                )
+        return configs
 
     # ------------------------------------------------------------------ schema
 
@@ -129,18 +179,9 @@ class BiTaccapGripper(Robot):
                     features[f"{side}_imu.gyro.{axis}"] = float
                     features[f"{side}_imu.mag.{axis}"] = float
 
-        # Tactile cameras (keys are already left_/right_ prefixed in config.cameras).
-        for cam_name, cam_cfg in self.config.cameras.items():
+        # Tactile + wrist cameras (keys already left_/right_ prefixed).
+        for cam_name, cam_cfg in self._camera_configs.items():
             features[cam_name] = (cam_cfg.height, cam_cfg.width, 3)
-
-        # Wrist cameras (wired per side from config, not from `cameras`).
-        for side in _SIDES:
-            if getattr(self.config, f"{side}_enable_wrist_camera"):
-                features[f"{side}_wrist"] = (
-                    getattr(self.config, f"{side}_wrist_camera_height"),
-                    getattr(self.config, f"{side}_wrist_camera_width"),
-                    3,
-                )
 
         return features
 
@@ -174,26 +215,31 @@ class BiTaccapGripper(Robot):
 
         self.logger.info("Connecting BiTacCap-Gripper...")
 
+        # 1. Grippers — auto-discovered by serial (side + role) on the bus.
+        any_gripper = any(getattr(self.config, f"{s}_enable_gripper") for s in _SIDES)
+        grippers = disco.discover_grippers(self._role) if any_gripper else {}
+        gripper_cls = LeaderGripper if self._role == "leader" else FollowerGripper
+
         for side in _SIDES:
-            # 1. Gripper SDK (MCU transport only; cameras come from the LeRobot
-            #    camera framework, so open_cameras stays False).
+            # Gripper (MCU transport only; cameras come from the LeRobot camera
+            # framework, so open_cameras stays False).
             if getattr(self.config, f"{side}_enable_gripper"):
-                endpoints = self._discover_gripper(side)
+                endpoints = grippers.get(side)
+                if endpoints is None:
+                    raise RuntimeError(
+                        f"No {self._role} gripper discovered for the {side} side."
+                    )
                 self._endpoints[side] = endpoints
                 self.logger.info(
-                    f"  [{side}] TacCap-Gripper: side={endpoints.side} "
+                    f"  [{side}] TacCap-Gripper: side={endpoints.side} role={endpoints.role} "
                     f"fw_sn={endpoints.firmware_sn!r} mcu={endpoints.mcu_serial!r}"
                 )
-                self._gripper[side] = LeaderGripper(endpoints.mcu_device)
+                self._gripper[side] = gripper_cls(endpoints.mcu_device)
                 self.logger.info(
-                    f"  [{side}] ✅ LeaderGripper attached (MCU-only, read-only)"
+                    f"  [{side}] ✅ {gripper_cls.__name__} attached (MCU-only, read-only)"
                 )
 
-            # 2. Wrist camera (V4L2 path from config; usable even if gripper off).
-            if getattr(self.config, f"{side}_enable_wrist_camera"):
-                self._attach_wrist_camera(side)
-
-            # 3. Pico4 tracker.
+            # 2. Pico4 tracker.
             if getattr(self.config, f"{side}_enable_tracker"):
                 tracker = Pico4TrackerReader(
                     tracker_sn=getattr(self.config, f"{side}_tracker_sn"),
@@ -220,7 +266,7 @@ class BiTaccapGripper(Robot):
                         f"  [{side}] ✅ Pico4 tracker connected (world frame)"
                     )
 
-        # 4. Cameras (tactile + the wrist cameras added above).
+        # 3. Cameras (tactile + wrist, auto-discovered in __init__).
         for cam_name, cam in self.cameras.items():
             self.logger.info(f"  Connecting camera {cam_name}...")
             cam.connect()
@@ -229,58 +275,6 @@ class BiTaccapGripper(Robot):
 
         self._is_connected = True
         self.logger.info(f"✅ {self} connected.")
-
-    def _attach_wrist_camera(self, side: str) -> None:
-        """Wire the ``{side}`` wrist UVC camera into ``self.cameras`` under key
-        ``{side}_wrist``. ``{side}_wrist_camera_index_or_path`` (explicit override)
-        wins; otherwise ``{side}_wrist_camera_serial`` is resolved via
-        ``/dev/v4l/by-id``."""
-        wrist_path = getattr(self.config, f"{side}_wrist_camera_index_or_path")
-        if not wrist_path:
-            serial = getattr(self.config, f"{side}_wrist_camera_serial")
-            if not serial:
-                raise RuntimeError(
-                    f"{side}_enable_wrist_camera=True but neither "
-                    f"{side}_wrist_camera_serial nor {side}_wrist_camera_index_or_path is set."
-                )
-            wrist_path = resolve_wrist_camera_path(serial)
-            self.logger.info(f"  [{side}] Resolved wrist serial {serial!r} -> {wrist_path}")
-
-        cfg = OpenCVCameraConfig(
-            index_or_path=wrist_path,
-            width=getattr(self.config, f"{side}_wrist_camera_width"),
-            height=getattr(self.config, f"{side}_wrist_camera_height"),
-            fps=getattr(self.config, f"{side}_wrist_camera_fps"),
-        )
-        self.cameras.update(make_cameras_from_configs({f"{side}_wrist": cfg}))
-        self.logger.info(
-            f"  [{side}] ✅ Wrist camera wired at {wrist_path!r} "
-            f"({getattr(self.config, f'{side}_wrist_camera_width')}x"
-            f"{getattr(self.config, f'{side}_wrist_camera_height')} @ "
-            f"{getattr(self.config, f'{side}_wrist_camera_fps')}fps)"
-        )
-
-    def _discover_gripper(self, side: str):
-        """Locate exactly one TacCap-Gripper for ``side``, optionally filtered by
-        ``{side}_firmware_sn`` (the stable identity — the MCU serial is the CH343
-        chip serial which can change on chip swap)."""
-        firmware_sn = getattr(self.config, f"{side}_firmware_sn")
-        if firmware_sn is None:
-            return find_one()
-        all_eps = list(scan_grippers())
-        candidates = [eps for eps in all_eps if eps.firmware_sn == firmware_sn]
-        if not candidates:
-            seen = [eps.firmware_sn for eps in all_eps]
-            raise RuntimeError(
-                f"No TacCap-Gripper with {side}_firmware_sn={firmware_sn!r} found. "
-                f"Visible firmware SNs: {seen!r}."
-            )
-        if len(candidates) > 1:
-            raise RuntimeError(
-                f"Multiple TacCap-Grippers match {side}_firmware_sn={firmware_sn!r}. "
-                "Firmware SNs are supposed to be unique — check your firmware burning."
-            )
-        return candidates[0]
 
     def disconnect(self) -> None:
         if not self.is_connected:
@@ -311,7 +305,7 @@ class BiTaccapGripper(Robot):
                         gripper.stop_streaming()
                 except Exception as e:  # pragma: no cover
                     self.logger.warn(f"  [{side}] stop_streaming raised: {e}")
-                # LeaderGripper has no explicit close; transport released on GC.
+                # Gripper has no explicit close; transport released on GC.
                 self._gripper[side] = None
             self._endpoints[side] = None
 

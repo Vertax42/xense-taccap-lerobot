@@ -15,26 +15,20 @@ Two independent TacCap-Gripper units (left + right), each = a motor-driven jaw
 (encoder read-only), two embedded visuotactile sensors, a wrist UVC camera, an
 IMU, plus a Pico4 Ultra motion tracker mounted on top for 6-DoF pose.
 
-This is the bimanual analogue of ``taccap_gripper`` (the single unit). It follows
-the *reimplement-with-prefixes* convention used by ``bi_elite_cs66_rt``: a single
-flat config with ``left_``/``right_`` prefixed fields, and observation/action keys
-prefixed the same way so the flat dict stays unique.
+**Serial auto-discovery.** You no longer list device serials. The robot scans the
+connected hardware at construct/connect time and assigns each gripper, tactile
+sensor and wrist camera to ``left``/``right`` by the Xense serial rule (odd
+sequence → left, even → right; patch ``m`` → Master/Leader, ``s`` → Slave/
+Follower). See ``serial_discovery.py``. A serial that does not conform, or a side
+whose hardware is missing/duplicated, raises a clear error so the config and the
+physical serials can never drift out of alignment.
 
-Per-side identity / cameras come from the operator (the MCU-only SDK no longer
-reports them):
-- ``{side}_firmware_sn`` pins the gripper (None => find_one, errors on 0 or >1).
-- ``{side}_tracker_sn`` pins the Pico4 tracker AND gates that side's pose: pass
-  the SN to record that side's 6-DoF pose, omit it (None) to disable pose for
-  that side (no serial → no unambiguously-selected tracker).
-- ``{side}_wrist_camera_index_or_path`` is the wrist UVC V4L2 path.
-- tactile sensors go in ``cameras`` with pre-prefixed keys
-  (``left_tactile_0``/``left_tactile_1``/``right_tactile_0``/``right_tactile_1``).
+Only the Pico4 motion-tracker serial (``{side}_tracker_sn``, a separate ``PT-…``
+serial system) is still given explicitly, and it gates that side's pose: pass it
+to record 6-DoF pose, omit it to record tactile + gripper only.
 """
 
 from dataclasses import dataclass, field
-
-from lerobot.cameras.utils import CameraConfig
-from lerobot.cameras.xense.configuration_xense import XenseTactileCameraConfig
 
 from ..config import RobotConfig
 
@@ -56,14 +50,24 @@ _DEFAULT_INIT_TCP_POSE = (
 class BiTaccapGripperConfig(RobotConfig):
     """Configuration for the bimanual TacCap-Gripper data-collection rig.
 
-    See ``TaccapGripperConfig`` for the per-unit semantics; every field below is
-    the ``left_``/``right_`` prefixed version of a single-unit field. Gripper
-    position is normalised via ``clip(position_rad / {side}_gripper_open_rad, 0, 1)``
-    (0 = closed, fixed by the SDK's ``Encoder.set_zero()``; 1 = mechanical max).
+    Grippers, tactile sensors and wrist cameras are auto-discovered by serial
+    rule — no serials are listed here. Gripper position is normalised via
+    ``clip(position_rad / {side}_gripper_open_rad, 0, 1)`` (0 = closed, fixed by
+    the SDK's ``Encoder.set_zero()``; 1 = mechanical max).
     """
 
+    # ---- Discovery --------------------------------------------------------
+    role: str = "leader"
+    """Which device role to bind for the handheld rig: ``leader`` (Master, patch
+    ``m``) or ``follower`` (Slave, patch ``s``). Discovery binds only this role
+    and errors if a side resolves to the other."""
+
+    expected_tactiles_per_side: int = 2
+    """How many tactile sensors each gripper carries (obs keys
+    ``{side}_tactile_0`` / ``{side}_tactile_1``). Discovery errors if a side has
+    a different count, catching a mis-installed/mis-burned sensor."""
+
     # ---- Left TacCap unit -------------------------------------------------
-    left_firmware_sn: str | None = None
     left_enable_gripper: bool = True
     left_enable_imu: bool = False
     left_gripper_open_rad: float = 1.7
@@ -77,21 +81,9 @@ class BiTaccapGripperConfig(RobotConfig):
         _DEFAULT_INIT_TCP_POSE
     )
 
-    left_tactile_serials: list[str] = field(default_factory=list)
-    """Left-hand Xense tactile serials, e.g. ["GSPS01A24Z0003","GSPS01A24Z0004"]
-    → obs keys left_tactile_0 / left_tactile_1 (opened by serial via xensesdk)."""
-
     left_enable_wrist_camera: bool = True
-    left_wrist_camera_serial: str = ""
-    """Left wrist UVC serial, e.g. "XCA24Z0003m" (resolved via /dev/v4l/by-id).
-    Use this OR left_wrist_camera_index_or_path (the latter wins)."""
-    left_wrist_camera_index_or_path: str = ""
-    left_wrist_camera_width: int = 640
-    left_wrist_camera_height: int = 480
-    left_wrist_camera_fps: int = 30
 
     # ---- Right TacCap unit ------------------------------------------------
-    right_firmware_sn: str | None = None
     right_enable_gripper: bool = True
     right_enable_imu: bool = False
     right_gripper_open_rad: float = 1.7
@@ -105,18 +97,7 @@ class BiTaccapGripperConfig(RobotConfig):
         _DEFAULT_INIT_TCP_POSE
     )
 
-    right_tactile_serials: list[str] = field(default_factory=list)
-    """Right-hand Xense tactile serials, e.g. ["GSPS01A24Z0005","GSPS01A24Z0006"]
-    → obs keys right_tactile_0 / right_tactile_1 (opened by serial via xensesdk)."""
-
     right_enable_wrist_camera: bool = True
-    right_wrist_camera_serial: str = ""
-    """Right wrist UVC serial, e.g. "XCA24Z0004m" (resolved via /dev/v4l/by-id).
-    Use this OR right_wrist_camera_index_or_path (the latter wins)."""
-    right_wrist_camera_index_or_path: str = ""
-    right_wrist_camera_width: int = 640
-    right_wrist_camera_height: int = 480
-    right_wrist_camera_fps: int = 30
 
     # ---- Shared -----------------------------------------------------------
     tracker_wait_timeout: float = 10.0
@@ -124,20 +105,25 @@ class BiTaccapGripperConfig(RobotConfig):
 
     tactile_fps: int = 30
     tactile_output_types: list[str] = field(default_factory=lambda: ["rectify"])
-    """Defaults applied to every tactile serial. Single output type → one
-    (H, W, 3) image (rectify is inference-free, landscape (400, 700, 3) like
-    v0.4.4). Width/height auto-derive from the SDK rectify_size — don't hard-code."""
+    """Defaults applied to every discovered tactile sensor. Single output type →
+    one (H, W, 3) image (rectify is inference-free, landscape (400, 700, 3)).
+    Width/height auto-derive from the SDK rectify_size — don't hard-code."""
 
-    cameras: dict[str, CameraConfig] = field(default_factory=dict)
-    """Tactile camera configs keyed by *pre-prefixed* feature name, e.g.
-    ``left_tactile_0`` / ``left_tactile_1`` / ``right_tactile_0`` / ``right_tactile_1``,
-    each an ``XenseTactileCameraConfig(serial_number="GSPS...")``. The wrist UVC
-    cameras do NOT belong here — they are wired per side via
-    ``{side}_enable_wrist_camera`` + ``{side}_wrist_camera_index_or_path`` and appear
-    as observation keys ``left_wrist`` / ``right_wrist``."""
+    wrist_camera_width: int = 640
+    wrist_camera_height: int = 480
+    wrist_camera_fps: int = 30
 
     def __post_init__(self):
         super().__post_init__()
+        if self.role.strip().lower() not in (
+            "leader",
+            "master",
+            "follower",
+            "slave",
+        ):
+            raise ValueError(
+                f"role must be leader/master or follower/slave, got {self.role!r}."
+            )
         for side in _SIDES:
             # Pose is gated per side on the tracker serial: pass {side}_tracker_sn
             # to record that side's pose, omit it to disable pose for that side.
@@ -153,30 +139,3 @@ class BiTaccapGripperConfig(RobotConfig):
                     "SDK's Encoder.set_zero(); open_rad is the mechanical-max angle "
                     "(TC-GU-01 default 1.7)."
                 )
-            # Build this side's tactile camera configs from serials. Keyed
-            # {side}_tactile_0/1; width/height auto-derive (landscape (400,700,3)).
-            for i, sn in enumerate(getattr(self, f"{side}_tactile_serials")):
-                key = f"{side}_tactile_{i}"
-                if key not in self.cameras:
-                    self.cameras[key] = XenseTactileCameraConfig(
-                        serial_number=sn,
-                        fps=self.tactile_fps,
-                        output_types=list(self.tactile_output_types),
-                    )
-
-            wrist_key = f"{side}_wrist"
-            if getattr(self, f"{side}_enable_wrist_camera"):
-                if wrist_key in self.cameras:
-                    raise ValueError(
-                        f"{wrist_key} is wired by {side}_enable_wrist_camera=True; remove it "
-                        f"from `cameras` or set {side}_enable_wrist_camera=False."
-                    )
-                if not (
-                    getattr(self, f"{side}_wrist_camera_serial")
-                    or getattr(self, f"{side}_wrist_camera_index_or_path")
-                ):
-                    raise ValueError(
-                        f"{side}_enable_wrist_camera=True requires {side}_wrist_camera_serial "
-                        f"(e.g. 'XCA24Z0003m') or {side}_wrist_camera_index_or_path. Set one, "
-                        f"or disable with {side}_enable_wrist_camera=false."
-                    )

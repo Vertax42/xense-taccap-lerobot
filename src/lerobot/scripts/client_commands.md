@@ -45,9 +45,11 @@ flag lists below remain valid as a reference and for one-off runs.
 
 `taccap_gripper` / `bi_taccap_gripper` are **self-driven** (sensors only) — there is
 no taccap teleoperator. `lerobot-teleoperate` just streams `get_observation()` to
-Rerun; **no `--teleop` is required** (`teleop` is optional). Everything is
-addressed **by serial** — tactile via xensesdk (`Sensor.create(serial)` resolves the
-video port), wrist via `/dev/v4l/by-id`. Prerequisite: `xense.taccap` importable
+Rerun; **no `--teleop` is required** (`teleop` is optional). Devices are
+**auto-discovered by serial rule** — you list **no** gripper/tactile/camera serials;
+the rig is scanned and each device is assigned to left/right by serial (odd→left,
+even→right) and role (`m`=Master/Leader, `s`=Slave/Follower). A non-conforming or
+missing/duplicated device errors out. Prerequisite: `xense.taccap` importable
 (`bash ./setup_env.sh --install`).
 
 ### Bimanual (`bi_taccap_gripper`) — cameras + gripper only (no Pico4 trackers)
@@ -55,47 +57,41 @@ video port), wrist via `/dev/v4l/by-id`. Prerequisite: `xense.taccap` importable
 ```bash
 lerobot-teleoperate \
     --robot.type=bi_taccap_gripper \
-    --robot.left_firmware_sn=TCGU01A24Z0003m \
-    --robot.right_firmware_sn=TCGU01A24Z0004m \
-    --robot.left_enable_tracker=false \
-    --robot.right_enable_tracker=false \
-    --robot.left_wrist_camera_serial=XCA24Z0003m \
-    --robot.right_wrist_camera_serial=XCA24Z0004m \
-    --robot.left_tactile_serials='[GSPS01A24Z0003, GSPS01A24Z0004]' \
-    --robot.right_tactile_serials='[GSPS01A24Z0005, GSPS01A24Z0006]' \
     --fps=30 \
     --display_data=true
 ```
 
-To add 6D pose, drop the two `*_enable_tracker=false` lines and pin both Pico4 SNs
-(trackers default ON; with two units `tracker_sn=None` is ambiguous; needs the
-XenseVR PC service):
+That's it — both leader grippers, all four tactiles and both wrist cameras are
+discovered automatically. To add 6D pose, pin the Pico4 tracker SNs (pose is gated
+on the SN: provide it → record pose, omit it → no pose for that side):
 
 ```bash
     --robot.left_tracker_sn=<L-pico4-sn> \
     --robot.right_tracker_sn=<R-pico4-sn> \
 ```
 
+Other knobs: `--robot.role=follower` to bind the Slave units; `--robot.gripper_open_rad`,
+`--robot.tactile_fps`, `--robot.wrist_camera_width/height/fps`.
+
 ### Single (`taccap_gripper`)
 
 ```bash
 lerobot-teleoperate \
     --robot.type=taccap_gripper \
-    --robot.firmware_sn=TCGU01A24Z0003m \
-    --robot.enable_tracker=false \
-    --robot.wrist_camera_serial=XCA24Z0003m \
-    --robot.tactile_serials='[GSPS01A24Z0003, GSPS01A24Z0004]' \
+    --robot.side=left \
     --fps=30 \
     --display_data=true
 ```
 
-> Notes: tactile sensors open **by serial** (xensesdk resolves the video port); obs
-> keys are `tactile_0/1` (single) or `left_/right_tactile_0/1` (bi). The rectify image
-> is landscape `(400,700,3)` (transposed like v0.4.4) — width/height auto-derive, don't
-> hard-code. Wrist: pass the model serial (`XCA…`), resolved via `/dev/v4l/by-id`
-> (USB iSerial `01.00.00` is non-unique); explicit `*_wrist_camera_index_or_path` still
-> overrides. Recording (no teleop): `lerobot-record --robot.type=bi_taccap_gripper …`
-> (same robot flags, swap `--teleop.*` for `--dataset.*`).
+`--robot.side` is only needed when both grippers are connected; with a single unit it
+auto-resolves.
+
+> Notes: discovery reads `/dev/v4l/by-id` (tactile + wrist serials) and
+> `scan_grippers()` (gripper side/role). Obs keys are `tactile_0/1` + `wrist_cam`
+> (single) or `left_/right_tactile_0/1` + `{side}_wrist` (bi). The rectify image is
+> landscape `(400,700,3)` — width/height auto-derive, don't hard-code. Recording (no
+> teleop): `lerobot-record --robot.type=bi_taccap_gripper …` (same robot flags, swap
+> `--teleop.*` for `--dataset.*`).
 
 ## BiARX5 Robot lerobot-teleoperate command
 
