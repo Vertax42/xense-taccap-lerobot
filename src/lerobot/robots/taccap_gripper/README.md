@@ -15,10 +15,9 @@ Components:
   of the gripper. Reached via `xensevr_pc_service_sdk` and read by
   `lerobot.teleoperators.pico4.tracker.Pico4TrackerReader`.
 - **Cameras:** plain LeRobot `cameras/` framework, read asynchronously.
-  The wrist UVC camera is wired from `wrist_camera_index_or_path` — the
-  MCU-only SDK no longer reports the V4L2 path, so supply it in config
-  (prefer a `/dev/v4l/by-id/...` path for stability). Tactile sensors come
-  through `cameras/xense/` keyed by OG serial (also supplied in config).
+  The two tactile sensors and the wrist UVC camera are **auto-discovered by
+  serial rule** (`serial_discovery.py`) from `/dev/v4l/by-id` — no serials are
+  supplied in config. See "End-to-end recording" below.
 
 The device is passive: `send_action()` is a no-op; the motor is never
 enabled. The operator drives the jaw mechanically and walks the device
@@ -26,16 +25,14 @@ through demonstrations.
 
 ## Coordinate frame
 
-Recorded pose is in the **raw xrt-native frame by default** — the
-same frame the controllers come out of (`xrt.get_*_controller_pose()`),
-since both endpoints share one PC Service. The world origin is the
-headset position the moment the Unity VR Client app started.
+Recorded pose is in **our world frame by default** (X forward away from base,
+Y left, Z up, gravity-aligned): `Pico4TrackerReader` applies the same Pico→world
+remap the `teleop_pico4` controller flow uses (`pico_to_world=True`). The world
+origin is the headset position the moment the Unity VR Client app started.
 
-This is **not** any robot's base frame. Downstream policies must
-reframe explicitly. If you want this device to act as a drop-in
-replacement for the existing `teleop_pico4` controller flow, apply the
-same Pico→Flexiv coordinate remap that `teleop_pico4.py` does on
-controller poses.
+This world frame is **not** any specific robot's base frame — for cross-robot
+transfer, use the opt-in init-pose alignment below to rebase recorded poses into
+a deployment robot's frame.
 
 The axis convention (handedness, Z direction) is documented
 inconsistently upstream — Pico docs claim right-handed, the SDK's
@@ -45,7 +42,7 @@ verification on real hardware.**
 **Do not restart the Unity client between episodes** or all subsequent
 recordings will be in a different origin.
 
-### Opt-in: UMI-style init-pose alignment (reserved for Flexiv)
+### Opt-in: UMI-style init-pose alignment (reserved for deployment)
 
 Mirrors the `vive_tracker` UMI flow. When enabled,
 `Pico4TrackerReader.connect()` snapshots the first valid tracker pose
@@ -53,14 +50,14 @@ and computes a rigid transform so all subsequent recorded poses are
 in the **same frame as `init_tcp_pose`** (typically the deployment
 robot's base frame at its home configuration).
 
-Config fields (default OFF — needs live Flexiv verification first):
+Config fields (default OFF — needs live deployment-hardware verification first):
 
 ```python
 enable_init_pose_alignment: bool = False
 init_tcp_pose: tuple[float, ...] = (
     0.693307, -0.114902, 0.14589,
     0.004567, 0.003238, 0.999984, 0.001246,
-)  # Flexiv Rizon4 home pose
+)  # example deployment-robot home pose
 ```
 
 Workflow when ready to enable:
@@ -124,26 +121,19 @@ the config (`tracker_to_ee_pos`, `tracker_to_ee_quat`).
 
 ## Standalone smoke test
 
-Verifies the robot stack independently of `lerobot-record`:
+Verifies the robot stack independently of `lerobot-record`. Devices are
+auto-discovered; pass `--side` only when both grippers are connected:
 
 ```bash
-# Gripper only (encoder readings; no cameras, no tracker):
-python -m lerobot.robots.taccap_gripper.taccap_gripper_example
+# Gripper + tactile + wrist, all auto-discovered (pick a side if both present):
+python -m lerobot.robots.taccap_gripper.taccap_gripper_example --side left
 
-# Pin a specific unit by firmware SN:
+# Cameras + gripper only (no wrist camera):
+python -m lerobot.robots.taccap_gripper.taccap_gripper_example --side left --no-wrist
+
+# + Pico4 tracker (pose); pin its PT- serial:
 python -m lerobot.robots.taccap_gripper.taccap_gripper_example \
-    --firmware-sn SN000003
-
-# + wrist camera (supply the V4L2 path explicitly):
-python -m lerobot.robots.taccap_gripper.taccap_gripper_example \
-    --wrist-cam-path /dev/v4l/by-id/usb-...-index0
-
-# + Pico4 tracker:
-python -m lerobot.robots.taccap_gripper.taccap_gripper_example --tracker
-
-# + tactile sensors (left + right OG serials supplied explicitly):
-python -m lerobot.robots.taccap_gripper.taccap_gripper_example \
-    --tactile-left-sn OG000XXX --tactile-right-sn OG000YYY
+    --side left --tracker --tracker-sn PT-XXXXXXXXXXXX
 ```
 
 ## End-to-end recording
@@ -159,33 +149,30 @@ degenerate same-frame pose. One frame is dropped per episode (the first
 sample has no predecessor). The between-episode reset phase is a passive
 wait: reposition the device, no teleop needed. **No `--teleop.*` flags.**
 
-Everything is addressed **by serial** — tactile via xensesdk (`Sensor.create(serial)`
-resolves the V4L2 video port), wrist via `/dev/v4l/by-id`:
+Devices are **auto-discovered by serial rule** — no gripper/tactile/camera serials
+are listed. With a single gripper connected it is picked up automatically; when both
+are connected, set `--robot.side=left|right`:
 
 ```bash
 lerobot-record \
     --robot.type=taccap_gripper \
     --robot.id=right \
-    --robot.firmware_sn=TCGU01A24Z0003m \
-    --robot.wrist_camera_serial=XCA24Z0003m \
-    --robot.tactile_serials='[GSPS01A24Z0003, GSPS01A24Z0004]' \
+    --robot.side=right \
     --dataset.repo_id=<your_org>/<your_dataset> \
     --dataset.num_episodes=1 \
     --dataset.episode_time_s=10 \
     --dataset.single_task='Pick up the object'
 ```
 
-- **Tactile**: `--robot.tactile_serials='[…]'` → obs keys `tactile_0` / `tactile_1`.
-  xensesdk opens each by serial; the rectify image is landscape `(400,700,3)`
-  (width/height auto-derive — don't hard-code). Defaults: `rectify`, fps 30 (tune via
-  `--robot.tactile_fps` / `--robot.tactile_output_types`).
-- **Wrist**: `--robot.wrist_camera_serial=XCA…` (resolved via `/dev/v4l/by-id`; the USB
-  iSerial `01.00.00` is non-unique). `--robot.wrist_camera_index_or_path=…` overrides;
-  `--robot.enable_wrist_camera=false` skips. Tune `--robot.wrist_camera_width/_height/_fps`.
+Add `--robot.tracker_sn=<PT-…>` to also record 6-DoF pose (omit it to record tactile
++ gripper only — pose is gated on the serial).
 
-`--robot.firmware_sn=…` is only needed when more than one gripper is
-plugged in. With a single gripper, the SDK's `find_one()` picks it up
-automatically.
+- **Tactile** → obs keys `tactile_0` / `tactile_1`; the rectify image is landscape
+  `(400,700,3)` (width/height auto-derive — don't hard-code). Tune `--robot.tactile_fps`
+  / `--robot.tactile_output_types`; `--robot.expected_tactiles_per_side` validates the count.
+- **Wrist** → obs key `wrist_cam`; `--robot.enable_wrist_camera=false` skips. Tune
+  `--robot.wrist_camera_width/_height/_fps`.
+- **Role**: `--robot.role=follower` binds the Slave units (default `leader`).
 
 ## What gets recorded per frame
 
@@ -221,9 +208,7 @@ The Pico4 tracker reader is shared with future devices and lives at
 The integration point in the record script is
 `src/lerobot/scripts/lerobot_record.py`:
 
-- `RecordConfig.__post_init__` allows `teleop=None` when
-  `robot.type == "taccap_gripper"`.
-- The dispatch in `record()` no longer has a dedicated self-driven loop
-  (the former shared loop was removed); `taccap_gripper` falls through to
-  the generic `record_loop`. A dedicated handheld record path is not yet
-  re-implemented.
+- `RecordConfig.__post_init__` allows `teleop=None` for the self-driven
+  robots (`SELF_DRIVEN_RECORD_ROBOTS`).
+- The dispatch in `record()` routes `taccap_gripper` / `bi_taccap_gripper`
+  to the dedicated `self_driven_record_loop` (shifted-frame pairing).

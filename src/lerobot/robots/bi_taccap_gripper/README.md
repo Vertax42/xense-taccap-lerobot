@@ -20,29 +20,60 @@ Per side `{s}` ∈ {left, right}:
 | `{s}_gripper.pos` | `{s}_enable_gripper` | normalised jaw, 0=closed / 1=open |
 | `{s}_imu.{accel,gyro,mag}.{x,y,z}` | `{s}_enable_imu` | IMU |
 | `{s}_wrist` | `{s}_enable_wrist_camera` | wrist UVC frame |
-| `{s}_tactile_0` / `{s}_tactile_1` | from `cameras` | tactile frames |
+| `{s}_tactile_0` / `{s}_tactile_1` | auto-discovered | tactile frames |
 
 `action_features` = the pose + `{s}_gripper.pos` subset (no cameras).
 
-## Config (generic fields, serials via CLI)
+## Config — auto-discovered by serial rule
 
-Flat `left_*` / `right_*` fields mirroring `TaccapGripperConfig` — no presets, no
-serials committed. Everything is addressed **by serial** on the CLI:
-- `--robot.{left,right}_firmware_sn` — gripper (firmware SN).
-- `--robot.{left,right}_tactile_serials='[GSPS…, GSPS…]'` — tactile sensors → obs
-  keys `{side}_tactile_0/1`; xensesdk resolves each serial → video port. Rectify is
-  landscape `(400,700,3)` (width/height auto-derive — don't hard-code).
-- `--robot.{left,right}_wrist_camera_serial=XCA…` — wrist UVC, resolved via
-  `/dev/v4l/by-id` (`*_wrist_camera_index_or_path` overrides).
-- `--robot.{left,right}_tracker_sn` — Pico4 (default **on**; pin both SNs, or disable
-  with `--robot.{left,right}_enable_tracker=false`).
+**No device serials are listed.** The two grippers, four tactile sensors and two wrist
+cameras are scanned from the connected hardware and assigned to `left`/`right` by the
+Xense serial rule:
+
+- **Side** — last sequence digit odd → left, even → right.
+- **Role** — patch `m` → Master/Leader, `s` → Slave/Follower (`--robot.role`, default
+  `leader`).
+
+A non-conforming serial, or a side with a missing / duplicated / mis-counted device,
+raises a clear error so the config and the physical serials can't drift out of
+alignment. See [`serial_discovery.py`](../taccap_gripper/serial_discovery.py).
+
+Only the Pico4 tracker serial is given explicitly, and it **gates that side's pose**:
+pass `--robot.{left,right}_tracker_sn=<PT-…>` to record 6-DoF pose, omit it for tactile +
+gripper only. Other knobs: `--robot.role`, `--robot.gripper_open_rad`,
+`--robot.tactile_fps`, `--robot.wrist_camera_{width,height,fps}`,
+`--robot.expected_tactiles_per_side`.
 
 ## Usage
 
-- **Live Rerun visualization** (`lerobot-teleoperate`, no teleop required)
-  and **recording** (`lerobot-record`, no teleop → `self_driven_record_loop`,
-  shifted-frame) — see ready-to-run commands with this station's serials in
-  [`../../scripts/client_commands.md`](../../scripts/client_commands.md).
+Self-driven — **no `--teleop`**. Prerequisite: `xense.taccap` importable in the
+`lerobot-xense` env (`bash ./setup_env.sh --install`).
 
-Prerequisite: `xense.taccap` must import in the `lerobot-xense` env
-(`bash ./setup_env.sh --install`).
+**Live Rerun visualization** (cameras + gripper only — both grippers, 4 tactiles and
+2 wrist cameras are discovered automatically):
+
+```bash
+lerobot-teleoperate \
+    --robot.type=bi_taccap_gripper \
+    --fps=30 \
+    --display_data=true
+```
+
+**Record a dataset** (`self_driven_record_loop`, shifted-frame). Add the Pico4 SNs to
+also record 6-DoF pose:
+
+```bash
+lerobot-record \
+    --robot.type=bi_taccap_gripper \
+    --robot.left_tracker_sn=<L-PT-sn> \
+    --robot.right_tracker_sn=<R-PT-sn> \
+    --dataset.repo_id=Xense/<dataset_name> \
+    --dataset.single_task="Pick up the cube" \
+    --dataset.num_episodes=20 \
+    --dataset.fps=30 \
+    --dataset.episode_time_s=60 \
+    --dataset.reset_time_s=30 \
+    --display_data=true
+```
+
+More variants in [`../../scripts/client_commands.md`](../../scripts/client_commands.md).
