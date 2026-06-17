@@ -227,6 +227,61 @@ class Pico4TrackerReader:
     def is_connected(self) -> bool:
         return self._is_connected
 
+    @classmethod
+    def list_serial_numbers(
+        cls,
+        device_wait_timeout: float = 10.0,
+        logger_name: str | None = None,
+    ) -> list[str]:
+        """Serial numbers of every Pico4 motion tracker the XenseVR PC service
+        currently reports (non-empty), for auto-discovery.
+
+        Initialises the SDK (guarded process-level singleton, shared with
+        ``connect()``) and polls until the service reports at least one tracker
+        serial or ``device_wait_timeout`` elapses.
+
+        Raises:
+            ImportError: if ``xensevr_pc_service_sdk`` is not installed.
+            DeviceNotConnectedError: if no tracker serials appear in time.
+        """
+        logger = get_logger(f"Pico4TrackerReader-list-{logger_name or 'auto'}")
+        with cls._init_lock:
+            if not cls._xrt_initialized:
+                try:
+                    import xensevr_pc_service_sdk as xrt
+                except ImportError as e:
+                    raise ImportError(
+                        "xensevr_pc_service_sdk is required for Pico4 tracker discovery. "
+                        "Build the pybind under "
+                        "src/lerobot/teleoperators/pico4/xensevr-pc-service-pybind/."
+                    ) from e
+                xrt.init()
+                cls._xrt = xrt
+                cls._xrt_initialized = True
+        xrt = cls._xrt
+
+        deadline = time.monotonic() + float(device_wait_timeout)
+        while time.monotonic() < deadline:
+            try:
+                if xrt.num_motion_data_available() > 0:
+                    raw = xrt.get_motion_tracker_serial_numbers()
+                    sns = [
+                        (s.decode() if isinstance(s, bytes) else str(s)).strip()
+                        for s in raw
+                    ]
+                    sns = [s for s in sns if s]
+                    if sns:
+                        logger.info(f"Discovered {len(sns)} Pico4 tracker serial(s): {sns}")
+                        return sns
+            except Exception as e:  # pragma: no cover — defensive
+                logger.warn(f"tracker serial query failed: {e}")
+            time.sleep(0.1)
+        raise DeviceNotConnectedError(
+            f"No Pico4 motion-tracker serials reported after {device_wait_timeout:.1f}s. "
+            "Check: 1) the VR Client app is running on the Pico4 headset, "
+            "2) the PC service is up, 3) the tracker(s) are powered on and paired."
+        )
+
     def connect(
         self,
         current_tcp_pose_quat: np.ndarray | list[float] | None = None,

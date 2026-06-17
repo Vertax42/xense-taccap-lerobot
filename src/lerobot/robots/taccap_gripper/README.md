@@ -164,8 +164,10 @@ lerobot-record \
     --dataset.single_task='Pick up the object'
 ```
 
-Add `--robot.tracker_sn=<PT-…>` to also record 6-DoF pose (omit it to record tactile
-+ gripper only — pose is gated on the serial).
+With the Pico4 tracker powered on, 6-DoF pose is recorded automatically — the tracker
+is auto-discovered and matched to this unit's side by its serial's second-to-last digit
+(odd → left, even → right). Add `--robot.enable_tracker=false` to record tactile +
+gripper only.
 
 - **Tactile** → obs keys `tactile_0` / `tactile_1`; the rectify image is landscape
   `(400,700,3)` (width/height auto-derive — don't hard-code). Tune `--robot.tactile_fps`

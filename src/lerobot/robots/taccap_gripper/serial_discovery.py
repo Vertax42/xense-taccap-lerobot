@@ -97,6 +97,55 @@ def side_of_sequence(sequence: str) -> str:
     return "left" if int(sequence[-1]) % 2 == 1 else "right"
 
 
+# ---- Pico4 motion tracker (separate serial system: e.g. PC2310MLL3200496G) --
+# The Pico4 tracker SN is NOT an Xense serial; side is encoded in the
+# **second-to-last digit** (odd → left, even → right), and trackers are
+# enumerated from the XenseVR PC service at connect time (not the filesystem).
+
+
+def pico_tracker_side(sn: str) -> str:
+    """Side of a Pico4 motion tracker from its serial's **second-to-last digit**
+    (odd → left, even → right), e.g. ``PC2310MLL3200496G`` → ``6`` → right.
+
+    Raises ``ValueError`` if the second-to-last character is not a digit.
+    """
+    if len(sn) < 2 or not sn[-2].isdigit():
+        raise ValueError(
+            f"Pico4 tracker serial {sn!r} has no digit in the second-to-last "
+            "position to derive a side (expected e.g. PC2310MLL3200496G)."
+        )
+    return "left" if int(sn[-2]) % 2 == 1 else "right"
+
+
+def assign_pico_trackers(serials, sides=SIDES) -> dict[str, str]:
+    """Map discovered Pico4 tracker serials to ``{side: sn}`` by the
+    second-to-last-digit rule, requiring exactly one tracker per requested side.
+
+    Strict: raises ``ValueError`` on a malformed serial, two trackers resolving
+    to the same side, or a requested side with no tracker — so a partial or
+    mis-paired rig is caught rather than silently recording zero pose.
+    """
+    grouped: dict[str, list[str]] = {"left": [], "right": []}
+    for sn in serials:
+        grouped[pico_tracker_side(sn)].append(sn)
+    result: dict[str, str] = {}
+    for side in sides:
+        parity = "odd" if side == "left" else "even"
+        got = grouped.get(side, [])
+        if len(got) > 1:
+            raise ValueError(
+                f"Multiple Pico4 trackers map to the {side} side "
+                f"(2nd-to-last digit {parity}): {got}."
+            )
+        if not got:
+            raise ValueError(
+                f"No Pico4 tracker found for the {side} side (need a serial whose "
+                f"2nd-to-last digit is {parity}). Discovered: {list(serials)}."
+            )
+        result[side] = got[0]
+    return result
+
+
 def _require_sdk() -> None:
     if not TACCAP_SDK_AVAILABLE:
         raise ImportError(

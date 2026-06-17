@@ -38,10 +38,13 @@ A non-conforming serial, or a side with a missing / duplicated / mis-counted dev
 raises a clear error so the config and the physical serials can't drift out of
 alignment. See [`serial_discovery.py`](../taccap_gripper/serial_discovery.py).
 
-Only the Pico4 tracker serial is given explicitly, and it **gates that side's pose**:
-pass `--robot.{left,right}_tracker_sn=<PT-…>` to record 6-DoF pose, omit it for tactile +
-gripper only. Other knobs: `--robot.role`, `--robot.gripper_open_rad`,
-`--robot.tactile_fps`, `--robot.wrist_camera_{width,height,fps}`,
+The **Pico4 motion trackers are auto-discovered too** (no SNs): with `enable_tracker`
+on (default), the XenseVR PC service is queried at startup and each tracker is assigned
+to left/right by its serial's **second-to-last digit** (odd → left, even → right; e.g.
+`PC2310MLL3200496G` → `6` → right). A bimanual rig needs one tracker per side; a
+missing/duplicate/malformed tracker raises a clear error. Set `--robot.enable_tracker=false`
+to record tactile + gripper only (no PC service needed). Other knobs: `--robot.role`,
+`--robot.gripper_open_rad`, `--robot.tactile_fps`, `--robot.wrist_camera_{width,height,fps}`,
 `--robot.expected_tactiles_per_side`.
 
 ## Usage
@@ -59,14 +62,13 @@ lerobot-teleoperate \
     --display_data=true
 ```
 
-**Record a dataset** (`self_driven_record_loop`, shifted-frame). Add the Pico4 SNs to
-also record 6-DoF pose:
+**Record a dataset** (`self_driven_record_loop`, shifted-frame). With the trackers
+powered on, 6-DoF pose is recorded automatically (both trackers auto-assigned by SN);
+add `--robot.enable_tracker=false` to record tactile + gripper only:
 
 ```bash
 lerobot-record \
     --robot.type=bi_taccap_gripper \
-    --robot.left_tracker_sn=<L-PT-sn> \
-    --robot.right_tracker_sn=<R-PT-sn> \
     --dataset.repo_id=Xense/<dataset_name> \
     --dataset.single_task="Pick up the cube" \
     --dataset.num_episodes=20 \

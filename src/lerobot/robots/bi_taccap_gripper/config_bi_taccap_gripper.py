@@ -23,9 +23,12 @@ Follower). See ``serial_discovery.py``. A serial that does not conform, or a sid
 whose hardware is missing/duplicated, raises a clear error so the config and the
 physical serials can never drift out of alignment.
 
-Only the Pico4 motion-tracker serial (``{side}_tracker_sn``, a separate ``PT-…``
-serial system) is still given explicitly, and it gates that side's pose: pass it
-to record 6-DoF pose, omit it to record tactile + gripper only.
+The Pico4 motion tracker is **also auto-discovered**: when ``enable_tracker`` is on,
+the connected trackers are enumerated from the XenseVR PC service at startup and
+assigned to ``left``/``right`` by the Pico serial rule (second-to-last digit odd →
+left, even → right; e.g. ``PC2310MLL3200496G`` → ``6`` → right). A bimanual rig
+requires one tracker per side; a missing / duplicate / malformed tracker raises a
+clear error. Set ``enable_tracker=false`` to record tactile + gripper only.
 """
 
 from dataclasses import dataclass, field
@@ -67,13 +70,18 @@ class BiTaccapGripperConfig(RobotConfig):
     ``{side}_tactile_0`` / ``{side}_tactile_1``). Discovery errors if a side has
     a different count, catching a mis-installed/mis-burned sensor."""
 
+    enable_tracker: bool = True
+    """Auto-discover the Pico4 motion tracker(s) and record 6-DoF pose. When on,
+    the XenseVR PC service is queried at startup and each connected tracker is
+    assigned to left/right by its serial's second-to-last digit (odd → left, even
+    → right). A bimanual rig must have one tracker per side (else an error). Set
+    False to record tactile + gripper only (no PC service needed)."""
+
     # ---- Left TacCap unit -------------------------------------------------
     left_enable_gripper: bool = True
     left_enable_imu: bool = False
     left_gripper_open_rad: float = 1.7
 
-    left_enable_tracker: bool = True
-    left_tracker_sn: str | None = None
     left_tracker_to_ee_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
     left_tracker_to_ee_quat: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
     left_enable_init_pose_alignment: bool = False
@@ -88,8 +96,6 @@ class BiTaccapGripperConfig(RobotConfig):
     right_enable_imu: bool = False
     right_gripper_open_rad: float = 1.7
 
-    right_enable_tracker: bool = True
-    right_tracker_sn: str | None = None
     right_tracker_to_ee_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
     right_tracker_to_ee_quat: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
     right_enable_init_pose_alignment: bool = False
@@ -125,11 +131,6 @@ class BiTaccapGripperConfig(RobotConfig):
                 f"role must be leader/master or follower/slave, got {self.role!r}."
             )
         for side in _SIDES:
-            # Pose is gated per side on the tracker serial: pass {side}_tracker_sn
-            # to record that side's pose, omit it to disable pose for that side.
-            if getattr(self, f"{side}_tracker_sn") is None:
-                setattr(self, f"{side}_enable_tracker", False)
-
             if getattr(self, f"{side}_enable_gripper") and getattr(
                 self, f"{side}_gripper_open_rad"
             ) <= 0:

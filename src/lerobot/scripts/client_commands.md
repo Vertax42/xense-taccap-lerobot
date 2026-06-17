@@ -52,7 +52,7 @@ even→right) and role (`m`=Master/Leader, `s`=Slave/Follower). A non-conforming
 missing/duplicated device errors out. Prerequisite: `xense.taccap` importable
 (`bash ./setup_env.sh --install`).
 
-### Bimanual (`bi_taccap_gripper`) — cameras + gripper only (no Pico4 trackers)
+### Bimanual (`bi_taccap_gripper`) — everything auto-discovered
 
 ```bash
 lerobot-teleoperate \
@@ -61,13 +61,14 @@ lerobot-teleoperate \
     --display_data=true
 ```
 
-That's it — both leader grippers, all four tactiles and both wrist cameras are
-discovered automatically. To add 6D pose, pin the Pico4 tracker SNs (pose is gated
-on the SN: provide it → record pose, omit it → no pose for that side):
+That's it — both leader grippers, all four tactiles, both wrist cameras **and both
+Pico4 motion trackers** are discovered automatically. Trackers are assigned to
+left/right by their serial's second-to-last digit (odd → left, even → right; e.g.
+`PC2310MLL3200496G` → right). A bimanual rig needs one tracker per side (else an
+error). To record tactile + gripper only (no Pico4 / PC service), add:
 
 ```bash
-    --robot.left_tracker_sn=<L-pico4-sn> \
-    --robot.right_tracker_sn=<R-pico4-sn> \
+    --robot.enable_tracker=false \
 ```
 
 Other knobs: `--robot.role=follower` to bind the Slave units; `--robot.gripper_open_rad`,
@@ -86,8 +87,9 @@ lerobot-teleoperate \
 `--robot.side` is only needed when both grippers are connected; with a single unit it
 auto-resolves.
 
-> Notes: discovery reads `/dev/v4l/by-id` (tactile + wrist serials) and
-> `scan_grippers()` (gripper side/role). Obs keys are `tactile_0/1` + `wrist_cam`
+> Notes: discovery reads `/dev/v4l/by-id` (tactile + wrist serials),
+> `scan_grippers()` (gripper side/role), and the XenseVR PC service (Pico4 tracker
+> SNs, side from the 2nd-to-last digit). Obs keys are `tactile_0/1` + `wrist_cam`
 > (single) or `left_/right_tactile_0/1` + `{side}_wrist` (bi). The rectify image is
 > landscape `(400,700,3)` — width/height auto-derive, don't hard-code. Recording (no
 > teleop): `lerobot-record --robot.type=bi_taccap_gripper …` (same robot flags, swap

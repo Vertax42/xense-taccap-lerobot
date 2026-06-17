@@ -77,13 +77,10 @@ class TaccapGripperConfig(RobotConfig):
 
     # ---- Pico4 Ultra tracker ---------------------------------------------
     enable_tracker: bool = True
-    """Read the Pico4 tracker for 6-DoF pose. Gated on ``tracker_sn``: with no
-    serial the tracker is force-disabled in ``__post_init__`` — pass
-    ``tracker_sn`` to record pose, omit it to record tactile/gripper only."""
-
-    tracker_sn: str | None = None
-    """Pico4 motion-tracker serial number. Provide it to enable pose; ``None``
-    disables pose (no serial → no unambiguously-selected tracker)."""
+    """Auto-discover the Pico4 motion tracker and record 6-DoF pose. When on, the
+    XenseVR PC service is queried at startup; the tracker whose serial's
+    second-to-last digit matches this unit's side (odd → left, even → right) is
+    pinned. Set False to record tactile/gripper only (no PC service needed)."""
 
     tracker_to_ee_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
     """Translation from the tracker frame to the gripper end-effector frame
@@ -139,11 +136,6 @@ class TaccapGripperConfig(RobotConfig):
             )
         if self.side is not None and self.side.strip().lower() not in ("left", "right"):
             raise ValueError(f"side must be left, right, or None, got {self.side!r}.")
-
-        # Pose is gated on the tracker serial: pass tracker_sn to record 6-DoF
-        # pose, omit it to record tactile/gripper only (no serial → no pose).
-        if self.tracker_sn is None:
-            self.enable_tracker = False
 
         if self.enable_gripper and self.gripper_open_rad <= 0:
             raise ValueError(

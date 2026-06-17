@@ -144,6 +144,18 @@ class TaccapGripper(Robot):
         self._camera_configs = self._build_camera_configs(self._side)
         self.cameras = make_cameras_from_configs(self._camera_configs)
 
+        # Auto-discover the Pico4 motion tracker for this unit's side: enumerate
+        # from the XenseVR PC service and pick the one whose serial's second-to-last
+        # digit matches this side (strict). Drives the pose schema (pre-connect).
+        self._tracker_sn: str | None = None
+        if config.enable_tracker:
+            serials = Pico4TrackerReader.list_serial_numbers(
+                device_wait_timeout=config.tracker_wait_timeout,
+                logger_name=config.id or "robot",
+            )
+            self._tracker_sn = disco.assign_pico_trackers(serials, (self._side,))[self._side]
+            self.logger.info(f"Pico4 tracker ({self._side}): {self._tracker_sn}")
+
         self._is_connected = False
 
     # ------------------------------------------------------------------ discovery
@@ -210,7 +222,7 @@ class TaccapGripper(Robot):
     def observation_features(self) -> dict[str, type | tuple]:
         features: dict[str, type | tuple] = {}
 
-        if self.config.enable_tracker:
+        if self._tracker_sn is not None:
             for k in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"):
                 features[f"tcp.{k}"] = float
 
@@ -236,7 +248,7 @@ class TaccapGripper(Robot):
         No camera data — that lives in observation only.
         """
         features: dict[str, type] = {}
-        if self.config.enable_tracker:
+        if self._tracker_sn is not None:
             for k in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"):
                 features[f"tcp.{k}"] = float
         if self.config.enable_gripper:
@@ -281,9 +293,9 @@ class TaccapGripper(Robot):
             )
 
         # 2. Pico4 tracker.
-        if self.config.enable_tracker:
+        if self._tracker_sn is not None:
             self._tracker = Pico4TrackerReader(
-                tracker_sn=self.config.tracker_sn,
+                tracker_sn=self._tracker_sn,
                 tracker_to_ee_pos=self.config.tracker_to_ee_pos,
                 tracker_to_ee_quat=self.config.tracker_to_ee_quat,
                 device_wait_timeout=self.config.tracker_wait_timeout,
@@ -363,7 +375,7 @@ class TaccapGripper(Robot):
 
         obs: dict[str, Any] = {}
 
-        if self.config.enable_tracker and self._tracker is not None:
+        if self._tracker is not None:
             obs.update(self._tracker.get_action())
 
         if self.config.enable_gripper and self._gripper is not None:
@@ -403,7 +415,7 @@ class TaccapGripper(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected")
         action: dict[str, Any] = {}
-        if self.config.enable_tracker and self._tracker is not None:
+        if self._tracker is not None:
             action.update(self._tracker.get_action())
         if self.config.enable_gripper and self._gripper is not None:
             action["gripper.pos"] = self._read_gripper_normalized()

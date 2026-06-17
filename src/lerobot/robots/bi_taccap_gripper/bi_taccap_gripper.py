@@ -92,13 +92,12 @@ class BiTaccapGripper(Robot):
         self._role = disco.normalize_role(config.role)
 
         any_gripper = any(getattr(config, f"{s}_enable_gripper") for s in _SIDES)
-        any_tracker = any(getattr(config, f"{s}_enable_tracker") for s in _SIDES)
         if any_gripper and not TACCAP_SDK_AVAILABLE:
             raise ImportError(
                 "xense.taccap SDK not available. Build it from the vendored "
                 "submodule third_party/taccap-gripper (run setup_env.sh --install)."
             )
-        if any_tracker and not PICO4_TRACKER_AVAILABLE:
+        if config.enable_tracker and not PICO4_TRACKER_AVAILABLE:
             raise ImportError(
                 "Pico4TrackerReader not available. Ensure "
                 "src/lerobot/teleoperators/pico4/tracker.py is importable."
@@ -113,6 +112,18 @@ class BiTaccapGripper(Robot):
         # configs so the observation schema is ready before connect().
         self._camera_configs = self._discover_camera_configs()
         self.cameras = make_cameras_from_configs(self._camera_configs)
+
+        # Auto-discover the Pico4 motion tracker(s): enumerate from the XenseVR PC
+        # service and assign one per side by serial (second-to-last digit, strict).
+        # Drives the pose schema, so it runs here (pre-connect) like the cameras.
+        self._tracker_sn_by_side: dict[str, str] = {}
+        if config.enable_tracker:
+            serials = Pico4TrackerReader.list_serial_numbers(
+                device_wait_timeout=config.tracker_wait_timeout,
+                logger_name=config.id or "bi",
+            )
+            self._tracker_sn_by_side = disco.assign_pico_trackers(serials, _SIDES)
+            self.logger.info(f"Pico4 trackers: {self._tracker_sn_by_side}")
 
         self._is_connected = False
 
@@ -168,7 +179,7 @@ class BiTaccapGripper(Robot):
         features: dict[str, type | tuple] = {}
 
         for side in _SIDES:
-            if getattr(self.config, f"{side}_enable_tracker"):
+            if side in self._tracker_sn_by_side:
                 for k in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"):
                     features[f"{side}_tcp.{k}"] = float
             if getattr(self.config, f"{side}_enable_gripper"):
@@ -190,7 +201,7 @@ class BiTaccapGripper(Robot):
         """The 'demonstration' action the rig emits (pose + jaw per side, no cameras)."""
         features: dict[str, type] = {}
         for side in _SIDES:
-            if getattr(self.config, f"{side}_enable_tracker"):
+            if side in self._tracker_sn_by_side:
                 for k in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"):
                     features[f"{side}_tcp.{k}"] = float
             if getattr(self.config, f"{side}_enable_gripper"):
@@ -239,10 +250,10 @@ class BiTaccapGripper(Robot):
                     f"  [{side}] ✅ {gripper_cls.__name__} attached (MCU-only, read-only)"
                 )
 
-            # 2. Pico4 tracker.
-            if getattr(self.config, f"{side}_enable_tracker"):
+            # 2. Pico4 tracker (auto-discovered SN per side, pinned here).
+            if side in self._tracker_sn_by_side:
                 tracker = Pico4TrackerReader(
-                    tracker_sn=getattr(self.config, f"{side}_tracker_sn"),
+                    tracker_sn=self._tracker_sn_by_side[side],
                     tracker_to_ee_pos=getattr(self.config, f"{side}_tracker_to_ee_pos"),
                     tracker_to_ee_quat=getattr(self.config, f"{side}_tracker_to_ee_quat"),
                     device_wait_timeout=self.config.tracker_wait_timeout,
@@ -328,7 +339,7 @@ class BiTaccapGripper(Robot):
         obs: dict[str, Any] = {}
 
         for side in _SIDES:
-            if getattr(self.config, f"{side}_enable_tracker") and self._tracker[side] is not None:
+            if side in self._tracker_sn_by_side and self._tracker[side] is not None:
                 for k, v in self._tracker[side].get_action().items():
                     obs[f"{side}_{k}"] = v
 
@@ -363,7 +374,7 @@ class BiTaccapGripper(Robot):
             raise DeviceNotConnectedError(f"{self} is not connected")
         action: dict[str, Any] = {}
         for side in _SIDES:
-            if getattr(self.config, f"{side}_enable_tracker") and self._tracker[side] is not None:
+            if side in self._tracker_sn_by_side and self._tracker[side] is not None:
                 for k, v in self._tracker[side].get_action().items():
                     action[f"{side}_{k}"] = v
             if getattr(self.config, f"{side}_enable_gripper") and self._gripper[side] is not None:
