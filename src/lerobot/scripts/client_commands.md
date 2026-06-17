@@ -1,58 +1,33 @@
-# Lerobot-integration with BiARX5
+# Lerobot client commands — TacCap-Gripper
+
+This branch is slimmed to the **TacCap-Gripper** robot (single + bimanual) and the
+**Pico4** teleoperator. All TacCap devices — grippers, tactile sensors, wrist cameras
+and Pico4 motion trackers — are **auto-discovered by serial rule**, so no device serials
+are passed on the CLI.
 
 ## Prerequisites
 
 ### Hugging Face CLI login
 
-Required before running any command with `--dataset.push_to_hub=true`:
+Required before any command with `--dataset.push_to_hub=true`:
 
 ```bash
 huggingface-cli login
 ```
 
-Paste your HuggingFace access token (with write permission) when prompted.
-The token is stored at `~/.cache/huggingface/token` and persists across sessions.
+Paste your HuggingFace access token (write permission) when prompted; it is stored at
+`~/.cache/huggingface/token` and persists across sessions.
 
-## Config-driven teleop & record (recommended)
+Also ensure `xense.taccap` is importable (`bash ./setup_env.sh --install`) and, for
+6-DoF pose, the XenseVR PC service + Pico4 trackers are running.
 
-As the number of robots and datasets grows, prefer storing parameters in a YAML
-under [`recipes/`](../../../recipes/) and passing its path, instead of
-copy-pasting a long command from this file. Both `lerobot-teleoperate` and
-`lerobot-record` accept `--config_path` (they share the same draccus parser):
+## Teleoperate (live Rerun visualization)
 
-```bash
-# Teleoperate from a saved recipe
-lerobot-teleoperate --config_path=recipes/teleop/bi_elite_cs66_rt/diagonal.yaml
+`taccap_gripper` / `bi_taccap_gripper` are **self-driven** (sensors only) — there is no
+taccap teleoperator, so **no `--teleop` is required**. `lerobot-teleoperate` just streams
+`get_observation()` to Rerun.
 
-# Record from a saved recipe
-lerobot-record --config_path=recipes/record/bi_elite_cs66_rt/test.yaml
-
-# Override anything ad-hoc — CLI flags win over the YAML
-lerobot-record --config_path=recipes/record/bi_elite_cs66_rt/test.yaml \
-    --dataset.num_episodes=1 --resume=true
-```
-
-Recipes are split by CLI then by robot type (`recipes/{teleop,record}/<robot_type>/<name>.yaml`)
-and spell out every honored knob with its value; station hardware (cameras, SNs,
-mount geometry, poses) stays in the `bi_mount_type` preset. One file per station
-(teleop) / dataset (record) means a single source of truth plus provenance —
-recipes are committed, so `git log recipes/` shows exactly what produced each
-dataset. See [`recipes/README.md`](../../../recipes/README.md). The per-robot
-flag lists below remain valid as a reference and for one-off runs.
-
-
-## TacCap-Gripper lerobot-teleoperate command
-
-`taccap_gripper` / `bi_taccap_gripper` are **self-driven** (sensors only) — there is
-no taccap teleoperator. `lerobot-teleoperate` just streams `get_observation()` to
-Rerun; **no `--teleop` is required** (`teleop` is optional). Devices are
-**auto-discovered by serial rule** — you list **no** gripper/tactile/camera serials;
-the rig is scanned and each device is assigned to left/right by serial (odd→left,
-even→right) and role (`m`=Master/Leader, `s`=Slave/Follower). A non-conforming or
-missing/duplicated device errors out. Prerequisite: `xense.taccap` importable
-(`bash ./setup_env.sh --install`).
-
-### Bimanual (`bi_taccap_gripper`) — everything auto-discovered
+### Bimanual (`bi_taccap_gripper`)
 
 ```bash
 lerobot-teleoperate \
@@ -61,17 +36,18 @@ lerobot-teleoperate \
     --display_data=true
 ```
 
-That's it — both leader grippers, all four tactiles, both wrist cameras **and both
-Pico4 motion trackers** are discovered automatically. Trackers are assigned to
-left/right by their serial's second-to-last digit (odd → left, even → right; e.g.
-`PC2310MLL3200496G` → right). A bimanual rig needs one tracker per side (else an
-error). To record tactile + gripper only (no Pico4 / PC service), add:
+Both leader grippers, all four tactiles, both wrist cameras **and both Pico4 trackers**
+are discovered automatically. Sides are assigned by serial: Xense devices by the last
+sequence digit (odd → left, even → right) plus the role patch (`m`=Master, `s`=Slave);
+Pico4 trackers by the **second-to-last digit** (e.g. `PC2310MLL3200496G` → `6` → right).
+A bimanual rig needs one tracker per side. To record tactile + gripper only (no Pico4 /
+PC service), add:
 
 ```bash
     --robot.enable_tracker=false \
 ```
 
-Other knobs: `--robot.role=follower` to bind the Slave units; `--robot.gripper_open_rad`,
+Other knobs: `--robot.role=follower` (bind Slave units), `--robot.gripper_open_rad`,
 `--robot.tactile_fps`, `--robot.wrist_camera_width/height/fps`.
 
 ### Single (`taccap_gripper`)
@@ -84,269 +60,46 @@ lerobot-teleoperate \
     --display_data=true
 ```
 
-`--robot.side` is only needed when both grippers are connected; with a single unit it
-auto-resolves.
+`--robot.side` is only needed when both grippers are connected; a single unit auto-resolves.
 
-> Notes: discovery reads `/dev/v4l/by-id` (tactile + wrist serials),
-> `scan_grippers()` (gripper side/role), and the XenseVR PC service (Pico4 tracker
-> SNs, side from the 2nd-to-last digit). Obs keys are `tactile_0/1` + `wrist_cam`
-> (single) or `left_/right_tactile_0/1` + `{side}_wrist` (bi). The rectify image is
-> landscape `(400,700,3)` — width/height auto-derive, don't hard-code. Recording (no
-> teleop): `lerobot-record --robot.type=bi_taccap_gripper …` (same robot flags, swap
-> `--teleop.*` for `--dataset.*`).
+## Record a dataset
 
-## BiARX5 Robot lerobot-teleoperate command
+Recording is self-driven (`self_driven_record_loop`, shifted-frame: `action[t]` paired with
+`obs[t-1]`) — **no `--teleop`**. Same robot flags as teleop, plus `--dataset.*`.
 
-```bash
-lerobot-teleoperate \
-    --robot.type=bi_arx5 \
-    --robot.enable_tactile_sensors=true \
-    --teleop.type=mock_teleop \
-    --fps=30 \
-    --debug_timing=false \
-    --display_data=true
-```
-
-## Bimanual Flexiv Rizon4 RT + Bi-Pico4 teleoperate command
-
-```bash
-lerobot-teleoperate \
-    --robot.type=bi_flexiv_rizon4_rt \
-    --robot.bi_mount_type=forward \
-    --teleop.type=bi_pico4 \
-    --fps=30 \
-    --display_data=true
-```
-
-```bash
-lerobot-teleoperate \
-    --robot.type=bi_flexiv_rizon4_rt \
-    --robot.bi_mount_type=forward_dewu \
-    --teleop.type=bi_pico4 \
-    --fps=30 \
-    --display_data=true
-```
-
-
-## Bimanual Elite CS66 RT + Bi-Pico4 teleoperate command
-
-```bash
-lerobot-teleoperate \
-    --robot.type=bi_elite_cs66_rt \
-    --robot.bi_mount_type=diagonal \
-    --robot.left_robot_ip=192.168.8.53 \
-    --robot.right_robot_ip=192.168.8.223 \
-    --teleop.type=bi_pico4 \
-    --fps=30 \
-    --display_data=true
-
-
-lerobot-teleoperate \
-    --robot.type=bi_elite_cs66_rt \
-    --robot.left_robot_ip=192.168.8.53 \
-    --robot.right_robot_ip=192.168.8.223 \
-    --teleop.type=bi_pico4 \
-    --fps=30 \
-    --dryrun=true
-```
-
-## BiARX5 Robot lerobot-record command
+### Bimanual (`bi_taccap_gripper`)
 
 ```bash
 lerobot-record \
-    --robot.type=bi_arx5 \
-    --teleop.type=mock_teleop \
-    --dataset.repo_id=Xense/xense_bi_arx5_test \
-    --dataset.num_episodes=100 \
-    --dataset.single_task="tie shoelaces" \
-    --dataset.fps=30 \
-    --dataset.episode_time_s=300 \
-    --dataset.streaming_encoding=true \
-    --dataset.vcodec=auto \
-    --display_data=true \
-    --resume=false \
-    --dataset.push_to_hub=false
-```
-
-## BiARX5 Robot lerobot-annotate-reward command
-
-```bash
-lerobot-annotate-reward \
-    --repo-id Xense/xense_bi_arx5_tie_shoelaces \
-    --new-repo-id Vertax/test_annotated \
-    --push-to-hub
-```
-
-## Franka robot lerobot-record command
-
-```bash
-lerobot-record \
-  --robot.type=pylibfranka_research3 \
-  --robot.control_mode=cartesian_impedance \
-  --teleop.type=btgamepad \
-  --dataset.repo_id=franka_btgamepad/ceshi20260209 \
-  --dataset.num_episodes=2 \
-  --dataset.single_task="pick" \
-  --dataset.fps=30 \
-  --resume=false \
-  --dataset.push_to_hub=false \
-  --display_data=true
-```
-
-## Bimanual Flexiv Rizon4 RT + Bi-Pico4 lerobot-record command
-
-### forward mount (side-by-side)
-
-```bash
-lerobot-record \
-    --robot.type=bi_flexiv_rizon4_rt \
-    --robot.bi_mount_type=forward \
-    --robot.left_robot_sn=Rizon4s-063458 \
-    --robot.right_robot_sn=Rizon4s-063670 \
-    --teleop.type=bi_pico4 \
-    --dataset.repo_id=Xense/assemble_box_with_phone_stand0430_merged \
-    --dataset.num_episodes=5 \
-    --dataset.single_task="Assemble the packaging by folding the flat box into shape, placing the metal phone stand inside, and closing the box properly" \
-    --dataset.fps=30 \
-    --dataset.episode_time_s=600 \
-    --dataset.reset_time_s=120 \
-    --dataset.streaming_encoding=true \
-    --dataset.vcodec=auto \
-    --resume=true \
-    --dataset.push_to_hub=true \
-    --display_data=false
-```
-
-```bash
-lerobot-record \
-    --robot.type=bi_flexiv_rizon4_rt \
-    --robot.bi_mount_type=forward_dewu \
-    --robot.left_robot_sn=Rizon4s-063458 \
-    --robot.right_robot_sn=Rizon4s-063670 \
-    --teleop.type=bi_pico4 \
-    --dataset.repo_id=Xense/shoe_insole_retrieval_and_packing0515 \
-    --dataset.num_episodes=10 \
-    --dataset.single_task="Open the shoe tongue, take the insole out of the shoe, put the insole back into the shoe, and pack the shoe into the shoebox" \
-    --dataset.fps=30 \
-    --dataset.episode_time_s=600 \
-    --dataset.reset_time_s=120 \
-    --dataset.streaming_encoding=true \
-    --dataset.vcodec=auto \
-    --resume=true \
-    --dataset.push_to_hub=true \
-    --display_data=false
-```
-
-```bash
-lerobot-record \
-    --robot.type=bi_flexiv_rizon4_rt \
-    --robot.bi_mount_type=forward_dewu \
-    --robot.left_robot_sn=Rizon4s-063458 \
-    --robot.right_robot_sn=Rizon4s-063670 \
-    --teleop.type=bi_pico4 \
-    --dataset.repo_id=Xense/newbalance_shoe_insole_retrieval_and_packing0515 \
-    --dataset.num_episodes=10 \
-    --dataset.single_task="Open the shoe tongue, take the insole out of the shoe, put the insole back into the shoe, and pack the shoe into the shoebox" \
-    --dataset.fps=30 \
-    --dataset.episode_time_s=600 \
-    --dataset.reset_time_s=120 \
-    --dataset.streaming_encoding=true \
-    --dataset.vcodec=auto \
-    --resume=true \
-    --dataset.push_to_hub=true \
-    --display_data=false
-```
-
-### side mount (facing each other)
-
-```bash
-lerobot-record \
-    --robot.type=bi_flexiv_rizon4_rt \
-    --robot.bi_mount_type=side \
-    --robot.left_robot_sn=Rizon4-063423 \
-    --robot.right_robot_sn=Rizon4-062855 \
-    --teleop.type=bi_pico4 \
-    --dataset.repo_id=Vertax/bi_flexiv_rt_pick_and_place \
-    --dataset.num_episodes=50 \
-    --dataset.single_task="pick up the cube and place it in the box" \
+    --robot.type=bi_taccap_gripper \
+    --dataset.repo_id=Xense/<dataset_name> \
+    --dataset.single_task="Pick up the cube" \
+    --dataset.num_episodes=20 \
     --dataset.fps=30 \
     --dataset.episode_time_s=60 \
-    --dataset.reset_time_s=20 \
+    --dataset.reset_time_s=30 \
     --dataset.streaming_encoding=true \
-    --dataset.vcodec=auto \
-    --resume=false \
-    --dataset.push_to_hub=false \
-    --display_data=false
-```
-
-**Current controller mapping during recording:**
-
-| Button    | Action                                              |
-| --------- | --------------------------------------------------- |
-| Right `A` | Reset both arms to start pose (recording continues) |
-
-Other record-control shortcuts are currently keyboard-driven:
-
-| Input         | Action                                              |
-| ------------- | --------------------------------------------------- |
-| `Left Arrow`  | Discard current episode and re-record               |
-| `Right Arrow` | Finish current episode early                        |
-| `Esc`         | Stop the recording session                          |
-| `Space`       | Reset both arms to start pose (recording continues) |
-
-## ARX5 Robot lerobot-record command (use trlc_leader teleop)
-
-```bash
-lerobot-record \
-    --robot.type=arx5_follower \
-    --robot.control_mode=joint_control \
-    --robot.arm_port=can3 \
-    --teleop.type=trlc_leader \
-    --teleop.port="/dev/ttyTRLC0" \
-    --teleop.joint_signs "[1,1,1,1,1,1]" \
-    --teleop.start_joints "[0.0,0.0,0.0,0.0,0.0,0.0]" \
-    --dataset.repo_id=Vertax/arx5_trlc_pick_and_place \
-    --dataset.num_episodes=50 \
-    --dataset.single_task="pick up the cube and place it in the box" \
-    --dataset.fps=30 \
-    --dataset.episode_time_s=60 \
-    --dataset.reset_time_s=15 \
-    --dataset.streaming_encoding=true \
-    --dataset.vcodec=auto \
-    --resume=false \
     --dataset.push_to_hub=false \
     --display_data=true
 ```
 
-## Bimanual Elite CS66 RT + Bi-Pico4 lerobot-record command
-
-### Test record (smoke test: 2 short episodes, local only)
-
-Recommended form — run the saved recipe (see
-[`recipes/record/bi_elite_cs66_rt/test.yaml`](../../../recipes/record/bi_elite_cs66_rt/test.yaml)):
-
-```bash
-lerobot-record --config_path=recipes/record/bi_elite_cs66_rt/test.yaml
-```
-
-Equivalent explicit command (for one-off runs / reference):
+### Single (`taccap_gripper`)
 
 ```bash
 lerobot-record \
-    --robot.type=bi_elite_cs66_rt \
-    --robot.bi_mount_type=diagonal \
-    --robot.left_robot_ip=192.168.8.53 \
-    --robot.right_robot_ip=192.168.8.223 \
-    --teleop.type=bi_pico4 \
-    --dataset.repo_id=Xense/bi_elite_cs66_rt_test \
-    --dataset.num_episodes=2 \
-    --dataset.single_task="pick up the cube and place it in the box" \
+    --robot.type=taccap_gripper \
+    --robot.side=left \
+    --dataset.repo_id=Xense/<dataset_name> \
+    --dataset.single_task="Pick up the cube" \
+    --dataset.num_episodes=20 \
     --dataset.fps=30 \
     --dataset.episode_time_s=60 \
-    --dataset.reset_time_s=15 \
-    --dataset.streaming_encoding=true \
-    --dataset.vcodec=auto \
-    --resume=false \
-    --dataset.push_to_hub=false \
+    --dataset.reset_time_s=30 \
     --display_data=true
 ```
+
+> Notes: discovery reads `/dev/v4l/by-id` (tactile + wrist serials), `scan_grippers()`
+> (gripper side/role), and the XenseVR PC service (Pico4 tracker SNs, side from the
+> 2nd-to-last digit). Obs keys: `tactile_0/1` + `wrist_cam` + `tcp.*` (single), or
+> `left_/right_tactile_0/1` + `{side}_wrist` + `{side}_tcp.*` (bi). Tactile rectify is
+> landscape `(400,700,3)` — width/height auto-derive, don't hard-code.
