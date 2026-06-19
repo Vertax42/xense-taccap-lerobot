@@ -119,6 +119,19 @@ Watch the `raw xyz` move smoothly when you wave the gripper. The
 identity by default. Measure your physical mount offset and put it in
 the config (`tracker_to_ee_pos`, `tracker_to_ee_quat`).
 
+## 3D trajectory visualization
+
+With `--display_data=true`, the Rerun viewer adds a `/world` 3D view: the gripper is drawn
+as a labelled ellipsoid + axis triad at its live Pico4 pose (`tcp.*`), trailing a breadcrumb
+of where it has been — mirroring the SDK's
+[`rerun_dual_with_tracker.py`](../../../third_party/taccap-gripper/python/examples/rerun_dual_with_tracker.py)
+example. Our pose is already in the gravity-aligned world frame, so the scene is
+`RIGHT_HAND_Z_UP` (the example shows the raw Pico `LEFT_HAND_Y_UP` frame).
+
+On by default; `--show_trajectory=false` suppresses it, and it auto-skips when
+`--robot.enable_tracker=false` (no pose to draw). Implemented in
+[`visualization.py`](visualization.py) and shared by both teleoperate and record.
+
 ## Standalone smoke test
 
 Verifies the robot stack independently of `lerobot-record`. Devices are
@@ -168,6 +181,11 @@ With the Pico4 tracker powered on, 6-DoF pose is recorded automatically — the 
 is auto-discovered and matched to this unit's side by its serial's second-to-last digit
 (odd → left, even → right). Add `--robot.enable_tracker=false` to record tactile +
 gripper only.
+
+To bypass the side rule — e.g. a tracker whose serial does not follow it, or when PC-service
+enumeration is flaky — pin the serial directly with `--robot.tracker_serial=<SN>`. A pinned
+serial is used **verbatim**: no enumeration, no rule check (a typo surfaces as a device-not-found
+at connect). Leave it unset (default) to keep auto-discovery.
 
 - **Tactile** → obs keys `tactile_0` / `tactile_1`; the rectify image is landscape
   `(400,700,3)` (width/height auto-derive — don't hard-code). Tune `--robot.tactile_fps`

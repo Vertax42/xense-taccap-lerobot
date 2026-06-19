@@ -3,7 +3,8 @@
 This branch is slimmed to the **TacCap-Gripper** robot (single + bimanual) and the
 **Pico4** teleoperator. All TacCap devices — grippers, tactile sensors, wrist cameras
 and Pico4 motion trackers — are **auto-discovered by serial rule**, so no device serials
-are passed on the CLI.
+are passed on the CLI. The one optional override is the Pico4 tracker serial
+(`--robot.tracker_serial` / `--robot.{left,right}_tracker_serial`); see Teleoperate below.
 
 ## Prerequisites
 
@@ -27,14 +28,24 @@ Also ensure `xense.taccap` is importable (`bash ./setup_env.sh --install`) and, 
 taccap teleoperator, so **no `--teleop` is required**. `lerobot-teleoperate` just streams
 `get_observation()` to Rerun.
 
+With the tracker on, the viewer adds a **3D pose + breadcrumb trajectory** view (`/world`):
+each gripper is a labelled marker at its live Pico4 pose, trailing the path it has swept —
+the same effect as the SDK's `rerun_dual_with_tracker.py` example. It is **on by default**
+under `--display_data=true`; add `--show_trajectory=false` to suppress it (or it auto-skips
+when `--robot.enable_tracker=false`, since there is no pose to draw). Same flag on `lerobot-record`.
+
 ### Bimanual (`bi_taccap_gripper`)
 
 ```bash
 lerobot-teleoperate \
     --robot.type=bi_taccap_gripper \
+    --robot.left_tracker_serial=PC2310MLL4150713G \
+    --robot.right_tracker_serial=PC2310MLL4150387G \
     --fps=30 \
     --display_data=true
 ```
+
+['PC2310MLL4150713G', 'PC2310MLL4150387G']
 
 Both leader grippers, all four tactiles, both wrist cameras **and both Pico4 trackers**
 are discovered automatically. Sides are assigned by serial: Xense devices by the last
@@ -47,7 +58,17 @@ PC service), add:
     --robot.enable_tracker=false \
 ```
 
-Other knobs: `--robot.role=follower` (bind Slave units), `--robot.gripper_open_rad`,
+To bypass the tracker side rule (a tracker whose serial doesn't follow it, or flaky
+enumeration), pin serials directly — bimanual takes one per side, single takes one:
+
+```bash
+    --robot.left_tracker_serial=PC2310MLL4150713G \
+    --robot.right_tracker_serial=PC2310MLL4150387G \   # bi_taccap_gripper
+    --robot.tracker_serial=PC2310MLL4150387G \         # taccap_gripper (single)
+```
+
+A pinned side is used verbatim (no enumeration, no rule check); un-pinned sides still
+auto-discover. Other knobs: `--robot.role=follower` (bind Slave units), `--robot.gripper_open_rad`,
 `--robot.tactile_fps`, `--robot.wrist_camera_width/height/fps`.
 
 ### Single (`taccap_gripper`)

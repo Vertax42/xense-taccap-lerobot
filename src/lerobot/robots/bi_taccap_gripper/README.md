@@ -47,6 +47,11 @@ to record tactile + gripper only (no PC service needed). Other knobs: `--robot.r
 `--robot.gripper_open_rad`, `--robot.tactile_fps`, `--robot.wrist_camera_{width,height,fps}`,
 `--robot.expected_tactiles_per_side`.
 
+To bypass the tracker side rule, pin serials directly with `--robot.left_tracker_serial=<SN>`
+and/or `--robot.right_tracker_serial=<SN>`. A pinned side uses its serial **verbatim** (no
+enumeration, no rule check); un-pinned sides still auto-discover by the second-to-last-digit
+rule. Use this for a tracker whose serial does not follow the rule, or when enumeration is flaky.
+
 ## Usage
 
 Self-driven — **no `--teleop`**. Prerequisite: `xense.taccap` importable in the
@@ -77,5 +82,14 @@ lerobot-record \
     --dataset.reset_time_s=30 \
     --display_data=true
 ```
+
+## 3D trajectory visualization
+
+With `--display_data=true`, the Rerun viewer adds a `/world` 3D view: each gripper is a
+labelled marker (red = left, blue = right) at its live Pico4 pose (`{side}_tcp.*`), trailing a
+breadcrumb of its swept path — the same effect as the SDK's `rerun_dual_with_tracker.py`
+example, but in our gravity-aligned `RIGHT_HAND_Z_UP` world frame. On by default;
+`--show_trajectory=false` suppresses it, and it auto-skips when `--robot.enable_tracker=false`.
+Shared implementation in [`../taccap_gripper/visualization.py`](../taccap_gripper/visualization.py).
 
 More variants in [`../../scripts/client_commands.md`](../../scripts/client_commands.md).
