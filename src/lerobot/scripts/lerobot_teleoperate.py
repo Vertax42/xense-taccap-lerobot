@@ -54,11 +54,12 @@ from lerobot.teleoperators import (  # noqa: F401
 )
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.robot_utils import (
+    busy_wait,
     get_logger,
-    precise_sleep,
 )
 from lerobot.utils.utils import move_cursor_up
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
+from lerobot.robots.taccap_gripper.visualization import TaccapTrajectoryViz
 
 logger = get_logger("Teleoperate")
 
@@ -86,6 +87,9 @@ class TeleoperateConfig:
     display_port: int | None = None
     # Whether to display compressed images in Rerun (JPEG) to lower memory/IPC load. Set False for lossless display.
     display_compressed_images: bool = True
+    # Overlay the 3D pose + breadcrumb trajectory view in Rerun (when display_data
+    # is on and the device emits tcp.* poses). Auto-skips if enable_tracker=false.
+    show_trajectory: bool = True
     # Print per-step timing breakdown instead of action values.
     debug_timing: bool = False
     # Dryrun mode: print actions but do not send to robot
@@ -130,6 +134,74 @@ def _print_obs_state(obs: dict, display_len: int, status: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Shared timing helpers (slow-frame / overrun detection — same as lerobot_record)
+# ---------------------------------------------------------------------------
+
+
+def _format_slow_frame_obs_suffix(robot: Robot | None) -> str:
+    """Append per-subsystem obs timing to the slow-frame warning when the robot
+    exposes a ``_last_obs_timing`` dict; otherwise return ''."""
+    if robot is None:
+        return ""
+
+    timing = getattr(robot, "_last_obs_timing", None)
+    if not isinstance(timing, dict):
+        return ""
+
+    parts: list[str] = []
+    total_ms = timing.get("total_ms")
+    if isinstance(total_ms, (int, float)):
+        parts.append(f"obs={float(total_ms):.1f}ms")
+
+    cameras_ms = timing.get("cameras_ms")
+    if isinstance(cameras_ms, (int, float)):
+        parts.append(f"cams={float(cameras_ms):.1f}ms")
+
+    cam_items = [
+        (key[4:-4], float(value))
+        for key, value in timing.items()
+        if key.startswith("cam[") and key.endswith("]_ms") and isinstance(value, (int, float))
+    ]
+    cam_items.sort(key=lambda item: item[1], reverse=True)
+    if cam_items:
+        top_parts = ", ".join(f"{name}={value:.1f}ms" for name, value in cam_items[:4])
+        parts.append(f"top_cams={top_parts}")
+
+    return f" | {' '.join(parts)}" if parts else ""
+
+
+def _teleop_loop_sleep(
+    start_loop_t: float,
+    fps: int,
+    session_start_t: float,
+    robot: Robot | None = None,
+) -> None:
+    """Sleep for the remaining frame budget; log a warning if the loop overran."""
+    if fps <= 0:
+        return
+
+    budget_s = 1.0 / fps
+    dt_s = time.perf_counter() - start_loop_t
+    remaining_s = budget_s - dt_s
+    if remaining_s > 0:
+        busy_wait(remaining_s)
+        return
+
+    session_t_s = time.perf_counter() - session_start_t
+    robot_name = (
+        getattr(robot, "name", None) or getattr(type(robot), "__name__", "teleop")
+        if robot is not None
+        else "teleop"
+    )
+    logger.warn(
+        f"[slow_frame] robot={robot_name} t={session_t_s:.3f}s "
+        f"loop={dt_s * 1e3:.1f}ms budget={budget_s * 1e3:.1f}ms "
+        f"overrun={(-remaining_s) * 1e3:.1f}ms"
+        f"{_format_slow_frame_obs_suffix(robot)}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Self-driven teleop loop (TacCap-Gripper)
 # ---------------------------------------------------------------------------
 def self_driven_teleop_loop(
@@ -139,6 +211,7 @@ def self_driven_teleop_loop(
     duration: float | None = None,
     display_compressed_images: bool = True,
     debug_timing: bool = False,
+    traj_viz: TaccapTrajectoryViz | None = None,
 ):
     """Data-stream + Rerun visualisation loop for self-driven, sensor-only robots
     (``taccap_gripper`` / ``bi_taccap_gripper``).
@@ -163,6 +236,8 @@ def self_driven_teleop_loop(
                 action={},
                 compress_images=display_compressed_images,
             )
+            if traj_viz is not None:
+                traj_viz.log(obs)
             if not debug_timing:
                 scalar_items = [
                     (k, v) for k, v in obs.items() if not isinstance(v, np.ndarray)
@@ -173,8 +248,7 @@ def self_driven_teleop_loop(
                     print(f"{key:<{display_len}} | {float(value):>9.4f}")
                 move_cursor_up(len(scalar_items) + 3)
 
-        dt_s = time.perf_counter() - loop_start
-        precise_sleep(max(1 / fps - dt_s, 0.0))
+        _teleop_loop_sleep(loop_start, fps, start, robot)
         loop_s = time.perf_counter() - loop_start
 
         if debug_timing:
@@ -241,6 +315,17 @@ def teleoperate(cfg: TeleoperateConfig):
         if cfg.teleop is not None:
             teleop = make_teleoperator_from_config(cfg.teleop)
             teleop.connect()
+
+        # 3D pose + trajectory overlay (no-op if the device emits no tcp.* poses).
+        traj_viz = None
+        if cfg.display_data and cfg.show_trajectory:
+            # teleop signals panel: show only the gripper position channel(s).
+            traj_viz = TaccapTrajectoryViz(robot.observation_features, signals="gripper")
+            if traj_viz.active:
+                traj_viz.setup()
+            else:
+                traj_viz = None
+
         try:
             self_driven_teleop_loop(
                 robot=robot,
@@ -249,6 +334,7 @@ def teleoperate(cfg: TeleoperateConfig):
                 duration=cfg.teleop_time_s,
                 display_compressed_images=display_compressed_images,
                 debug_timing=cfg.debug_timing,
+                traj_viz=traj_viz,
             )
         except KeyboardInterrupt:
             pass

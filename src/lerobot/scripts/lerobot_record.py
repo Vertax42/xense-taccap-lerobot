@@ -82,6 +82,7 @@ from lerobot.utils.utils import (
     log_say,
 )
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
+from lerobot.robots.taccap_gripper.visualization import TaccapTrajectoryViz
 
 logger = get_logger("lerobot_record")
 
@@ -255,6 +256,9 @@ class RecordConfig:
     display_port: int | None = None
     # Whether to display compressed images in Rerun (JPEG) to lower memory/IPC load. Set False for lossless display.
     display_compressed_images: bool = True
+    # Overlay the 3D pose + breadcrumb trajectory view in Rerun (when display_data
+    # is on and the device emits tcp.* poses). Auto-skips if enable_tracker=false.
+    show_trajectory: bool = True
     # Use vocal synthesis to read events.
     play_sounds: bool = True
     # Resume recording on an existing dataset.
@@ -277,6 +281,7 @@ def self_driven_record_loop(
     control_time_s: int | None = None,
     single_task: str | None = None,
     display_data: bool = False,
+    traj_viz: TaccapTrajectoryViz | None = None,
 ):
     """Record loop for self-driven handheld devices (e.g. TacCap-Gripper).
 
@@ -356,6 +361,8 @@ def self_driven_record_loop(
 
         if display_data and observation is not None:
             log_rerun_data(observation=observation, action=action or {})
+            if traj_viz is not None:
+                traj_viz.log(observation)
 
         _record_loop_sleep(
             start_loop_t=start_loop_t,
@@ -428,6 +435,15 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         if teleop is not None:
             teleop.connect()
 
+        # 3D pose + trajectory overlay (no-op if the device emits no tcp.* poses).
+        traj_viz = None
+        if cfg.display_data and cfg.show_trajectory:
+            traj_viz = TaccapTrajectoryViz(robot.observation_features)
+            if traj_viz.active:
+                traj_viz.setup()
+            else:
+                traj_viz = None
+
         listener, events = init_keyboard_listener(teleop=teleop)
 
         if not cfg.dataset.streaming_encoding:
@@ -440,6 +456,11 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
                 log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
 
+                # Fresh breadcrumb trail per episode so trajectories don't bleed
+                # across takes.
+                if traj_viz is not None:
+                    traj_viz.reset()
+
                 self_driven_record_loop(
                     robot=robot,
                     events=events,
@@ -448,6 +469,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     control_time_s=cfg.dataset.episode_time_s,
                     single_task=cfg.dataset.single_task,
                     display_data=cfg.display_data,
+                    traj_viz=traj_viz,
                 )
 
                 # Execute a few seconds without recording to give time to manually reset the environment
@@ -465,6 +487,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         control_time_s=cfg.dataset.reset_time_s,
                         single_task=cfg.dataset.single_task,
                         display_data=cfg.display_data,
+                        traj_viz=traj_viz,
                     )
 
                 if events["rerecord_episode"]:
