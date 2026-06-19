@@ -35,6 +35,9 @@ Observation features:
 from __future__ import annotations
 
 import glob
+import os
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import cached_property
 from typing import Any
 
@@ -89,6 +92,88 @@ def resolve_wrist_camera_path(serial: str) -> str:
             "specific serial."
         )
     return matches[0]
+
+
+# Config-cache key xensesdk uses for its per-serial config cache. Mirrors the
+# constant baked into the SDK (xensesdk.core.ctx_builders); if it ever drifts the
+# pre-warm just fails to decrypt and the SDK falls back to its own flash read.
+_XENSE_CONFIG_CACHE_PSWD = "Wz8mmWz2ALJ6X5Ic"
+
+
+def _wait_nodes_settle(serials, logger, timeout_s: float = 15.0) -> None:
+    """Wait until each serial's ``/dev/v4l/by-id`` capture node is back + openable
+    after a flash-read reset re-enumerated it."""
+    deadline = time.perf_counter() + timeout_s
+    for sn in serials:
+        settled = False
+        while time.perf_counter() < deadline:
+            matches = glob.glob(f"/dev/v4l/by-id/*{sn}*-video-index0")
+            if matches:
+                try:
+                    fd = os.open(os.path.realpath(matches[0]), os.O_RDWR)
+                    os.close(fd)
+                    settled = True
+                    break
+                except OSError:
+                    pass
+            time.sleep(0.2)
+        if not settled:
+            logger.warning(
+                f"  Sensor {sn} V4L2 node did not settle within {timeout_s:.0f}s after pre-warm"
+            )
+
+
+def prewarm_tactile_config_cache(camera_configs: dict[str, Any], logger) -> None:
+    """Warm the xensesdk per-serial config cache for tactile sensors **before**
+    opening any camera.
+
+    A Sunplus (0x1300) flash read resets/re-enumerates the sensor. Doing that
+    concurrently (the parallel camera connect) on a cold cache races the SDK's
+    non-thread-safe flash lib and moves camera nodes mid-open. Reading here,
+    sequentially and only for **uncached Sunplus** sensors, makes cold start
+    safe; then we wait for the nodes to settle. A warm cache is just a cheap
+    ``exists()`` stat — no flash read, no reset, no extra cache decrypt (the SDK
+    still reads the cache once at connect)."""
+    serials = [
+        cfg.serial_number
+        for cfg in camera_configs.values()
+        if isinstance(cfg, XenseTactileCameraConfig) and getattr(cfg, "serial_number", None)
+    ]
+    if not serials:
+        return
+    try:
+        from xensesdk.flash import FlashClient
+        from xensesdk.flash.sunplus_backend import is_sunplus
+        from xensesdk.core.ctx_builders import CONFIG_CACHE_DIR
+        from xensesdk.utils.encrypt import encrypt_config_file
+    except Exception as e:  # SDK without the Sunplus/xbin path — nothing to do.
+        logger.debug(f"Config pre-warm unavailable ({e}); skipping")
+        return
+
+    uncached = [
+        sn for sn in serials if is_sunplus(sn) and not (CONFIG_CACHE_DIR / sn).exists()
+    ]
+    if not uncached:
+        return  # warm cache: cheap stat only, no flash read / reset
+
+    logger.info(
+        f"  Pre-warming config cache (cold start) for {len(uncached)} Sunplus sensor(s): {uncached}"
+    )
+    client = FlashClient()
+    try:
+        for sn in uncached:
+            try:
+                patch = client.read_patch(serial_number=sn)  # reads flash -> resets device
+                CONFIG_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                encrypt_config_file(
+                    patch, CONFIG_CACHE_DIR / sn, password=_XENSE_CONFIG_CACHE_PSWD, format="xbin"
+                )
+            except Exception as e:
+                logger.warning(f"  Config pre-warm failed for {sn}: {e}")
+    finally:
+        client.cleanup()
+
+    _wait_nodes_settle(uncached, logger)
 
 
 class TaccapGripper(Robot):
@@ -271,6 +356,42 @@ class TaccapGripper(Robot):
 
     # ------------------------------------------------------------------ lifecycle
 
+    def _connect_cameras_parallel(self) -> None:
+        """Open all cameras concurrently — each camera's V4L2 open + warmup
+        overlaps in time instead of summing (cf. v0.4.4 bi_arx5)."""
+        if not self.cameras:
+            return
+        n = len(self.cameras)
+        self.logger.info(f"  Connecting {n} camera(s) in parallel...")
+        with ThreadPoolExecutor(max_workers=min(n, 8)) as executor:
+            futures = {executor.submit(cam.connect): name for name, cam in self.cameras.items()}
+            for fut in as_completed(futures):
+                name = futures[fut]
+                try:
+                    fut.result()
+                except Exception as e:
+                    self.logger.error(f"  Camera '{name}' connect failed: {e}")
+                    raise
+        self.logger.info(f"  ✅ {n} camera(s) connected")
+
+    def _disconnect_cameras_parallel(self) -> None:
+        if not self.cameras:
+            return
+
+        def _close(cam):
+            if cam.is_connected:
+                cam.disconnect()
+
+        n = len(self.cameras)
+        with ThreadPoolExecutor(max_workers=min(n, 8)) as executor:
+            futures = {executor.submit(_close, cam): name for name, cam in self.cameras.items()}
+            for fut in as_completed(futures):
+                name = futures[fut]
+                try:
+                    fut.result()
+                except Exception as e:  # pragma: no cover — best-effort teardown
+                    self.logger.error(f"  Camera '{name}' disconnect error: {e}")
+
     def connect(self, calibrate: bool = True) -> None:
         if self.is_connected:
             raise DeviceAlreadyConnectedError(f"{self} already connected")
@@ -320,11 +441,13 @@ class TaccapGripper(Robot):
                 self.logger.info("  ✅ Pico4 tracker connected (world frame)")
 
         # 3. Cameras (tactile + wrist, auto-discovered in __init__).
-        for cam_name, cam in self.cameras.items():
-            self.logger.info(f"  Connecting camera {cam_name}...")
-            cam.connect()
-        if self.cameras:
-            self.logger.info(f"  ✅ {len(self.cameras)} camera(s) connected")
+        #    Pre-warm the config cache sequentially first so the parallel connect
+        #    below never triggers a Sunplus flash read (device reset) mid-open.
+        prewarm_tactile_config_cache(self._camera_configs, self.logger)
+        #    Then connect concurrently — each camera's V4L2 open + warmup overlaps
+        #    in time rather than summing (cf. v0.4.4 bi_arx5). Configs now come
+        #    from the cache (no flash read), so no device reset during connect.
+        self._connect_cameras_parallel()
 
         self._is_connected = True
         self.logger.info(f"✅ {self} connected.")
@@ -335,12 +458,7 @@ class TaccapGripper(Robot):
 
         self.logger.info(f"Disconnecting {self}...")
 
-        for cam_name, cam in self.cameras.items():
-            try:
-                if cam.is_connected:
-                    cam.disconnect()
-            except Exception as e:  # pragma: no cover — best-effort teardown
-                self.logger.error(f"  Camera {cam_name} disconnect error: {e}")
+        self._disconnect_cameras_parallel()
 
         if self._tracker is not None:
             try:

@@ -33,6 +33,7 @@ Observation features (per side ``{s}`` in left/right):
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import cached_property
 from typing import Any
 
@@ -46,7 +47,10 @@ from lerobot.utils.robot_utils import get_logger
 
 from ..robot import Robot
 from ..taccap_gripper import serial_discovery as disco
-from ..taccap_gripper.taccap_gripper import resolve_wrist_camera_path
+from ..taccap_gripper.taccap_gripper import (
+    prewarm_tactile_config_cache,
+    resolve_wrist_camera_path,
+)
 from .config_bi_taccap_gripper import BiTaccapGripperConfig
 
 _SIDES = ("left", "right")
@@ -223,6 +227,42 @@ class BiTaccapGripper(Robot):
 
     # ------------------------------------------------------------------ lifecycle
 
+    def _connect_cameras_parallel(self) -> None:
+        """Open all cameras concurrently — each camera's V4L2 open + warmup
+        overlaps in time instead of summing (cf. v0.4.4 bi_arx5)."""
+        if not self.cameras:
+            return
+        n = len(self.cameras)
+        self.logger.info(f"  Connecting {n} camera(s) in parallel...")
+        with ThreadPoolExecutor(max_workers=min(n, 8)) as executor:
+            futures = {executor.submit(cam.connect): name for name, cam in self.cameras.items()}
+            for fut in as_completed(futures):
+                name = futures[fut]
+                try:
+                    fut.result()
+                except Exception as e:
+                    self.logger.error(f"  Camera '{name}' connect failed: {e}")
+                    raise
+        self.logger.info(f"  ✅ {n} camera(s) connected")
+
+    def _disconnect_cameras_parallel(self) -> None:
+        if not self.cameras:
+            return
+
+        def _close(cam):
+            if cam.is_connected:
+                cam.disconnect()
+
+        n = len(self.cameras)
+        with ThreadPoolExecutor(max_workers=min(n, 8)) as executor:
+            futures = {executor.submit(_close, cam): name for name, cam in self.cameras.items()}
+            for fut in as_completed(futures):
+                name = futures[fut]
+                try:
+                    fut.result()
+                except Exception as e:  # pragma: no cover — best-effort teardown
+                    self.logger.error(f"  Camera '{name}' disconnect error: {e}")
+
     def connect(self, calibrate: bool = True) -> None:
         if self.is_connected:
             raise DeviceAlreadyConnectedError(f"{self} already connected")
@@ -281,11 +321,13 @@ class BiTaccapGripper(Robot):
                     )
 
         # 3. Cameras (tactile + wrist, auto-discovered in __init__).
-        for cam_name, cam in self.cameras.items():
-            self.logger.info(f"  Connecting camera {cam_name}...")
-            cam.connect()
-        if self.cameras:
-            self.logger.info(f"  ✅ {len(self.cameras)} camera(s) connected")
+        #    Pre-warm the config cache sequentially first so the parallel connect
+        #    below never triggers a Sunplus flash read (device reset) mid-open.
+        prewarm_tactile_config_cache(self._camera_configs, self.logger)
+        #    Then connect concurrently — each camera's V4L2 open + warmup overlaps
+        #    in time rather than summing (cf. v0.4.4 bi_arx5). Configs now come
+        #    from the cache (no flash read), so no device reset during connect.
+        self._connect_cameras_parallel()
 
         self._is_connected = True
         self.logger.info(f"✅ {self} connected.")
@@ -296,12 +338,7 @@ class BiTaccapGripper(Robot):
 
         self.logger.info(f"Disconnecting {self}...")
 
-        for cam_name, cam in self.cameras.items():
-            try:
-                if cam.is_connected:
-                    cam.disconnect()
-            except Exception as e:  # pragma: no cover — best-effort teardown
-                self.logger.error(f"  Camera {cam_name} disconnect error: {e}")
+        self._disconnect_cameras_parallel()
 
         for side in _SIDES:
             tracker = self._tracker[side]
