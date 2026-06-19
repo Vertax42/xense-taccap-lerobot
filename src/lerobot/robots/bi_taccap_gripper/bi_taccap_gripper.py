@@ -118,11 +118,14 @@ class BiTaccapGripper(Robot):
         # Drives the pose schema, so it runs here (pre-connect) like the cameras.
         self._tracker_sn_by_side: dict[str, str] = {}
         if config.enable_tracker:
-            serials = Pico4TrackerReader.list_serial_numbers(
-                device_wait_timeout=config.tracker_wait_timeout,
-                logger_name=config.id or "bi",
+            self._tracker_sn_by_side = disco.resolve_pico_trackers(
+                _SIDES,
+                {s: getattr(config, f"{s}_tracker_serial") for s in _SIDES},
+                lambda: Pico4TrackerReader.list_serial_numbers(
+                    device_wait_timeout=config.tracker_wait_timeout,
+                    logger_name=config.id or "bi",
+                ),
             )
-            self._tracker_sn_by_side = disco.assign_pico_trackers(serials, _SIDES)
             self.logger.info(f"Pico4 trackers: {self._tracker_sn_by_side}")
 
         self._is_connected = False

@@ -29,6 +29,11 @@ assigned to ``left``/``right`` by the Pico serial rule (second-to-last digit odd
 left, even → right; e.g. ``PC2310MLL3200496G`` → ``6`` → right). A bimanual rig
 requires one tracker per side; a missing / duplicate / malformed tracker raises a
 clear error. Set ``enable_tracker=false`` to record tactile + gripper only.
+
+To bypass the tracker side rule (e.g. a tracker whose serial does not follow it),
+set ``left_tracker_serial`` / ``right_tracker_serial`` — a pinned side uses the
+given serial verbatim and never touches enumeration; un-pinned sides still
+auto-discover by rule.
 """
 
 from dataclasses import dataclass, field
@@ -82,6 +87,10 @@ class BiTaccapGripperConfig(RobotConfig):
     left_enable_imu: bool = False
     left_gripper_open_rad: float = 1.7
 
+    left_tracker_serial: str | None = None
+    """Manually pin the left Pico4 tracker serial, bypassing the
+    second-to-last-digit side rule. ``None`` = auto-discover by rule; when set, the
+    serial is used verbatim (no enumeration, no rule check). Only when ``enable_tracker``."""
     left_tracker_to_ee_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
     left_tracker_to_ee_quat: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
     left_enable_init_pose_alignment: bool = False
@@ -96,6 +105,10 @@ class BiTaccapGripperConfig(RobotConfig):
     right_enable_imu: bool = False
     right_gripper_open_rad: float = 1.7
 
+    right_tracker_serial: str | None = None
+    """Manually pin the right Pico4 tracker serial, bypassing the
+    second-to-last-digit side rule. ``None`` = auto-discover by rule; when set, the
+    serial is used verbatim (no enumeration, no rule check). Only when ``enable_tracker``."""
     right_tracker_to_ee_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
     right_tracker_to_ee_quat: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
     right_enable_init_pose_alignment: bool = False

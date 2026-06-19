@@ -149,12 +149,16 @@ class TaccapGripper(Robot):
         # digit matches this side (strict). Drives the pose schema (pre-connect).
         self._tracker_sn: str | None = None
         if config.enable_tracker:
-            serials = Pico4TrackerReader.list_serial_numbers(
-                device_wait_timeout=config.tracker_wait_timeout,
-                logger_name=config.id or "robot",
-            )
-            self._tracker_sn = disco.assign_pico_trackers(serials, (self._side,))[self._side]
-            self.logger.info(f"Pico4 tracker ({self._side}): {self._tracker_sn}")
+            self._tracker_sn = disco.resolve_pico_trackers(
+                (self._side,),
+                {self._side: config.tracker_serial},
+                lambda: Pico4TrackerReader.list_serial_numbers(
+                    device_wait_timeout=config.tracker_wait_timeout,
+                    logger_name=config.id or "robot",
+                ),
+            )[self._side]
+            source = "manual" if (config.tracker_serial or "").strip() else "rule"
+            self.logger.info(f"Pico4 tracker ({self._side}): {self._tracker_sn} ({source})")
 
         self._is_connected = False
 

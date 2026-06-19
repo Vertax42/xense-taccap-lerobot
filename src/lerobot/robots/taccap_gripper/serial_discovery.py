@@ -146,6 +146,28 @@ def assign_pico_trackers(serials, sides=SIDES) -> dict[str, str]:
     return result
 
 
+def resolve_pico_trackers(sides, manual, enumerate_serials) -> dict[str, str]:
+    """Resolve ``{side: tracker_sn}`` for ``sides``, honoring manual overrides.
+
+    For each side, a non-empty ``manual[side]`` serial is used **verbatim** — no
+    rule check, no enumeration — the escape hatch for a tracker whose serial does
+    not follow the second-to-last-digit side rule, or when the PC-service
+    enumeration is flaky. Sides left unset (``None``/empty) are filled by
+    ``assign_pico_trackers`` (the parity rule).
+
+    ``enumerate_serials`` is a zero-arg callable returning the connected tracker
+    serials; it is invoked **only** when at least one side needs the rule, so a
+    fully-pinned rig never blocks on enumeration.
+    """
+    pinned = {s: str(manual.get(s) or "").strip() for s in sides}
+    pinned = {s: v for s, v in pinned.items() if v}
+    need_rule = tuple(s for s in sides if s not in pinned)
+    result: dict[str, str] = dict(pinned)
+    if need_rule:
+        result.update(assign_pico_trackers(list(enumerate_serials()), need_rule))
+    return {s: result[s] for s in sides}
+
+
 def _require_sdk() -> None:
     if not TACCAP_SDK_AVAILABLE:
         raise ImportError(

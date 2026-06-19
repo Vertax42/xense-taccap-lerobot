@@ -82,6 +82,13 @@ class TaccapGripperConfig(RobotConfig):
     second-to-last digit matches this unit's side (odd → left, even → right) is
     pinned. Set False to record tactile/gripper only (no PC service needed)."""
 
+    tracker_serial: str | None = None
+    """Manually pin this unit's Pico4 tracker serial, bypassing the
+    second-to-last-digit side rule. ``None`` (default) = auto-discover by rule.
+    When set, the serial is used **verbatim** — no PC-service enumeration, no
+    rule check — the escape hatch for a tracker whose serial does not follow the
+    rule (or when enumeration is flaky). Only consulted when ``enable_tracker``."""
+
     tracker_to_ee_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
     """Translation from the tracker frame to the gripper end-effector frame
     (meters). Defaults to zero (i.e. EE coincides with tracker)."""
