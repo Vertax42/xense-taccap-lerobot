@@ -1,33 +1,23 @@
 name: lerobot-xense
 channels:
-  - robostack-jazzy # ros-humble-kdl-parser, ros-humble-ament-cmake for ARX5
   - conda-forge
   - nvidia
   - nodefaults
 dependencies:
   - python=3.12
-  # ── Build tools (required for ARX5 / Flexiv C++ builds) ──────────────────
+  # ── Build tools (taccap libxense-lite + pico4 C++ builds) ─────────────────
   - cxx-compiler
   - cmake>=3.25
   - ninja
-  # ── C++ libraries (ARX5 / Flexiv Python bindings) ─────────────────────────
+  # ── C++ libraries (taccap libxense-lite: find_package Eigen3 + pybind11; it
+  #    FetchContent's its own spdlog, so no conda spdlog needed) ──────────────
   - pybind11
   - eigen=3.4.0
-  - orocos-kdl
-  - boost
-  - spdlog=1.14.1
-  - ros-jazzy-kdl-parser
-  - ros-jazzy-ament-cmake # ARX5 SDK CMake build dependency
-  - conda-forge::soem=1.4.0 # ARX5 EtherCAT; omit on aarch64, build from source
-  - libhidapi
   - libstdcxx-ng # newer CXXABI symbols (xensevr_pc_service_sdk)
   # ── taccap-gripper C++ build deps (libxense-lite) ─────────────────────────
-  # Solved here WITH the robostack ROS stack so they share one coherent solve.
-  # Do NOT pin libopencv=4.12: that build links libprotobuf 6.31 and conflicts
-  # with robostack's ros2-distro-mutex (libprotobuf 6.33.5), which would evict
-  # ros-humble-kdl-parser from the robostack ROS stack. 4.13 links 6.33.5 and coexists.
-  # This is the C++ runtime only; the pip opencv-python wheel (import cv2) is
-  # self-contained and unaffected.
+  # OpenCV C++ headers, nlohmann_json and zlib (dev: libz.so) that the lerobot
+  # env does not otherwise ship. libopencv is the C++ runtime only; the pip
+  # opencv-python wheel (import cv2) is self-contained and unaffected.
   - libopencv>=4.13
   - nlohmann_json=3.11.3
   - zlib=1.3.1 # dev pkg: provides linkable libz.so for libxensesdk find_package(ZLIB)
@@ -37,10 +27,10 @@ dependencies:
   - nvidia::cuda-toolkit=12.8
   - nvidia::cudnn
   # ── Video (torchcodec / av) ────────────────────────────────────────────────
-  # PyAV/torchcodec are installed from wheels later in setup_env.sh. Keeping
-  # ffmpeg out of the conda solve avoids ICU/libxml2 conflicts with Robostack.
+  # PyAV/torchcodec are installed from wheels later in setup_env.sh; ffmpeg is
+  # kept out of the conda solve to avoid ICU/libxml2 conflicts.
   # ── Python base tools ─────────────────────────────────────────────────────
-  - numpy>=1.26.4 # robostack resolves to 1.26; pip-only installs can use 2.x
+  - numpy>=1.26.4 # pip installs (xensesdk) constrain the upper bound (<2.3.0)
   - pip
   - wheel
   - pip:
