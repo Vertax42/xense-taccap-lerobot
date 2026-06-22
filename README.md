@@ -2,10 +2,12 @@
 
 🤗 This repository is a fork of [`lerobot`](https://github.com/huggingface/lerobot)
 by XenseRobotics, used for Xense's multimodal tactile data acquisition system.
-This branch tracks **upstream lerobot v5.1**, with Xense-specific robots
-(BiARX5, BiFlexiv Rizon4 RT, Xense Flare), teleoperators (Pico4, dual
-SpaceMouse) and tactile cameras layered on top. For generic lerobot
-usage (datasets, policies, training scripts) refer to the
+This branch tracks **upstream lerobot v5.1**, slimmed to the **TacCap-Gripper**
+(single + bimanual) handheld UMI device and the **Pico4** teleoperator/tracker,
+with Xense tactile cameras layered on top. See
+[`src/lerobot/robots/taccap_gripper/README.md`](src/lerobot/robots/taccap_gripper/README.md)
+for device-specific usage. For generic lerobot usage (datasets, policies,
+training scripts) refer to the
 [upstream README](https://github.com/huggingface/lerobot#readme).
 
 ## 🔧 Installation
@@ -42,19 +44,13 @@ This repository uses `third_party/` git submodules to manage hardware SDK depend
 
 | Submodule | Installed package |
 |-----------|-------------------|
-| `third_party/ARX5_SDK` | `pyarx` |
-| `third_party/libpyflexiv` | `flexiv_rt` |
-| `third_party/XenseVR-PC-Service` | `xensevr_pc_service_sdk` |
-| `third_party/XGripper` | `xensegripper` |
-| `third_party/xense_franka` | `xense_franka` |
-| `third_party/elite-robots-cs-sdk` | Elite CS C++ SDK (builds `elite_cs_sdk`) |
-| `third_party/elite-robots-cs-sdk-python` | `elite_cs_sdk` (Elite CS Python bindings) |
 | `third_party/taccap-gripper` | `xense.taccap` (TacCap UMI tactile gripper SDK) |
+| `third_party/XenseVR-PC-Service` | `xensevr_pc_service_sdk` (Pico4 teleop/tracker) |
+| `third_party/XenseVR-RobotVision-PC` | ZED-M → Pico4 stereo passthrough (built separately) |
 
 > `xensesdk` is **not** a submodule — it is installed from the vendored wheel
 > `dist/xensesdk-2.0.0-cp312-cp312-linux_x86_64.whl` (which bundles the patched
-> `libxense_c.so` flash reader). The Elite Python SDK is built against the local
-> `third_party/elite-robots-cs-sdk` C++ submodule (no network fetch of the C++ source).
+> `libxense_c.so` flash reader).
 
 **Step 2:** 🐍 Create and activate the mamba environment:
 
@@ -79,20 +75,14 @@ This step will:
 - Update the conda environment from `conda_environment.yaml`
 - Install the main package from `pyproject.toml`
 - Install `xensesdk` from the vendored wheel (`dist/xensesdk-2.0.0-cp312-cp312-linux_x86_64.whl`)
-- Build and install all `third_party` SDK packages: `pyarx`, `flexiv_rt`, `xensevr_pc_service_sdk`, `xensegripper`, `xense_franka`, `elite_cs_sdk` (Elite CS — built from the C++ + Python submodules), and `xense.taccap` (TacCap UMI gripper)
-- Configure SpaceMouse udev rules and HID permissions automatically
-
-> You will be prompted for `sudo` password during installation (for ARX5 real-time capability and udev rules).
+- Build and install the `third_party` SDK packages: `xensevr_pc_service_sdk` (Pico4) and `xense.taccap` (TacCap UMI gripper)
 
 **Step 4:** ✅ Verify the installation:
 
 ```bash
-python -c 'import pyarx; print("pyarx OK ->", pyarx.__file__)'
-python -c 'import flexiv_rt; print("flexiv_rt OK ->", flexiv_rt.__file__)'
 python -c 'import xensevr_pc_service_sdk; print("xensevr_pc_service_sdk OK ->", xensevr_pc_service_sdk.__file__)'
 python -c 'import xensesdk; print("xensesdk OK ->", xensesdk.__file__)'
-python -c 'import xensegripper; print("xensegripper OK ->", xensegripper.__file__)'
-python -c 'import elite_cs_sdk; print("elite_cs_sdk OK ->", elite_cs_sdk.__file__)'
+python -c 'import xense.taccap; print("xense.taccap OK ->", xense.taccap.__file__)'
 ```
 
 **Step 5:** 📌 **Note on FFmpeg / video:** v5.1 no longer pins `ffmpeg`
@@ -106,250 +96,6 @@ static build):
 # Optional: verify torchcodec wheel is loadable
 python -c 'import torchcodec; print("torchcodec OK ->", torchcodec.__version__)'
 ```
-
-### ARX5 Real-time Thread Permissions
-
-The ARX5 SDK requires `CAP_SYS_NICE` on the Python interpreter for real-time CAN thread scheduling. This is handled by `setup_env.sh --install`, but can be set manually:
-
-```bash
-PY_EXE=$(python -c 'import sys, os; p = sys.executable; print(os.path.realpath(p))')
-sudo setcap cap_sys_nice+ep "$PY_EXE"
-getcap "$PY_EXE"  # should show: cap_sys_nice+ep
-```
-
-## 🐭 SpaceMouse Teleoperation System
-
-This project includes advanced SpaceMouse support with both single and dual-device modes for precise robotic control.
-
-### Dependencies
-
-**System Requirements:**
-
-- Ubuntu 22.04 (tested) or other Linux distributions
-- Python 3.12+
-- libhidapi (installed via apt)
-
-**Python Packages:**
-
-- `pyspacemouse` - Modern cross-platform SpaceMouse library
-- `hidapi` - Python wrapper for HID API
-- `easyhid` - Easy-to-use HID library (dependency of pyspacemouse)
-
-All Python dependencies are automatically installed by `setup_env.sh --install`.
-
-### Permissions Setup
-
-SpaceMouse requires proper udev rules to allow non-root access. See **Step 2** in the Installation section above for complete setup instructions.
-
-### Testing Your SpaceMouse
-
-After installation and permissions setup, test your SpaceMouse:
-
-```bash
-# Basic functionality test (prints real-time 6-DoF values)
-python test_pyspacemouse_basic.py
-
-# Test with lerobot integration
-python test_spacemouse.py
-```
-
-The test script will display real-time position (x, y, z) and orientation (roll, pitch, yaw) values as you move the SpaceMouse.
-
-> 📝 **Note:** If you're using a 3Dconnexion Universal Receiver (wireless), you may see multiple devices listed (e.g., 14 "UniversalReceiver" entries). This is normal - the receiver exposes multiple HID interfaces for different functions. PySpaceMouse will automatically select the correct interface for 6-DoF input.
-
-### Features
-
-- ✅ **Modern PySpaceMouse Integration**: Uses PySpaceMouse library for cross-platform SpaceMouse support
-- ✅ **No System Services Required**: Direct HID communication, no need for spacenavd daemon  
-- ✅ **Single Device Mode**: Traditional 6-DoF control with one SpaceMouse
-- ✅ **Dual Device Mode**: Advanced left/right hand coordination for complex manipulation
-- ✅ **Flexible Axis Assignment**: Configure which device controls position vs orientation
-- ✅ **Independent Sensitivity**: Per-device sensitivity settings for optimal control
-
-### Single Device Configuration
-
-```python
-from lerobot.teleoperators.spacemouse import SpacemouseConfig, SpacemouseTeleop
-
-# Standard single SpaceMouse setup (default)
-config = SpacemouseConfig(
-    pos_sensitivity=0.8,     # Position control sensitivity
-    ori_sensitivity=1.5,     # Orientation control sensitivity
-    deadzone=0.1,           # Deadzone threshold
-    frequency=200,          # Polling frequency (Hz)
-)
-
-teleop = SpacemouseTeleop(config)
-```
-
-### Dual Device Configuration
-
-Perfect for complex robotic tasks requiring precise position and orientation control:
-
-```python
-from lerobot.teleoperators.spacemouse import SpacemouseConfig, DeviceConfig
-
-# Left hand controls position, right hand controls orientation
-config = SpacemouseConfig(
-    multi_device_mode=True,
-    left_device=DeviceConfig(
-        device_index=0,
-        enabled_axes=(True, True, True, False, False, False),  # X, Y, Z position only
-        pos_sensitivity=0.8,
-        ori_sensitivity=0.0,  # Disabled
-    ),
-    right_device=DeviceConfig(
-        device_index=1, 
-        enabled_axes=(False, False, False, True, True, True),  # Roll, pitch, yaw only
-        pos_sensitivity=0.0,  # Disabled
-        ori_sensitivity=1.5,
-    )
-)
-
-teleop = SpacemouseTeleop(config)
-```
-
-### Example Configurations
-
-See [examples/spacemouse_dual_config_example.py](examples/spacemouse_dual_config_example.py) for complete configuration examples including:
-- Position/Orientation split control
-- Dual-arm robot control  
-- Fine/Coarse movement control
-
-### Use Cases
-
-- 🤖 **Dual-Arm Robots**: Independent control of two robotic arms
-- 🎯 **Precision Manipulation**: Decouple position and orientation control for fine tasks
-- 🔄 **Complex Assembly**: Left hand positions, right hand orients components
-- 🏭 **Industrial Applications**: Enhanced ergonomics and control precision
-
-### Hardware Requirements
-
-- **Single Mode**: Any 3Dconnexion SpaceMouse device
-- **Dual Mode**: Two identical SpaceMouse devices (e.g., two SpaceNavigators)
-
-### Supported Devices
-
-All 3Dconnexion devices supported by PySpaceMouse:
-- SpaceNavigator
-- SpaceMouse Pro
-- SpaceMouse Wireless
-- SpaceMouse Compact
-- And more...
-
-## 🤖 Flexiv Rizon4 Robot with Flare Gripper Policy Implementation
-
-Lerobot record XenseFlare dataset can be directly used for FlexivRizon4 policy training.  🎉
-
-### Bimanual Flexiv Rizon4 RT + BiPico4 Record Controls
-
-For `lerobot-record` with `--robot.type=bi_flexiv_rizon4_rt --teleop.type=bi_pico4`, the controller buttons are mapped as follows:
-
-| Controller button | Keyboard equivalent | Action |
-|---|---|---|
-| Right `A` | `go_start` | Reset both arms to start pose (RT non-blocking, recording continues) |
-| Left `X` | `rerecord_episode` | Discard current episode and re-record |
-| Left `Y` | `exit_early` | Finish current episode early |
-| Right `B` | `stop_recording` | Stop the recording session |
-
-Button state is refreshed via `BiPico4.poll_buttons()` at the top of each loop iteration, before event checks. Keyboard events and controller buttons are unified into the same `events[]` checks — both are equal-priority input sources.
-
-During RT reset, the record loop keeps running: observations are still sampled, teleop actions are still read, and the teleop pose is re-synced to the robot once the reset trajectory finishes.
-
-## Record Loop Implementation (`flexiv_rizon4_rt_record_loop`)
-
-This section documents the dataset construction logic in `flexiv_rizon4_rt_record_loop`, which handles both normal teleoperation recording and the RT reset trajectory recording for `bi_flexiv_rizon4_rt + bi_pico4`.
-
-### Loop Structure
-
-```
-while timestamp < control_time_s:
-    poll_buttons()              # lightweight button refresh (no pose computation)
-
-    # Unified event checks — keyboard OR controller button, symmetric
-    stop_recording  / B  →  break
-    rerecord        / X  →  break
-    exit_early      / Y  →  break
-    go_start        / A  →  reset_to_initial_position(), recording continues
-
-    get_observation()
-    check robot_is_moving + sync teleop if reset just finished
-    get_action()
-    send_action / dataset write
-```
-
-### State Variables
-
-| Variable | Role |
-|---|---|
-| `reset_triggered` | Per-frame flag. Set `True` the frame reset is triggered. Skips `send_action` and dataset write for that frame only. Resets to `False` at the start of every iteration. |
-| `prev_rt_moving` | Edge-detection flag. Set `True` while `robot.rt_moving` is `True`. Cleared to `False` when movement stops, triggering one call to `_sync_rt_teleop_to_robot_pose()`. |
-| `prev_observation_frame` | Holds the previous frame's observation. Used by shifted-frame logic to pair `obs[t-1]` with the robot's actual position at `obs[t]` as the action. |
-
-### Three Frame Modes
-
-#### 1. Normal teleoperation (`robot_is_moving=False`, `reset_triggered=False`)
-
-```
-robot.send_action(teleop_action) → sent_action
-dataset: { obs[t],  action = sent_action[t] }   # direct frame
-prev_observation_frame = obs[t]
-```
-
-#### 2. Reset trigger frame (`reset_triggered=True`)
-
-```
-robot.reset_to_initial_position()   # C++ RT thread takes over arm control
-send_action  → skipped
-dataset      → skipped
-prev_observation_frame = obs[T]     # saved as anchor for next iteration
-```
-
-`obs[T]` is intentionally not written to the dataset. It is used as `prev_observation_frame` for the first shifted frame on the next iteration, so it appears exactly once — without this skip it would appear twice (once as a direct frame, once as the prev of the first shifted frame).
-
-#### 3. RT reset in progress (`robot_is_moving=True`)
-
-```
-send_action  → skipped (C++ RT thread drives the arm autonomously)
-current_as_action = { key: obs[t][key] for key in robot.action_features }
-# robot.action_features = left/right TCP pose (9D each) + gripper (1D each) = 20D total
-# Iterates action_features keys only — image keys in obs[t] are excluded automatically.
-dataset: { obs[t-1],  action = current_as_action }   # shifted frame
-prev_observation_frame = obs[t]
-```
-
-The action is extracted from the current observation using the same keys as `robot.action_features`. This records where the robot actually moved to, not what the teleop commanded — the same shifted-frame convention used by `bi_arx5_record_loop`.
-
-### Per-Frame Decision Table
-
-| Frame | `reset_triggered` | `robot_is_moving` | `send_action` | Dataset write | `prev_obs` updated to |
-|---|---|---|---|---|---|
-| T-1 (normal teleop) | False | False | ✓ | `{obs[T-1], action[T-1]}` direct | obs[T-1] |
-| **T (reset triggered)** | **True** | **False** | **skipped** | **skipped** | **obs[T]** |
-| T+1 (RT moving) | False | True | skipped | `{obs[T], state_20d[T+1]}` shifted | obs[T+1] |
-| T+2 (RT moving) | False | True | skipped | `{obs[T+1], state_20d[T+2]}` shifted | obs[T+2] |
-| … | False | True | skipped | shifted | … |
-| N+1 (reset done, teleop synced) | False | False | ✓ | `{obs[N+1], action[N+1]}` direct | obs[N+1] |
-
-`state_20d[t]` = `{k: obs[t][k] for k in robot.action_features}` — left/right TCP pose (9D each) + gripper (1D each), image keys excluded.
-
-### Complete Frame Sequence Around a Reset
-
-```
-frame T-2  normal teleop  →  dataset: { obs[T-2], action[T-2] }
-frame T-1  normal teleop  →  dataset: { obs[T-1], action[T-1] },  prev=obs[T-1]
-frame T    reset trigger  →  dataset: skipped,                     prev=obs[T]
-frame T+1  rt_moving      →  dataset: { obs[T],   state_20d[T+1] },  prev=obs[T+1]
-frame T+2  rt_moving      →  dataset: { obs[T+1], state_20d[T+2] },  prev=obs[T+2]
-  ...
-frame N    rt_moving      →  dataset: { obs[N-1], state_20d[N] },    prev=obs[N]
-frame N+1  reset done     →  _sync_rt_teleop_to_robot_pose()
-           normal teleop  →  dataset: { obs[N+1], action[N+1] }
-```
-
-### Post-Reset Teleop Sync
-
-When `prev_rt_moving` transitions `True → False` (frame N+1), `_sync_rt_teleop_to_robot_pose()` is called once. This reads the robot's current TCP pose (now at start position) and calls `teleop.reset_to_pose()`, updating the Pico4's internal `_start_pos` reference. Without this sync the teleop would compute position deltas from the pre-reset pose, causing the arm to jump on the first grip after reset.
 
 ## 🔑 The `LeRobotDataset` format
 
@@ -406,31 +152,6 @@ A `LeRobotDataset` is serialised using several widespread file formats for each 
 - metadata are stored in plain json/jsonl files
 
 Dataset can be uploaded/downloaded from the HuggingFace hub seamlessly. To work on a local dataset, you can specify its location with the `root` argument if it's not in the default `~/.cache/huggingface/lerobot` location.
-
-## 📝 Recent Updates
-
-### SpaceMouse System Upgrade (2025-01-23)
-
-🎉 **Major SpaceMouse System Overhaul:**
-
-- **Modern Library Migration**: Migrated from legacy `spnav` to modern `PySpaceMouse` library
-- **Cross-Platform Support**: Now supports Linux, macOS, and Windows
-- **No System Dependencies**: Removed requirement for `spacenavd` system service
-- **Dual-Device Support**: Revolutionary dual SpaceMouse mode for advanced manipulation
-- **Flexible Configuration**: Per-device sensitivity and axis assignment
-- **Hardware Independence**: Direct HID communication for better reliability
-
-**Breaking Changes:**
-- `spacenavd` service is no longer required
-- Configuration options have been expanded with new dual-device parameters
-- Old single-device configurations remain fully compatible
-
-**Migration Benefits:**
-- ✅ Easier setup (no system services to configure)
-- ✅ Better cross-platform compatibility  
-- ✅ More responsive input handling
-- ✅ Advanced dual-hand control capabilities
-- ✅ Future-proof with active library maintenance
 
 ## Citation
 

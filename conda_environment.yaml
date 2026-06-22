@@ -25,7 +25,7 @@ dependencies:
   # Solved here WITH the robostack ROS stack so they share one coherent solve.
   # Do NOT pin libopencv=4.12: that build links libprotobuf 6.31 and conflicts
   # with robostack's ros2-distro-mutex (libprotobuf 6.33.5), which would evict
-  # ros-humble-kdl-parser and break pyarx. 4.13 links 6.33.5 and coexists.
+  # ros-humble-kdl-parser from the robostack ROS stack. 4.13 links 6.33.5 and coexists.
   # This is the C++ runtime only; the pip opencv-python wheel (import cv2) is
   # self-contained and unaffected.
   - libopencv>=4.13
