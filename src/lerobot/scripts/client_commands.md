@@ -39,8 +39,6 @@ when `--robot.enable_tracker=false`, since there is no pose to draw). Same flag 
 ```bash
 lerobot-teleoperate \
     --robot.type=bi_taccap_gripper \
-    --robot.left_tracker_serial=PC2310MLL4150713G \
-    --robot.right_tracker_serial=PC2310MLL4150387G \
     --fps=30 \
     --display_data=true
 ```
@@ -93,9 +91,9 @@ Recording is self-driven (`self_driven_record_loop`, shifted-frame: `action[t]` 
 ```bash
 lerobot-record \
     --robot.type=bi_taccap_gripper \
-    --dataset.repo_id=Xense/<dataset_name> \
+    --dataset.repo_id=Xense/taccap-g1-test-0624 \
     --dataset.single_task="Pick up the cube" \
-    --dataset.num_episodes=20 \
+    --dataset.num_episodes=2 \
     --dataset.fps=30 \
     --dataset.episode_time_s=60 \
     --dataset.reset_time_s=30 \
@@ -105,6 +103,17 @@ lerobot-record \
 ```
 
 ### Single (`taccap_gripper`)
+
+
+
+
+
+
+
+
+
+
+
 
 ```bash
 lerobot-record \

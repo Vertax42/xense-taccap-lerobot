@@ -18,7 +18,7 @@ dependencies:
   # OpenCV C++ headers, nlohmann_json and zlib (dev: libz.so) that the lerobot
   # env does not otherwise ship. libopencv is the C++ runtime only; the pip
   # opencv-python wheel (import cv2) is self-contained and unaffected.
-  - libopencv>=4.13
+  - libopencv==4.12
   - nlohmann_json=3.11.3
   - zlib=1.3.1 # dev pkg: provides linkable libz.so for libxensesdk find_package(ZLIB)
   - pkg-config

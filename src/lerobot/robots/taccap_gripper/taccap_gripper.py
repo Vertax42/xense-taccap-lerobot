@@ -61,8 +61,10 @@ try:
     )
 
     TACCAP_SDK_AVAILABLE = True
-except ImportError:
+    _TACCAP_SDK_IMPORT_ERROR: ImportError | None = None
+except ImportError as e:
     TACCAP_SDK_AVAILABLE = False
+    _TACCAP_SDK_IMPORT_ERROR = e
 
 # ---- Pico4 tracker reader ---------------------------------------------------
 try:
@@ -200,8 +202,9 @@ class TaccapGripper(Robot):
         if config.enable_gripper and not TACCAP_SDK_AVAILABLE:
             raise ImportError(
                 "xense.taccap SDK not available. Build it from the vendored "
-                "submodule third_party/taccap-gripper (run setup_env.sh --install)."
-            )
+                "submodule third_party/taccap-gripper (run setup_env.sh --install). "
+                f"Original import error: {_TACCAP_SDK_IMPORT_ERROR!r}"
+            ) from _TACCAP_SDK_IMPORT_ERROR
         if config.enable_tracker and not PICO4_TRACKER_AVAILABLE:
             raise ImportError(
                 "Pico4TrackerReader not available. Ensure "

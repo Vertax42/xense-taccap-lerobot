@@ -34,6 +34,15 @@ import traceback
 from dataclasses import asdict, dataclass
 from pprint import pformat
 
+# Load TacCap native libs before cv2/Pillow/torchvision. Those packages may
+# preload vendored JPEG/TIFF libraries that conflict with the conda OpenCV libs
+# used by xense.taccap.
+try:
+    from xense.taccap import FollowerGripper as _TaccapFollowerGripper  # noqa: F401
+    from xense.taccap import LeaderGripper as _TaccapLeaderGripper  # noqa: F401
+except ImportError:
+    pass
+
 import numpy as np
 import rerun as rr
 
