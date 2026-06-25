@@ -60,9 +60,9 @@ mamba activate lerobot-xense
 ```
 
 > The default env name baked into `conda_environment.yaml` is
-> `lerobot-xense-py312`. You can pass a different name to `--mamba`,
+> `lerobot-xense`. You can pass a different name to `--mamba`,
 > but the rest of this README and the openpi project assume
-> `lerobot-xense-py312`.
+> `lerobot-xense`.
 
 **Step 3:** 📦 Install LeRobot-Xense and all hardware SDK bindings:
 
@@ -96,6 +96,39 @@ static build):
 # Optional: verify torchcodec wheel is loadable
 python -c 'import torchcodec; print("torchcodec OK ->", torchcodec.__version__)'
 ```
+
+**Step 6:** 🔌 **Serial-port permissions (required for the TacCap-Gripper).**
+The gripper's MCU enumerates as `/dev/ttyACM*`, owned by the `dialout` group.
+If your user is **not** in `dialout`, the SDK can list the devices but cannot
+open the serial port to read the firmware SN — so `scan_grippers()` returns
+`role=Unknown` / empty `firmware_sn`, and `connect()` fails with e.g.:
+
+```
+RuntimeError: No leader gripper discovered for the left side.
+```
+
+(Under the hood the open fails with
+`IoError: SerialBus: open(/dev/serial/by-id/...): Permission denied`.)
+
+Add your user to the `dialout` group **once**, then start a fresh session so
+the group membership takes effect:
+
+```bash
+sudo usermod -aG dialout "$USER"
+# log out and back in (or `newgrp dialout` for the current shell), then replug
+```
+
+Verify the gripper is fully readable — `role` must be `Leader`/`Follower`
+(not `Unknown`) and `firmware_sn` non-empty:
+
+```bash
+python -c "from xense.taccap import scan_grippers
+for g in scan_grippers(): print(g.side.name, g.role.name, repr(g.firmware_sn))"
+```
+
+> If `firmware_sn` is still empty *after* fixing permissions, the device's SN
+> was never burned (or its firmware is < V1.6) — that is a device/firmware
+> issue, not a host one.
 
 ## 🔑 The `LeRobotDataset` format
 

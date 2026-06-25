@@ -82,6 +82,18 @@ and downstream tooling must reframe.
 4. Start the XenseVR PC Service on the host.
 5. Run any of the scripts below.
 
+> **Serial-port permissions (one-time host setup).** The gripper MCU enumerates
+> as `/dev/ttyACM*`, owned by the `dialout` group. If your user is not in
+> `dialout`, the SDK can *list* the grippers but cannot open the port to read
+> the firmware SN — `scan_grippers()` then reports `role=Unknown` / empty
+> `firmware_sn`, and `connect()` fails with
+> `RuntimeError: No <role> gripper discovered for the <side> side.` (the
+> underlying error is `IoError: ... Permission denied`). Fix it once with
+> `sudo usermod -aG dialout "$USER"`, then start a fresh session (or
+> `newgrp dialout`) and replug. See the
+> [top-level README → Installation Step 6](../../../../README.md#-installation)
+> for the full check.
+
 ## Calibration workflow (do once per device)
 
 ### 1. Latch the encoder zero
@@ -193,6 +205,25 @@ at connect). Leave it unset (default) to keep auto-discovery.
 - **Wrist** → obs key `wrist_cam`; `--robot.enable_wrist_camera=false` skips. Tune
   `--robot.wrist_camera_width/_height/_fps`.
 - **Role**: `--robot.role=follower` binds the Slave units (default `leader`).
+
+### Streaming video encoding & encoder warmup
+
+Video keys (tactile + wrist) are encoded **in real time during capture** rather than
+written as PNGs and encoded at episode end, so `save_episode()` is near-instant. This is
+on by default (`--dataset.streaming_encoding=true`); pair it with
+`--dataset.encoder_threads=2` and optionally `--dataset.vcodec=auto` for hardware
+encoding. One `_CameraEncoderThread` runs per camera, fed raw frames through a bounded
+queue (`--dataset.encoder_queue_maxsize`, ~1 s of frames); if the encoder can't keep up
+the oldest frames are dropped with a warning rather than stalling the loop.
+
+**Encoder warmup.** Opening the PyAV container + codec context is expensive (~25 ms), and
+doing it lazily on the episode's first frame made that frame badly overrun the `fps`
+budget. To avoid this, `dataset.prepare_episode_recording()` is called once before each
+episode's record loop: it starts the encoder threads and opens their codec contexts up
+front (using each video key's declared `(H, W, C)` shape), blocking until every encoder
+reports ready. By the time the first frame is recorded the encoders are hot, so the first
+`add_frame()` no longer pays the init cost. The lazy first-frame start remains as a
+defensive fallback for callers that don't pre-warm.
 
 ## What gets recorded per frame
 
