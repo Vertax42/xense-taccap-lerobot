@@ -20,7 +20,7 @@ dependencies:
   # pip opencv-python wheel (import cv2) is self-contained and unaffected.
   # (libxensesdk and its nlohmann_json/zlib deps were dropped in taccap 0.1.4.)
   - libopencv==4.12
-  - spdlog=1.17.0
+  - spdlog=1.14.1
   - pkg-config
   - make
   # ── CUDA (xensesdk / onnxruntime-gpu) ─────────────────────────────────────

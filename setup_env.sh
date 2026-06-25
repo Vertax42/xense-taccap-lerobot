@@ -335,12 +335,10 @@ install_taccap() {
     if ! compgen -G "${CONDA_PREFIX}/include/opencv4/opencv2/opencv.hpp" > /dev/null 2>&1 || \
        [[ ! -f "${CONDA_PREFIX}/include/spdlog/spdlog.h" ]]; then
         echo "[taccap] Installing C++ build deps (libopencv, spdlog, pkg-config, make)..."
-        # Include robostack-staging and DO NOT pin libopencv=4.12: a bare
-        # conda-forge solve with that pin pulls libprotobuf 6.31 and evicts the
-        # robostack ROS stack (drops ros-humble-kdl-parser). 4.13 links
-        # libprotobuf 6.33.5 and coexists with ros2-distro-mutex.
+        # Pin libopencv to 4.12 to match conda_environment.yaml. Include
+        # robostack-staging so the solve coexists with the ROS stack.
         ${CONDA_CMD:-mamba} install -c robostack-staging -c conda-forge -y \
-            "libopencv>=4.13" spdlog pkg-config make
+            "libopencv=4.12" "spdlog=1.14.1" pkg-config make
     fi
 
     # --no-build-isolation (used below to keep the build on the env's cmake/ninja
