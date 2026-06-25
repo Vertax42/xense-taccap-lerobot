@@ -48,6 +48,18 @@ This repository uses `third_party/` git submodules to manage hardware SDK depend
 | `third_party/XenseVR-PC-Service` | `xensevr_pc_service_sdk` (Pico4 teleop/tracker) |
 | `third_party/XenseVR-RobotVision-PC` | ZED-M → Pico4 stereo passthrough (built separately) |
 
+> Submodules default to their **GitHub** mirrors. Each entry in `.gitmodules`
+> notes its internal **GitLab** mirror as an (optional) comment. To pull a
+> submodule from GitLab instead, override its URL locally without editing the
+> tracked file:
+>
+> ```bash
+> git config submodule.third_party/taccap-gripper.url \
+>   git@192.168.1.61:physical-ai/grippersdk/taccap-gripper.git
+> git submodule sync third_party/taccap-gripper
+> git submodule update --init --recursive third_party/taccap-gripper
+> ```
+
 > `xensesdk` is **not** a submodule — it is installed from the vendored wheel
 > `dist/xensesdk-2.0.0-cp312-cp312-linux_x86_64.whl` (which bundles the patched
 > `libxense_c.so` flash reader).

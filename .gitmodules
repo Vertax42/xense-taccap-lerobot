@@ -1,9 +1,19 @@
+# Submodule remotes default to GitHub (public mirror).
+# Each entry lists its internal GitLab mirror as a comment; to use GitLab for a
+# given submodule, override its URL locally without editing this file, e.g.:
+#   git config submodule.third_party/taccap-gripper.url \
+#     git@192.168.1.61:physical-ai/grippersdk/taccap-gripper.git
+#   git submodule sync third_party/taccap-gripper
+#   git submodule update --init --recursive third_party/taccap-gripper
 [submodule "third_party/XenseVR-PC-Service"]
 	path = third_party/XenseVR-PC-Service
-	url = git@192.168.1.61:physical-ai/tools/XenseVR-PC-Service.git
+	url = git@github.com:Vertax42/XenseVR-PC-Service.git
+	# GitLab mirror: git@192.168.1.61:physical-ai/tools/XenseVR-PC-Service.git
 [submodule "third_party/taccap-gripper"]
 	path = third_party/taccap-gripper
-	url = git@192.168.1.61:physical-ai/grippersdk/taccap-gripper.git
+	url = git@github.com:Vertax42/taccap-gripper.git
+	# GitLab mirror: git@192.168.1.61:physical-ai/grippersdk/taccap-gripper.git
 [submodule "third_party/XenseVR-RobotVision-PC"]
 	path = third_party/XenseVR-RobotVision-PC
-	url = git@192.168.1.61:physical-ai/tools/xensevr-robotvision-pc.git
+	url = git@github.com:Vertax42/XenseVR-RobotVision-PC.git
+	# GitLab mirror: git@192.168.1.61:physical-ai/tools/xensevr-robotvision-pc.git
