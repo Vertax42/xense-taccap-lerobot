@@ -40,7 +40,8 @@ when `--robot.enable_tracker=false`, since there is no pose to draw). Same flag 
 lerobot-teleoperate \
     --robot.type=bi_taccap_gripper \
     --fps=30 \
-    --display_data=true
+    --display_data=true \
+    --robot.enable_tracker=false
 ```
 
 ['PC2310MLL4150713G', 'PC2310MLL4150387G']
