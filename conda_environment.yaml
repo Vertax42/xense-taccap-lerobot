@@ -14,13 +14,13 @@ dependencies:
   - pybind11
   - eigen=3.4.0
   - libstdcxx-ng # newer CXXABI symbols (xensevr_pc_service_sdk)
-  # ── taccap-gripper C++ build deps (libxense-lite) ─────────────────────────
-  # OpenCV C++ headers, nlohmann_json and zlib (dev: libz.so) that the lerobot
-  # env does not otherwise ship. libopencv is the C++ runtime only; the pip
-  # opencv-python wheel (import cv2) is self-contained and unaffected.
+  # ── taccap-gripper C++ build deps ─────────────────────────────────────────
+  # OpenCV C++ headers (Camera component) + spdlog (shared logger) that the
+  # lerobot env does not otherwise ship. libopencv is the C++ runtime only; the
+  # pip opencv-python wheel (import cv2) is self-contained and unaffected.
+  # (libxensesdk and its nlohmann_json/zlib deps were dropped in taccap 0.1.4.)
   - libopencv==4.12
-  - nlohmann_json=3.11.3
-  - zlib=1.3.1 # dev pkg: provides linkable libz.so for libxensesdk find_package(ZLIB)
+  - spdlog=1.17.0
   - pkg-config
   - make
   # ── CUDA (xensesdk / onnxruntime-gpu) ─────────────────────────────────────
