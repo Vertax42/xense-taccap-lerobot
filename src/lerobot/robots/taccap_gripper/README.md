@@ -199,9 +199,11 @@ enumeration is flaky — pin the serial directly with `--robot.tracker_serial=<S
 serial is used **verbatim**: no enumeration, no rule check (a typo surfaces as a device-not-found
 at connect). Leave it unset (default) to keep auto-discovery.
 
-- **Tactile** → obs keys `tactile_0` / `tactile_1`; the rectify image is landscape
+- **Tactile** → obs keys `tactile_left` / `tactile_right`; the rectify image is landscape
   `(400,700,3)` (width/height auto-derive — don't hard-code). Tune `--robot.tactile_fps`
   / `--robot.tactile_output_types`; `--robot.expected_tactiles_per_side` validates the count.
+  The two sensors are paired to this unit's gripper by **USB hub**; `left`/`right` finger
+  comes from the GSPS serial's **last digit** (odd → `left`, even → `right`, 单左双右).
 - **Wrist** → obs key `wrist_cam`; `--robot.enable_wrist_camera=false` skips. Tune
   `--robot.wrist_camera_width/_height/_fps`.
 - **Role**: `--robot.role=follower` binds the Slave units (default `leader`).

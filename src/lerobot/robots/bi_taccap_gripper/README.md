@@ -20,7 +20,7 @@ Per side `{s}` ∈ {left, right}:
 | `{s}_gripper.pos` | `{s}_enable_gripper` | normalised jaw, 0=closed / 1=open |
 | `{s}_imu.{accel,gyro,mag}.{x,y,z}` | `{s}_enable_imu` | IMU |
 | `{s}_wrist` | `{s}_enable_wrist_camera` | wrist UVC frame |
-| `{s}_tactile_0` / `{s}_tactile_1` | auto-discovered | tactile frames |
+| `{s}_tactile_left` / `{s}_tactile_right` | auto-discovered | tactile frame from the left / right finger sensor |
 
 `action_features` = the pose + `{s}_gripper.pos` subset (no cameras).
 
@@ -30,9 +30,17 @@ Per side `{s}` ∈ {left, right}:
 cameras are scanned from the connected hardware and assigned to `left`/`right` by the
 Xense serial rule:
 
-- **Side** — last sequence digit odd → left, even → right.
+- **Side** — last sequence digit odd → left, even → right (单左双右).
 - **Role** — patch `m` → Master/Leader, `s` → Slave/Follower (`--robot.role`, default
   `leader`).
+
+**Tactile left/right** (`{side}_tactile_{left,right}`) is resolved by **USB hub**,
+not by the tactile serial alone: the two GSPS sensors sharing a gripper's USB hub
+are that gripper's pair, and the gripper's `side` is read from its **firmware SN**
+over the wire (`scan_grippers()` → `ep.side`, i.e. `Cmd::GetSn` — *not* the CH343
+`mcu_serial`). Within the pair, the **finger** is the GSPS serial's last digit
+(odd → `left` sensor, even → `right`, 单左双右). Because this needs the gripper SDK
+scan, tactile discovery runs at construction (grippers must be powered then).
 
 A non-conforming serial, or a side with a missing / duplicated / mis-counted device,
 raises a clear error so the config and the physical serials can't drift out of

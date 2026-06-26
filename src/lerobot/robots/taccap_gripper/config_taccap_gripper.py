@@ -61,8 +61,10 @@ class TaccapGripperConfig(RobotConfig):
     one matching gripper/camera is connected; required when both sides are present."""
 
     expected_tactiles_per_side: int = 2
-    """How many tactile sensors the gripper carries (obs keys ``tactile_0`` /
-    ``tactile_1``). Discovery errors on a different count."""
+    """How many tactile sensors the gripper carries (obs keys ``tactile_left`` /
+    ``tactile_right``). Sensors are paired to the gripper by USB hub; ``left`` /
+    ``right`` finger comes from the GSPS serial's last digit (odd→left sensor,
+    even→right). Discovery errors on a different count."""
 
     # ---- TacCap gripper ---------------------------------------------------
     enable_gripper: bool = True

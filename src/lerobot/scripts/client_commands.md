@@ -130,7 +130,8 @@ lerobot-record \
 ```
 
 > Notes: discovery reads `/dev/v4l/by-id` (tactile + wrist serials), `scan_grippers()`
-> (gripper side/role), and the XenseVR PC service (Pico4 tracker SNs, side from the
-> 2nd-to-last digit). Obs keys: `tactile_0/1` + `wrist_cam` + `tcp.*` (single), or
-> `left_/right_tactile_0/1` + `{side}_wrist` + `{side}_tcp.*` (bi). Tactile rectify is
-> landscape `(400,700,3)` — width/height auto-derive, don't hard-code.
+> (gripper side/role; also pairs each tactile to a gripper by USB hub), and the XenseVR
+> PC service (Pico4 tracker SNs, side from the 2nd-to-last digit). Obs keys:
+> `tactile_left/right` + `wrist_cam` + `tcp.*` (single), or
+> `left_/right_tactile_left/right` + `{side}_wrist` + `{side}_tcp.*` (bi). Tactile
+> rectify is landscape `(400,700,3)` — width/height auto-derive, don't hard-code.

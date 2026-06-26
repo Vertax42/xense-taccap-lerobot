@@ -72,8 +72,11 @@ class BiTaccapGripperConfig(RobotConfig):
 
     expected_tactiles_per_side: int = 2
     """How many tactile sensors each gripper carries (obs keys
-    ``{side}_tactile_0`` / ``{side}_tactile_1``). Discovery errors if a side has
-    a different count, catching a mis-installed/mis-burned sensor."""
+    ``{side}_tactile_left`` / ``{side}_tactile_right``). Sensors are paired to a
+    gripper by USB hub (hub → gripper firmware SN → ``side``); ``left`` / ``right``
+    finger comes from the GSPS serial's last digit (odd→left sensor, even→right).
+    Discovery errors if a side has a different count, catching a mis-installed/
+    mis-burned sensor."""
 
     enable_tracker: bool = True
     """Auto-discover the Pico4 motion tracker(s) and record 6-DoF pose. When on,

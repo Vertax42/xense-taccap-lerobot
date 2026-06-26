@@ -148,7 +148,7 @@ class TaccapTrajectoryViz:
 
         # One 2D view per camera image entity (logged as ``observation.<key>``).
         # Tactiles first, then the wrist cameras (left_wrist / right_wrist) last —
-        # i.e. the wrists sit after right_tactile_1 in the grid.
+        # i.e. the wrists sit after right_tactile_right in the grid.
         img_keys = [k for k, v in self._obs_features.items() if isinstance(v, tuple)]
         img_keys = [k for k in img_keys if "wrist" not in k] + [
             k for k in img_keys if "wrist" in k
