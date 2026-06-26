@@ -28,7 +28,7 @@ Observation features (per side ``{s}`` in left/right):
     {s}_gripper.pos                 -- normalised jaw [0=closed, 1=open]
     {s}_imu.accel/gyro/mag.{x,y,z}  -- optional
     {s}_wrist                       -- wrist UVC frame (if enable_wrist_camera)
-    {s}_tactile_0 / {s}_tactile_1   -- tactile frames
+    {s}_tactile_left / {s}_tactile_right -- tactile frames (sensor on left/right finger)
 """
 
 from __future__ import annotations
@@ -98,7 +98,10 @@ class BiTaccapGripper(Robot):
         self._role = disco.normalize_role(config.role)
 
         any_gripper = any(getattr(config, f"{s}_enable_gripper") for s in _SIDES)
-        if any_gripper and not TACCAP_SDK_AVAILABLE:
+        # Tactile discovery now pairs sensors to a gripper by USB hub, so it also
+        # needs the SDK (scan_grippers) to resolve each hub's side.
+        needs_sdk = any_gripper or config.expected_tactiles_per_side > 0
+        if needs_sdk and not TACCAP_SDK_AVAILABLE:
             raise ImportError(
                 "xense.taccap SDK not available. Build it from the vendored "
                 "submodule third_party/taccap-gripper (run setup_env.sh --install). "
@@ -115,8 +118,10 @@ class BiTaccapGripper(Robot):
         self._endpoints: dict[str, Any] = {s: None for s in _SIDES}  # GripperEndpoints
         self._tracker: dict[str, Pico4TrackerReader | None] = {s: None for s in _SIDES}
 
-        # Auto-discover tactile + wrist cameras (filesystem only) and build their
-        # configs so the observation schema is ready before connect().
+        # Auto-discover tactile + wrist cameras and build their configs so the
+        # observation schema is ready before connect(). Tactiles are paired to a
+        # gripper by USB hub, so this scans the serial bus (grippers must be
+        # powered at construction); wrist cameras are filesystem-only.
         self._camera_configs = self._discover_camera_configs()
         self.cameras = make_cameras_from_configs(self._camera_configs)
 
@@ -142,12 +147,14 @@ class BiTaccapGripper(Robot):
     def _discover_camera_configs(self) -> dict[str, Any]:
         """Build the tactile + wrist camera configs from serial auto-discovery.
 
-        Tactiles (``{side}_tactile_i``) and wrist cameras (``{side}_wrist``) are
-        resolved from ``/dev/v4l/by-id`` by the serial rule; counts are validated
-        per side so a mis-installed sensor is caught here, not mid-episode.
+        Tactiles (``{side}_tactile_{left,right}``) are paired to a gripper by USB
+        hub (hub → gripper firmware SN → side) and keyed by finger (GSPS last
+        digit); wrist cameras (``{side}_wrist``) come from ``/dev/v4l/by-id``.
+        Counts are validated per side so a mis-installed sensor is caught here,
+        not mid-episode.
         """
         n_exp = self.config.expected_tactiles_per_side
-        tactiles = disco.discover_tactiles() if n_exp else {"left": [], "right": []}
+        tactiles = disco.discover_tactiles_by_hub(self._role) if n_exp else {"left": {}, "right": {}}
         want_wrist = any(getattr(self.config, f"{s}_enable_wrist_camera") for s in _SIDES)
         cameras = disco.discover_wrist_cameras(self._role) if want_wrist else {}
 
@@ -155,14 +162,14 @@ class BiTaccapGripper(Robot):
         for side in _SIDES:
             parity = "odd" if side == "left" else "even"
             if n_exp:
-                got = tactiles.get(side, [])
+                got = tactiles.get(side, {})
                 if len(got) != n_exp:
                     raise ValueError(
-                        f"Expected {n_exp} {side} tactile sensors ({parity} sequence), "
-                        f"found {len(got)}: {got}."
+                        f"Expected {n_exp} {side} tactile sensors (on the {side} "
+                        f"gripper's USB hub), found {len(got)}: {sorted(got.values())}."
                     )
-                for i, sn in enumerate(got):
-                    configs[f"{side}_tactile_{i}"] = XenseTactileCameraConfig(
+                for finger, sn in sorted(got.items()):
+                    configs[f"{side}_tactile_{finger}"] = XenseTactileCameraConfig(
                         serial_number=sn,
                         fps=self.config.tactile_fps,
                         output_types=list(self.config.tactile_output_types),

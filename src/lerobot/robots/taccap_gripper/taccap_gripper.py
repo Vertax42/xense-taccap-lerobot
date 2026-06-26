@@ -28,7 +28,7 @@ Observation features:
     imu.accel.{x,y,z} (optional)     -- m/s²
     imu.gyro.{x,y,z}  (optional)     -- rad/s
     imu.mag.{x,y,z}   (optional)     -- µT
-    tactile_0 / tactile_1            -- tactile frames
+    tactile_left / tactile_right     -- tactile frames (sensor on left/right finger)
     wrist_cam                        -- wrist UVC frame (if enable_wrist_camera)
 """
 
@@ -199,7 +199,10 @@ class TaccapGripper(Robot):
         self.logger = get_logger(f"TaccapGripper-{config.id or 'default'}")
         self._role = disco.normalize_role(config.role)
 
-        if config.enable_gripper and not TACCAP_SDK_AVAILABLE:
+        # Tactile discovery now pairs sensors to a gripper by USB hub, so it also
+        # needs the SDK (scan_grippers) to resolve the hub's side.
+        needs_sdk = config.enable_gripper or config.expected_tactiles_per_side > 0
+        if needs_sdk and not TACCAP_SDK_AVAILABLE:
             raise ImportError(
                 "xense.taccap SDK not available. Build it from the vendored "
                 "submodule third_party/taccap-gripper (run setup_env.sh --install). "
@@ -216,12 +219,13 @@ class TaccapGripper(Robot):
         self._endpoints: Any = None  # xense.taccap.GripperEndpoints
         self._tracker: Pico4TrackerReader | None = None
 
-        # Filesystem-only discovery (cheap, no hardware open) → resolve which side
-        # this single unit is, then build its tactile + wrist camera configs.
+        # Discover devices → resolve which side this single unit is, then build its
+        # tactile + wrist camera configs. Tactiles are paired to a gripper by USB
+        # hub (scans the serial bus); wrist cameras are filesystem-only.
         self._disc_tactiles = (
-            disco.discover_tactiles()
+            disco.discover_tactiles_by_hub(self._role)
             if config.expected_tactiles_per_side
-            else {"left": [], "right": []}
+            else {"left": {}, "right": {}}
         )
         self._disc_cameras = (
             disco.discover_wrist_cameras(self._role)
@@ -261,7 +265,7 @@ class TaccapGripper(Robot):
             present = set(self._disc_cameras.keys())
         elif self.config.expected_tactiles_per_side:
             n = self.config.expected_tactiles_per_side
-            present = {s for s in disco.SIDES if len(self._disc_tactiles.get(s, [])) == n}
+            present = {s for s in disco.SIDES if len(self._disc_tactiles.get(s, {})) == n}
         else:
             present = set()
         if len(present) == 1:
@@ -276,19 +280,19 @@ class TaccapGripper(Robot):
         )
 
     def _build_camera_configs(self, side: str) -> dict[str, Any]:
-        """Build ``tactile_i`` + ``wrist_cam`` configs for ``side`` from discovery."""
+        """Build ``tactile_{left,right}`` + ``wrist_cam`` configs for ``side``."""
         parity = "odd" if side == "left" else "even"
         configs: dict[str, Any] = {}
         n_exp = self.config.expected_tactiles_per_side
         if n_exp:
-            got = self._disc_tactiles.get(side, [])
+            got = self._disc_tactiles.get(side, {})
             if len(got) != n_exp:
                 raise ValueError(
-                    f"Expected {n_exp} {side} tactile sensors ({parity} sequence), "
-                    f"found {len(got)}: {got}."
+                    f"Expected {n_exp} {side} tactile sensors (on the {side} "
+                    f"gripper's USB hub), found {len(got)}: {sorted(got.values())}."
                 )
-            for i, sn in enumerate(got):
-                configs[f"tactile_{i}"] = XenseTactileCameraConfig(
+            for finger, sn in sorted(got.items()):
+                configs[f"tactile_{finger}"] = XenseTactileCameraConfig(
                     serial_number=sn,
                     fps=self.config.tactile_fps,
                     output_types=list(self.config.tactile_output_types),
