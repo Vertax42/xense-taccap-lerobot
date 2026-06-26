@@ -15,8 +15,8 @@ Usage:
 
     # Use upload_large_folder for large datasets (recommended)
     python -m lerobot.scripts.push_dataset_to_hub \
-        --repo-id Xense/assemble_box_with_phone_stand0410 \
-        --dataset-path ~/.cache/huggingface/lerobot/Xense/assemble_box_with_phone_stand0410 \
+        --repo-id Xense/forward-06_test \
+        --dataset-path ~/.cache/huggingface/lerobot/Xense/forward-06_test \
         --upload-large-folder
 
     # Push as private dataset

@@ -27,7 +27,7 @@ Verifies:
 Examples:
 
 ```shell
-python src/lerobot/scripts/lerobot_check_dataset.py --repo-id Xense/assemble_box_with_phone_stand  --root ~/.cache/huggingface/lerobot
+python src/lerobot/scripts/lerobot_check_dataset.py --repo-id Xense/forward-06_test  --root ~/.cache/huggingface/lerobot
 python lerobot-check-dataset.py --repo-id Xense/assemble_box_with_phone_stand
 lerobot-check-dataset --repo-id Xense/assemble_box_with_phone_stand --root ~/.cache/huggingface/lerobot
 lerobot-check-dataset --repo-id Xense/assemble_box_with_phone_stand --episode-index 0 2 4
