@@ -234,12 +234,29 @@ install_xense() {
     echo " xensesdk (vendored wheel)"
     echo "══════════════════════════════════════════"
 
-    local WHEEL="$PROJECT_ROOT/dist/xensesdk-2.0.0-cp312-cp312-linux_x86_64.whl"
+    # Resolve the xensesdk wheel. The wheel is no longer vendored in-repo (it is
+    # a ~90 MB binary); fetch it out-of-band and point the installer at it.
+    # Priority:
+    #   1. $XENSESDK_WHEEL  (explicit override)
+    #   2. dist/*.whl       (legacy in-repo location, if you drop one there)
+    #   3. ~/Downloads/xensesdk-*.whl  (current distribution channel)
+    # TODO: once xensesdk 2.x is published to PyPI, replace this whole block with
+    #       `uv pip install xensesdk`.
+    local WHEEL="${XENSESDK_WHEEL:-}"
+    if [[ -z "$WHEEL" ]]; then
+        WHEEL="$(ls -1 "$PROJECT_ROOT"/dist/xensesdk-*-cp312-*-linux_x86_64.whl \
+                        "$HOME"/Downloads/xensesdk-*-cp312-*-linux_x86_64.whl \
+                 2>/dev/null | head -n1)"
+    fi
 
-    if [[ ! -f "$WHEEL" ]]; then
-        echo "ERROR: vendored xensesdk wheel not found: $WHEEL"
+    if [[ -z "$WHEEL" || ! -f "$WHEEL" ]]; then
+        echo "ERROR: xensesdk wheel not found."
+        echo "  Put xensesdk-<ver>-cp312-...-linux_x86_64.whl in ~/Downloads/ (or the"
+        echo "  repo dist/ dir), or set XENSESDK_WHEEL=/path/to/wheel, then re-run."
+        echo "  (Once xensesdk is on PyPI: 'uv pip install xensesdk' instead.)"
         return 1
     fi
+    echo "[xense] Using wheel: $WHEEL"
 
     fix_udev_discovery
 
@@ -265,9 +282,9 @@ install_xense() {
         "ormsgpack>=1.11.0" \
         "cyclonedds-nightly==2025.7.29" \
         "pyudev; platform_system=='Linux'"
-    # Install xensesdk 2.0 from the vendored wheel under dist/. It bundles the
-    # patched libxense_c.so flash reader (concurrent-connect EBADF fix), so no
-    # separate xense_xu / pyxensexu build is needed. --no-deps keeps numpy 1.26.x.
+    # Install xensesdk 2.0 from the resolved wheel. It bundles the patched
+    # libxense_c.so flash reader (concurrent-connect EBADF fix), so no separate
+    # xense_xu / pyxensexu build is needed. --no-deps keeps numpy 1.26.x.
     uv pip install --no-deps --force-reinstall "$WHEEL"
     # xensesdk requires a specific av version
     uv pip install av==15.1.0
