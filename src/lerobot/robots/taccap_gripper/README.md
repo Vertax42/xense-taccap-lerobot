@@ -1,5 +1,8 @@
 # `taccap_gripper` — Handheld data-collection device
 
+The **TacCap-Gripper** (**TacCap** = *Tactile Capture* Gripper) is a handheld
+**UMI** leader gripper for tactile data collection.
+
 Single-arm handheld data-collection pipeline. The device is **self-driven**:
 there is no separate teleoperator — the robot itself produces both the
 observation (state being recorded) and the demonstration action.

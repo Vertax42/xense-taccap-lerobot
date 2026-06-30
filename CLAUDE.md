@@ -1,8 +1,9 @@
 # lerobot-xense — Claude working notes
 
 Fork of HuggingFace `lerobot` (tracks upstream v5.1), slimmed to the
-**TacCap-Gripper** (single + bimanual) handheld device and the **Pico4**
-teleoperator/tracker, with Xense tactile cameras. See
+**TacCap-Gripper** (**TacCap** = *Tactile Capture* Gripper) — a handheld **UMI**
+leader gripper for tactile data collection (single + bimanual) — and the
+**Pico4** teleoperator/tracker, with Xense tactile cameras. See
 `src/lerobot/robots/taccap_gripper/README.md` for usage.
 
 ## TacCap serial / topology rules (device auto-discovery)

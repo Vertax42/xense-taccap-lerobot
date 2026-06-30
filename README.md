@@ -2,9 +2,11 @@
 
 🤗 This repository is a fork of [`lerobot`](https://github.com/huggingface/lerobot)
 by XenseRobotics, used for Xense's multimodal tactile data acquisition system.
-This branch tracks **upstream lerobot v5.1**, slimmed to the **TacCap-Gripper**
-(single + bimanual) handheld UMI device and the **Pico4** teleoperator/tracker,
-with Xense tactile cameras layered on top. See
+It is scoped to a single device: the **TacCap-Gripper** (**TacCap** = *Tactile
+Capture* Gripper) — a handheld **UMI** leader gripper for tactile data
+collection. This branch tracks **upstream lerobot v5.1**, slimmed to the
+TacCap-Gripper (single + bimanual) and its **Pico4** teleoperator/tracker, with
+Xense tactile cameras layered on top. See
 [`src/lerobot/robots/taccap_gripper/README.md`](src/lerobot/robots/taccap_gripper/README.md)
 for device-specific usage. For generic lerobot usage (datasets, policies,
 training scripts) refer to the
