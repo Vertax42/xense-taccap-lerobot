@@ -256,16 +256,19 @@ def _byid_serials(extract_re: re.Pattern) -> list[str]:
     return sorted(found)
 
 
-def _gripper_hub_sides(role: str) -> dict[str, str]:
-    """``{usb-hub: side}`` for the requested role, from ``scan_grippers()``.
+def _gripper_hub_sides(role: str) -> dict[str, tuple[str, str]]:
+    """``{usb-hub: (side, firmware_sn)}`` for the requested role, from
+    ``scan_grippers()``.
 
     Each gripper's side is the SDK-parsed ``ep.side`` (firmware SN, ``Cmd::GetSn``
     — not the CH343 ``mcu_serial``); its hub is resolved from ``ep.mcu_device``'s
-    USB path. Raises ``ValueError`` on a non-conforming firmware serial, an
-    unresolvable hub, or two grippers on one hub."""
+    USB path. The firmware SN is carried alongside the side so callers can name the
+    discovered grippers in error messages. Raises ``ValueError`` on a
+    non-conforming firmware serial, an unresolvable hub, or two grippers on one
+    hub."""
     _require_sdk()
     role = normalize_role(role)
-    hub_side: dict[str, str] = {}
+    hub_side: dict[str, tuple[str, str]] = {}
     for ep in scan_grippers():
         if ep.firmware_sn and not _GRIPPER_RE.match(ep.firmware_sn):
             raise ValueError(
@@ -284,9 +287,9 @@ def _gripper_hub_sides(role: str) -> dict[str, str]:
         if hub in hub_side:
             raise ValueError(
                 f"Two {role} grippers resolve to the same USB hub {hub!r} "
-                f"(sides {hub_side[hub]!r} and {side!r})."
+                f"(sides {hub_side[hub][0]!r} and {side!r})."
             )
-        hub_side[hub] = side
+        hub_side[hub] = (side, ep.firmware_sn)
     return hub_side
 
 
@@ -337,15 +340,23 @@ def discover_tactiles_by_hub(role: str) -> dict[str, dict[str, str]]:
         fingers[finger] = sn
 
     # Join hub → side. Every tactile hub must carry a matching gripper.
+    discovered = (
+        ", ".join(
+            f"{sn!r} ({side}) on hub {hub!r}"
+            for hub, (side, sn) in sorted(hub_side.items())
+        )
+        or "none"
+    )
     result: dict[str, dict[str, str]] = {"left": {}, "right": {}}
     for hub, fingers in hub_fingers.items():
         if hub not in hub_side:
             raise ValueError(
                 f"Tactile sensors {sorted(fingers.values())} sit on USB hub {hub!r}, "
                 f"which has no matching {role} gripper to assign a side. "
+                f"Discovered {role} grippers: {discovered}. "
                 "Is the gripper on that hub powered and enumerated?"
             )
-        result[hub_side[hub]] = fingers
+        result[hub_side[hub][0]] = fingers
     return result
 
 

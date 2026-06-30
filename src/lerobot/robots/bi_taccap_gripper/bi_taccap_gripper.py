@@ -280,8 +280,10 @@ class BiTaccapGripper(Robot):
         self.logger.info("Connecting BiTacCap-Gripper...")
 
         # 1. Grippers — auto-discovered by serial (side + role) on the bus.
-        any_gripper = any(getattr(self.config, f"{s}_enable_gripper") for s in _SIDES)
-        grippers = disco.discover_grippers(self._role) if any_gripper else {}
+        enabled_gripper_sides = tuple(
+            s for s in _SIDES if getattr(self.config, f"{s}_enable_gripper")
+        )
+        grippers = disco.discover_grippers(self._role) if enabled_gripper_sides else {}
         gripper_cls = LeaderGripper if self._role == "leader" else FollowerGripper
 
         for side in _SIDES:
