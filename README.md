@@ -241,7 +241,7 @@ If you use this codebase, please cite the original LeRobot project:
 If you use this fork (LeRobot-Xense) specifically, please also cite:
 
 ```bibtex
-@misc{vertax2026lerobotxense,
+@misc{xense-taccap-lerobot,
     author = {XenseRobotics Team},
     title = {LeRobot-Xense: LeRobot with Xense Tactile Robotics Support},
     howpublished = "\url{https://github.com/Vertax42/xense-taccap-lerobot}",

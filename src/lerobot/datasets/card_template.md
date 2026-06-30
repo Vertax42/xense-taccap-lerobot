@@ -31,7 +31,7 @@ This dataset was created using [LeRobot](https://github.com/huggingface/lerobot)
 **BibTeX:**
 
 ```bibtex
-@misc{vertax2026lerobotxense,
+@misc{xense-taccap-lerobot,
     author = {XenseRobotics Team},
     title = {LeRobot-Xense: LeRobot with Xense Tactile Robotics Support},
     howpublished = {\url{https://github.com/Vertax42/xense-taccap-lerobot}},
