@@ -30,8 +30,8 @@ bash Miniforge3-$(uname)-$(uname -m).sh
 ```bash
 git clone \
   --recurse-submodules \
-  https://github.com/Vertax42/lerobot-xense.git
-cd lerobot-xense
+  https://github.com/Vertax42/xense-taccap-lerobot.git
+cd xense-taccap-lerobot
 ```
 
 > If you already cloned without submodules, initialize them manually:
@@ -48,21 +48,13 @@ This repository uses `third_party/` git submodules to manage hardware SDK depend
 | `third_party/XenseVR-PC-Service` | `xensevr_pc_service_sdk` (Pico4 teleop/tracker) |
 | `third_party/XenseVR-RobotVision-PC` | ZED-M → Pico4 stereo passthrough (built separately) |
 
-> Submodules default to their **GitHub** mirrors. Each entry in `.gitmodules`
-> notes its internal **GitLab** mirror as an (optional) comment. To pull a
-> submodule from GitLab instead, override its URL locally without editing the
-> tracked file:
->
-> ```bash
-> git config submodule.third_party/taccap-gripper.url \
->   git@192.168.1.61:physical-ai/grippersdk/taccap-gripper.git
-> git submodule sync third_party/taccap-gripper
-> git submodule update --init --recursive third_party/taccap-gripper
-> ```
-
-> `xensesdk` is **not** a submodule — it is installed from the vendored wheel
-> `dist/xensesdk-2.0.0-cp312-cp312-linux_x86_64.whl` (which bundles the patched
-> `libxense_c.so` flash reader).
+> `xensesdk` is **not** a submodule and is **not** vendored in-repo (it is a
+> ~90 MB binary wheel that bundles the patched `libxense_c.so` flash reader).
+> Obtain the wheel out-of-band and place it in `~/Downloads/` (or the repo
+> `dist/` dir), or point the installer at it with
+> `export XENSESDK_WHEEL=/path/to/xensesdk-*-cp312-*-linux_x86_64.whl`.
+> `setup_env.sh --install` picks it up automatically. Once `xensesdk` 2.x is
+> published to PyPI this step becomes a plain `pip install xensesdk`.
 
 **Step 2:** 🐍 Create and activate the mamba environment:
 
@@ -86,7 +78,7 @@ This step will:
 
 - Update the conda environment from `conda_environment.yaml`
 - Install the main package from `pyproject.toml`
-- Install `xensesdk` from the vendored wheel (`dist/xensesdk-2.0.0-cp312-cp312-linux_x86_64.whl`)
+- Install `xensesdk` from the wheel resolved out-of-band (see the note above — `~/Downloads/`, repo `dist/`, or `$XENSESDK_WHEEL`)
 - Build and install the `third_party` SDK packages: `xensevr_pc_service_sdk` (Pico4) and `xense.taccap` (TacCap UMI gripper)
 
 **Step 4:** ✅ Verify the installation:
@@ -252,7 +244,7 @@ If you use this fork (LeRobot-Xense) specifically, please also cite:
 @misc{vertax2026lerobotxense,
     author = {vertax42 and Xense Robotics Team},
     title = {LeRobot-Xense: LeRobot with Xense Tactile Robotics Support},
-    howpublished = "\url{https://github.com/Vertax42/lerobot-xense}",
+    howpublished = "\url{https://github.com/Vertax42/xense-taccap-lerobot}",
     year = {2026}
 }
 ```
