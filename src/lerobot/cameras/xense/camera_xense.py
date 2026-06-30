@@ -312,7 +312,7 @@ class XenseTactileCamera(Camera):
                 # Note: SDK uses CamelCase for OutputType attributes (e.g., Force, ForceResultant)
                 output_type_mapping = {
                     XenseOutputType.RECTIFY: self._Sensor.OutputType.Rectify,
-                    XenseOutputType.DIFFERENCE: self._Sensor.OutputType.Difference,
+                    XenseOutputType.DIFFERENCE: self._Sensor.OutputType.AugDifference,
                     XenseOutputType.DEPTH: self._Sensor.OutputType.Depth,
                     XenseOutputType.MARKER_2D: self._Sensor.OutputType.Marker2D,
                     XenseOutputType.FORCE: self._Sensor.OutputType.Force,
