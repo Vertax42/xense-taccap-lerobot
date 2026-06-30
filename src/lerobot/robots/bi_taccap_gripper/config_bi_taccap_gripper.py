@@ -126,7 +126,7 @@ class BiTaccapGripperConfig(RobotConfig):
     """Seconds to wait for the first valid tracker pose at connect time (both sides)."""
 
     tactile_fps: int = 30
-    tactile_output_types: list[str] = field(default_factory=lambda: ["difference"])
+    tactile_output_types: list[str] = field(default_factory=lambda: ["rectify"])
     """Defaults applied to every discovered tactile sensor. Single output type →
     one (H, W, 3) image (rectify is inference-free, landscape (400, 700, 3)).
     Width/height auto-derive from the SDK rectify_size — don't hard-code."""
