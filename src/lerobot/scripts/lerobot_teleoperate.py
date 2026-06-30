@@ -231,53 +231,67 @@ def self_driven_teleop_loop(
     """
     display_len = max((len(key) for key in robot.observation_features), default=20)
     start = time.perf_counter()
+    # Number of lines the cursor is parked *above* the bottom of the in-place
+    # display at the end of the current frame (each renderer ends with a
+    # move_cursor_up). On exit — including Ctrl+C — we walk the cursor back down
+    # so shutdown logs and the shell prompt don't overwrite the live table.
+    parked = 0
 
-    while True:
-        loop_start = time.perf_counter()
+    try:
+        while True:
+            loop_start = time.perf_counter()
 
-        obs_t0 = time.perf_counter()
-        obs = robot.get_observation()
-        obs_time_ms = (time.perf_counter() - obs_t0) * 1e3
+            obs_t0 = time.perf_counter()
+            obs = robot.get_observation()
+            obs_time_ms = (time.perf_counter() - obs_t0) * 1e3
 
-        if display_data:
-            log_rerun_data(
-                observation=obs,
-                action={},
-                compress_images=display_compressed_images,
-            )
-            if traj_viz is not None:
-                traj_viz.log(obs)
-            if not debug_timing:
-                scalar_items = [
-                    (k, v) for k, v in obs.items() if not isinstance(v, np.ndarray)
-                ]
-                print("\n" + "-" * (display_len + 12))
-                print(f"{'NAME':<{display_len}} | {'OBS':>9}")
-                for key, value in scalar_items:
-                    print(f"{key:<{display_len}} | {float(value):>9.4f}")
-                move_cursor_up(len(scalar_items) + 3)
+            if display_data:
+                log_rerun_data(
+                    observation=obs,
+                    action={},
+                    compress_images=display_compressed_images,
+                )
+                if traj_viz is not None:
+                    traj_viz.log(obs)
+                if not debug_timing:
+                    scalar_items = [
+                        (k, v) for k, v in obs.items() if not isinstance(v, np.ndarray)
+                    ]
+                    print("\n" + "-" * (display_len + 12))
+                    print(f"{'NAME':<{display_len}} | {'OBS':>9}")
+                    for key, value in scalar_items:
+                        print(f"{key:<{display_len}} | {float(value):>9.4f}")
+                    move_cursor_up(len(scalar_items) + 3)
+                    parked = len(scalar_items) + 3
 
-        _teleop_loop_sleep(loop_start, fps, start, robot)
-        loop_s = time.perf_counter() - loop_start
+            _teleop_loop_sleep(loop_start, fps, start, robot)
+            loop_s = time.perf_counter() - loop_start
 
-        if debug_timing:
-            cam_count = sum(1 for v in obs.values() if isinstance(v, np.ndarray))
-            print(
-                f"\r\033[K"
-                f"obs: {obs_time_ms:5.1f}ms | "
-                f"loop: {loop_s * 1e3:5.1f}ms | "
-                f"target: {1e3 / fps:.1f}ms | "
-                f"eff: {(1 / fps) / loop_s * 100:5.1f}% | "
-                f"cams: {cam_count}",
-                end="",
-                flush=True,
-            )
-        elif not display_data:
-            print(f"Self-driven loop time: {loop_s * 1e3:.2f}ms ({1 / loop_s:.0f} Hz)")
-            move_cursor_up(1)
+            if debug_timing:
+                cam_count = sum(1 for v in obs.values() if isinstance(v, np.ndarray))
+                print(
+                    f"\r\033[K"
+                    f"obs: {obs_time_ms:5.1f}ms | "
+                    f"loop: {loop_s * 1e3:5.1f}ms | "
+                    f"target: {1e3 / fps:.1f}ms | "
+                    f"eff: {(1 / fps) / loop_s * 100:5.1f}% | "
+                    f"cams: {cam_count}",
+                    end="",
+                    flush=True,
+                )
+            elif not display_data:
+                print(f"Self-driven loop time: {loop_s * 1e3:.2f}ms ({1 / loop_s:.0f} Hz)")
+                move_cursor_up(1)
+                parked = 1
 
-        if duration is not None and time.perf_counter() - start >= duration:
-            return
+            if duration is not None and time.perf_counter() - start >= duration:
+                return
+    finally:
+        # Drop the cursor below the in-place display onto a fresh line so the
+        # disconnect logs / shell prompt render cleanly (fixes garbled output on
+        # Ctrl+C, where the loop exits with the cursor parked up in the table).
+        print("\n" * parked, end="")
+        print(flush=True)
 
 
 @parser.wrap()
