@@ -47,6 +47,16 @@ Every discovery helper raises `ValueError` naming the offending hub/serial
 the same finger, a tactile hub with no matching gripper) so the physical rig and
 the schema can't silently drift.
 
+### Host gotcha — `Device or resource busy` on the gripper serial (ModemManager)
+The gripper MCU is a CH343 USB-serial (`1a86:55d2`, CDC-ACM). On every hot-plug
+**ModemManager** probes the fresh port with AT commands and holds it open for a
+few seconds, so `connect()` in that window dies with
+`IoError: SerialBus: open(/dev/serial/by-id/...): Device or resource busy`.
+Tell: **first** launch works, but unplug → other port → relaunch *immediately*
+is busy. **Not** a tactile/camera/bandwidth issue. Permanent fix is a udev rule
+ignoring `1a86` (`ID_MM_DEVICE_IGNORE=1`) — see README → "Hardware bring-up
+sequence". (`brltty` grabs `1a86` the same way if installed.)
+
 ## Vendored SDK
 `third_party/taccap-gripper` is the TacCap-Gripper SDK submodule (has its own
 `CLAUDE.md`). `xense.taccap` is gripper-protocol + wrist-camera only; tactile

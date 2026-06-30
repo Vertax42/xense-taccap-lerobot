@@ -142,6 +142,41 @@ for g in scan_grippers(): print(g.side.name, g.role.name, repr(g.firmware_sn))"
 > was never burned (or its firmware is < V1.6) — that is a device/firmware
 > issue, not a host one.
 
+**Step 7:** 🔌 **Keep ModemManager off the gripper serial (one-time host setup).**
+The gripper MCU is a CH343 USB-serial (`1a86:55d2`) that enumerates as a CDC-ACM
+port. On every hot-plug, **ModemManager** (the cellular-modem service shipped by
+default on Ubuntu/GNOME) probes the fresh port with AT commands and holds it open
+for a few seconds — so a `connect()` in that window fails with:
+
+```
+IoError: SerialBus: open(/dev/serial/by-id/usb-1a86_USB_Dual_Serial_..-if02): Device or resource busy
+```
+
+Classic symptom: the **first** launch works (the port has settled), but unplug →
+move to another USB port → relaunch immediately is **busy**. This is **not** a
+tactile/camera/bandwidth problem. (`brltty`, the braille driver, grabs `1a86`
+devices the same way if it is installed.) Quick workaround: wait ~3 s after
+replug. Permanent fix — a udev rule telling ModemManager to ignore these devices
+(it keeps managing real modems):
+
+```bash
+sudo tee /etc/udev/rules.d/99-taccap-ignore-modemmanager.rules >/dev/null <<'EOF'
+# TacCap-Gripper MCUs are CH343 USB-serial (1a86:55d2) — keep ModemManager off them
+ACTION=="add|change", SUBSYSTEMS=="usb", ATTRS{idVendor}=="1a86", ENV{ID_MM_DEVICE_IGNORE}="1"
+EOF
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+Verify the gripper serial is now flagged ignored:
+
+```bash
+udevadm info -q property -n /dev/ttyACM0 | grep ID_MM_DEVICE_IGNORE   # -> ID_MM_DEVICE_IGNORE=1
+mmcli -L                                                               # grippers no longer listed
+```
+
+Revert by deleting the rule file and reloading. (Alternatively, on a dedicated
+robot PC with no cellular modem: `sudo systemctl disable --now ModemManager`.)
+
 ## 🔑 The `LeRobotDataset` format
 
 A dataset in `LeRobotDataset` format is very simple to use. It can be loaded from a repository on the Hugging Face hub or a local folder simply with e.g. `dataset = LeRobotDataset("lerobot/aloha_static_coffee")` and can be indexed into like any Hugging Face and PyTorch dataset. For instance `dataset[0]` will retrieve a single temporal frame from the dataset containing observation(s) and an action as PyTorch tensors ready to be fed to a model.

@@ -94,6 +94,31 @@ and downstream tooling must reframe.
 > [top-level README → Installation Step 6](../../../../README.md#-installation)
 > for the full check.
 
+> **`Device or resource busy` on the gripper serial after replug (ModemManager).**
+> The gripper MCU is a CH343 USB-serial (`1a86:55d2`) that enumerates as a
+> CDC-ACM port. On every hot-plug, **ModemManager** (the cellular-modem service
+> shipped by default on Ubuntu/GNOME) probes the fresh port with AT commands and
+> holds it open for a few seconds — so a `connect()` in that window fails with
+> `IoError: SerialBus: open(/dev/serial/by-id/...): Device or resource busy`.
+> Classic symptom: the **first** launch works (the port has settled), but
+> unplug → move to another port → relaunch immediately **busy**. (`brltty`, the
+> braille driver, grabs `1a86` devices the same way if installed.) Quick
+> workaround: wait ~3 s after replug. Permanent fix — tell ModemManager to ignore
+> these devices via a udev rule (does **not** disable it for real modems):
+>
+> ```bash
+> sudo tee /etc/udev/rules.d/99-taccap-ignore-modemmanager.rules >/dev/null <<'EOF'
+> # TacCap-Gripper MCUs are CH343 USB-serial (1a86:55d2) — keep ModemManager off them
+> ACTION=="add|change", SUBSYSTEMS=="usb", ATTRS{idVendor}=="1a86", ENV{ID_MM_DEVICE_IGNORE}="1"
+> EOF
+> sudo udevadm control --reload-rules && sudo udevadm trigger
+> ```
+>
+> Verify: `udevadm info -q property -n /dev/ttyACM0 | grep ID_MM_DEVICE_IGNORE`
+> shows `ID_MM_DEVICE_IGNORE=1`, and `mmcli -L` no longer lists the grippers.
+> Revert by deleting the rule file and reloading. (Alternatively, on a dedicated
+> robot PC with no cellular modem: `sudo systemctl disable --now ModemManager`.)
+
 ## Calibration workflow (do once per device)
 
 ### 1. Latch the encoder zero
