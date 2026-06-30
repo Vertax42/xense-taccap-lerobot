@@ -194,34 +194,39 @@ PY
 # Install the XenseVR PC Service daemon from its .deb. The package (~100 MB) is
 # the binary service the Pico4 teleop/tracker talks to (installs to
 # /opt/apps/roboticsservice); it is NOT vendored in-repo. Resolution priority:
-#   1. $XENSEVR_DEB            (explicit path override)
-#   2. $XENSEVR_DEB_URL        (download if no local file is found)
-#   3. repo dist/ then ~/Downloads/XenseVR-PC-Service_*_amd64.deb
-# Non-fatal: a missing .deb only warns (the Python SDK still builds; the service
-# can be installed later). Idempotent: same installed version is skipped.
+#   1. $XENSEVR_DEB                                  (explicit path override)
+#   2. repo dist/ then ~/Downloads/...<arch>.deb     (local copy, no re-download)
+#   3. download the matching-arch asset from the GitHub release ($XENSEVR_DEB_URL
+#      overrides the default release URL)
+# Non-fatal: a failed/absent .deb only warns (the Python SDK still builds; the
+# service can be installed later). Idempotent: same installed version is skipped.
 install_xensevr_service() {
     echo ""
     echo "── XenseVR PC Service (.deb daemon) ──"
 
-    local DEB="${XENSEVR_DEB:-}"
+    local ARCH DEB_VER DEB_URL DEB
+    ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"   # amd64 | arm64
+    DEB_VER="0.1.0"
+    DEB_URL="${XENSEVR_DEB_URL:-https://github.com/Vertax42/XenseVR-PC-Service/releases/download/v${DEB_VER}/XenseVR-PC-Service_${DEB_VER}_${ARCH}.deb}"
+
+    # 1. explicit override, else 2. a local copy (repo dist/ or ~/Downloads)
+    DEB="${XENSEVR_DEB:-}"
     if [[ -z "$DEB" ]]; then
-        DEB="$(ls -1 "$PROJECT_ROOT"/dist/[Xx]ense[Vv][Rr]-PC-Service_*_amd64.deb \
-                      "$HOME"/Downloads/[Xx]ense[Vv][Rr]-PC-Service_*_amd64.deb \
+        DEB="$(ls -1 "$PROJECT_ROOT"/dist/[Xx]ense[Vv][Rr]-PC-Service_*_"${ARCH}".deb \
+                      "$HOME"/Downloads/[Xx]ense[Vv][Rr]-PC-Service_*_"${ARCH}".deb \
                2>/dev/null | head -n1)"
     fi
-    if [[ -z "$DEB" && -n "${XENSEVR_DEB_URL:-}" ]]; then
-        DEB="$HOME/Downloads/XenseVR-PC-Service_amd64.deb"
-        echo "  Downloading XenseVR PC Service .deb from $XENSEVR_DEB_URL ..."
-        if ! curl -fL "$XENSEVR_DEB_URL" -o "$DEB"; then
-            echo "  WARN: download failed; skipping service install."
+    # 3. no local copy -> download the matching-arch asset from the release
+    if [[ -z "$DEB" || ! -f "$DEB" ]]; then
+        DEB="$HOME/Downloads/XenseVR-PC-Service_${DEB_VER}_${ARCH}.deb"
+        echo "  No local .deb found; downloading ${ARCH} asset from:"
+        echo "    $DEB_URL"
+        if ! curl -fL "$DEB_URL" -o "$DEB"; then
+            echo "  WARN: download failed — skipping service install."
+            echo "  Get it manually from https://github.com/Vertax42/XenseVR-PC-Service/releases"
+            echo "  then: sudo dpkg -i XenseVR-PC-Service_*_${ARCH}.deb"
             return 0
         fi
-    fi
-    if [[ -z "$DEB" || ! -f "$DEB" ]]; then
-        echo "  WARN: XenseVR-PC-Service .deb not found — skipping."
-        echo "  Put XenseVR-PC-Service_<ver>_amd64.deb in ~/Downloads/ (or set XENSEVR_DEB"
-        echo "  / XENSEVR_DEB_URL), then re-run, or install manually: sudo dpkg -i <deb>."
-        return 0
     fi
 
     local WANT INSTALLED

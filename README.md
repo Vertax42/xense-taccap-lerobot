@@ -57,11 +57,13 @@ This repository uses `third_party/` git submodules to manage hardware SDK depend
 > published to PyPI this step becomes a plain `pip install xensesdk`.
 
 > The **XenseVR PC Service daemon** (what the Pico4 teleop/tracker talks to) is
-> likewise shipped as a separate ~100 MB Debian package
-> `XenseVR-PC-Service_<ver>_amd64.deb` (installs to `/opt/apps/roboticsservice`).
-> Place it in `~/Downloads/` (or set `XENSEVR_DEB=/path/to/.deb`, or
-> `XENSEVR_DEB_URL=<url>` to download it); `setup_env.sh --install` runs
-> `sudo dpkg -i` on it (idempotent — same version is skipped). Start it with
+> likewise shipped as a separate ~100 MB Debian package (installs to
+> `/opt/apps/roboticsservice`). `setup_env.sh --install` installs it
+> automatically: it uses a local copy if present (`$XENSEVR_DEB`, repo `dist/`,
+> or `~/Downloads/`), otherwise **downloads the matching-arch asset** from the
+> [v0.1.0 release](https://github.com/Vertax42/XenseVR-PC-Service/releases/tag/v0.1.0)
+> (override the URL with `$XENSEVR_DEB_URL`), then runs `sudo dpkg -i`
+> (idempotent — same version is skipped). Start it with
 > `/opt/apps/roboticsservice/runService.sh`.
 
 **Step 2:** 🐍 Create and activate the mamba environment:
