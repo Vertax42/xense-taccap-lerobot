@@ -1,6 +1,6 @@
 ## Title
 
-Short, imperative summary (e.g., "fix(robots): handle None in sensor parser"). See [CONTRIBUTING.md](../CONTRIBUTING.md) for PR conventions.
+Short, imperative summary (e.g., "fix(robots): handle None in sensor parser").
 
 ## Type / Scope
 

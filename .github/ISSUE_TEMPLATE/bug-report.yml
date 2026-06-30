@@ -18,8 +18,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        ### Thanks for contributing to LeRobot! 🙌
-        Please choose the most relevant sections below. If this is a general "how-to" question, consider our [Discord](https://discord.gg/s3KuuzsPFb) for faster community support.
+        ### Thanks for filing an issue on LeRobot-Xense! 🙌
+        Please choose the most relevant sections below.
 
   - type: dropdown
     id: issue-type
