@@ -191,6 +191,53 @@ PY
 
 # ── Hardware module: Pico4 ────────────────────────────────────────────────────
 
+# Install the XenseVR PC Service daemon from its .deb. The package (~100 MB) is
+# the binary service the Pico4 teleop/tracker talks to (installs to
+# /opt/apps/roboticsservice); it is NOT vendored in-repo. Resolution priority:
+#   1. $XENSEVR_DEB            (explicit path override)
+#   2. $XENSEVR_DEB_URL        (download if no local file is found)
+#   3. repo dist/ then ~/Downloads/XenseVR-PC-Service_*_amd64.deb
+# Non-fatal: a missing .deb only warns (the Python SDK still builds; the service
+# can be installed later). Idempotent: same installed version is skipped.
+install_xensevr_service() {
+    echo ""
+    echo "── XenseVR PC Service (.deb daemon) ──"
+
+    local DEB="${XENSEVR_DEB:-}"
+    if [[ -z "$DEB" ]]; then
+        DEB="$(ls -1 "$PROJECT_ROOT"/dist/[Xx]ense[Vv][Rr]-PC-Service_*_amd64.deb \
+                      "$HOME"/Downloads/[Xx]ense[Vv][Rr]-PC-Service_*_amd64.deb \
+               2>/dev/null | head -n1)"
+    fi
+    if [[ -z "$DEB" && -n "${XENSEVR_DEB_URL:-}" ]]; then
+        DEB="$HOME/Downloads/XenseVR-PC-Service_amd64.deb"
+        echo "  Downloading XenseVR PC Service .deb from $XENSEVR_DEB_URL ..."
+        if ! curl -fL "$XENSEVR_DEB_URL" -o "$DEB"; then
+            echo "  WARN: download failed; skipping service install."
+            return 0
+        fi
+    fi
+    if [[ -z "$DEB" || ! -f "$DEB" ]]; then
+        echo "  WARN: XenseVR-PC-Service .deb not found — skipping."
+        echo "  Put XenseVR-PC-Service_<ver>_amd64.deb in ~/Downloads/ (or set XENSEVR_DEB"
+        echo "  / XENSEVR_DEB_URL), then re-run, or install manually: sudo dpkg -i <deb>."
+        return 0
+    fi
+
+    local WANT INSTALLED
+    WANT="$(dpkg-deb -f "$DEB" Version 2>/dev/null)"
+    INSTALLED="$(dpkg-query -W -f='${Version}' xensevr-pc-service 2>/dev/null || true)"
+    if [[ -n "$INSTALLED" && "$INSTALLED" == "$WANT" ]]; then
+        echo "  xensevr-pc-service $INSTALLED already installed — skipping."
+        return 0
+    fi
+
+    echo "  Installing xensevr-pc-service ${WANT:-?} from: $DEB"
+    sudo dpkg -i "$DEB" || sudo apt-get install -f -y
+    echo "  Installed to /opt/apps/roboticsservice. Start the service with:"
+    echo "    /opt/apps/roboticsservice/runService.sh"
+}
+
 install_pico4() {
     echo ""
     echo "══════════════════════════════════════════"
@@ -205,6 +252,9 @@ install_pico4() {
         echo "  Run: git submodule update --init third_party/XenseVR-PC-Service"
         return 1
     fi
+
+    # Install the PC Service daemon (.deb) the Python SDK will talk to.
+    install_xensevr_service
 
     # Build the C SDK
     bash "$SDK_SRC/RoboticsService/PXREARobotSDK/build.sh"

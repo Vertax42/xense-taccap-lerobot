@@ -56,6 +56,14 @@ This repository uses `third_party/` git submodules to manage hardware SDK depend
 > `setup_env.sh --install` picks it up automatically. Once `xensesdk` 2.x is
 > published to PyPI this step becomes a plain `pip install xensesdk`.
 
+> The **XenseVR PC Service daemon** (what the Pico4 teleop/tracker talks to) is
+> likewise shipped as a separate ~100 MB Debian package
+> `XenseVR-PC-Service_<ver>_amd64.deb` (installs to `/opt/apps/roboticsservice`).
+> Place it in `~/Downloads/` (or set `XENSEVR_DEB=/path/to/.deb`, or
+> `XENSEVR_DEB_URL=<url>` to download it); `setup_env.sh --install` runs
+> `sudo dpkg -i` on it (idempotent — same version is skipped). Start it with
+> `/opt/apps/roboticsservice/runService.sh`.
+
 **Step 2:** 🐍 Create and activate the mamba environment:
 
 ```bash
@@ -79,7 +87,7 @@ This step will:
 - Update the conda environment from `conda_environment.yaml`
 - Install the main package from `pyproject.toml`
 - Install `xensesdk` from the wheel resolved out-of-band (see the note above — `~/Downloads/`, repo `dist/`, or `$XENSESDK_WHEEL`)
-- Build and install the `third_party` SDK packages: `xensevr_pc_service_sdk` (Pico4) and `xense.taccap` (TacCap UMI gripper)
+- Install the XenseVR PC Service daemon from its `.deb` (resolved out-of-band — see the note above), then build the `third_party` SDK packages: `xensevr_pc_service_sdk` (Pico4) and `xense.taccap` (TacCap UMI gripper)
 
 **Step 4:** ✅ Verify the installation:
 
