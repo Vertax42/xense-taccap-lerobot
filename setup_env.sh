@@ -286,32 +286,8 @@ install_pico4() {
 install_xense() {
     echo ""
     echo "══════════════════════════════════════════"
-    echo " xensesdk (vendored wheel)"
+    echo " xensesdk (PyPI)"
     echo "══════════════════════════════════════════"
-
-    # Resolve the xensesdk wheel. The wheel is no longer vendored in-repo (it is
-    # a ~90 MB binary); fetch it out-of-band and point the installer at it.
-    # Priority:
-    #   1. $XENSESDK_WHEEL  (explicit override)
-    #   2. dist/*.whl       (legacy in-repo location, if you drop one there)
-    #   3. ~/Downloads/xensesdk-*.whl  (current distribution channel)
-    # TODO: once xensesdk 2.x is published to PyPI, replace this whole block with
-    #       `uv pip install xensesdk`.
-    local WHEEL="${XENSESDK_WHEEL:-}"
-    if [[ -z "$WHEEL" ]]; then
-        WHEEL="$(ls -1 "$PROJECT_ROOT"/dist/xensesdk-*-cp312-*-linux_x86_64.whl \
-                        "$HOME"/Downloads/xensesdk-*-cp312-*-linux_x86_64.whl \
-                 2>/dev/null | head -n1)"
-    fi
-
-    if [[ -z "$WHEEL" || ! -f "$WHEEL" ]]; then
-        echo "ERROR: xensesdk wheel not found."
-        echo "  Put xensesdk-<ver>-cp312-...-linux_x86_64.whl in ~/Downloads/ (or the"
-        echo "  repo dist/ dir), or set XENSESDK_WHEEL=/path/to/wheel, then re-run."
-        echo "  (Once xensesdk is on PyPI: 'uv pip install xensesdk' instead.)"
-        return 1
-    fi
-    echo "[xense] Using wheel: $WHEEL"
 
     fix_udev_discovery
 
@@ -337,10 +313,23 @@ install_xense() {
         "ormsgpack>=1.11.0" \
         "cyclonedds-nightly==2025.7.29" \
         "pyudev; platform_system=='Linux'"
-    # Install xensesdk 2.0 from the resolved wheel. It bundles the patched
-    # libxense_c.so flash reader (concurrent-connect EBADF fix), so no separate
-    # xense_xu / pyxensexu build is needed. --no-deps keeps numpy 1.26.x.
-    uv pip install --no-deps --force-reinstall "$WHEEL"
+    # Install xensesdk 2.x. It is published to PyPI (cp312 manylinux wheel as of
+    # 2.0.1), so install by name — no more out-of-band wheel to fetch. The
+    # published wheel bundles the patched libxense_c.so flash reader
+    # (concurrent-connect EBADF fix), so no separate xense_xu / pyxensexu build
+    # is needed. --no-deps keeps the shared Robostack env's numpy/opencv/
+    # cryptography pins: xensesdk's own metadata hard-pins cryptography==43.0.3 /
+    # numpy<=2.2.4, which would otherwise fight the env (the explicit runtime
+    # deps installed above already cover what it needs at runtime).
+    # For an offline or patched build, set XENSESDK_WHEEL=/path/to/xensesdk-*.whl
+    # to install that file instead of pulling from PyPI.
+    if [[ -n "${XENSESDK_WHEEL:-}" && -f "${XENSESDK_WHEEL}" ]]; then
+        echo "[xense] Installing xensesdk from override wheel: $XENSESDK_WHEEL"
+        uv pip install --no-deps --force-reinstall "$XENSESDK_WHEEL"
+    else
+        echo "[xense] Installing xensesdk from PyPI..."
+        uv pip install --no-deps --upgrade "xensesdk>=2.0.0"
+    fi
     # xensesdk requires a specific av version
     uv pip install av==15.1.0
 
