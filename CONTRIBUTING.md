@@ -40,8 +40,9 @@ mamba activate lerobot-xense
 bash ./setup_env.sh --install
 ```
 
-See the README's **Installation** section for the hardware SDK details (the
-`xensesdk` wheel and the XenseVR PC Service `.deb`, both fetched out-of-band).
+See the README's **Installation** section for the hardware SDK details
+(`xensesdk` installs from PyPI; the XenseVR PC Service `.deb` is fetched
+out-of-band).
 
 ## Code style & checks
 

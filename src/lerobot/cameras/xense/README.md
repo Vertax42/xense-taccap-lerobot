@@ -15,21 +15,23 @@ The Xense tactile sensor provides rich tactile-visual information including:
 
 ### Prerequisites
 
-1. **Install xensesdk** (follow manufacturer instructions):
+The canonical way to install `xensesdk` (plus its runtime deps and the env
+fix-ups) is `bash ./setup_env.sh --install` from the repo root — see the
+top-level README's **Installation** section. To install it standalone:
+
+1. **Install xensesdk** from PyPI (2.x, cp312 manylinux wheel):
    ```bash
-   conda activate lerobot-openpi
-   uv pip install xensesdk
+   mamba activate lerobot-xense
+   uv pip install "xensesdk>=2.0.0"
    ```
 
-2. **Install missing dependencies** (as noted in xensesdk README):
+   Inside the shared Robostack env, add `--no-deps` and provide the runtime
+   deps yourself so xensesdk's own pins (`cryptography==43.0.3`, `numpy<=2.2.4`)
+   don't disturb the env — `setup_env.sh --install` does this for you.
+
+2. **Offline / patched build** — point pip at a local wheel instead of PyPI:
    ```bash
-    uv pip install scipy cypack cryptography pyudev assimp_py==1.0.7 qtpy PyQt5 h5py lz4 -i https://mirrors.huaweicloud.com/repository/pypi/simple
-    uv pip install cyclonedds-nightly==2025.7.29 -i https://mirrors.huaweicloud.com/repository/pypi/simple
-    uv pip install xensesdk==1.6.3 -i https://mirrors.huaweicloud.com/repository/pypi/simple
-    conda install cuda-toolkit=12.9 -c nvidia
-    conda install cudnn -c conda-forge -y
-    uv pip install onnxruntime-gpu==1.19.2
-    export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/:$LD_LIBRARY_PATH
+   uv pip install --no-deps --force-reinstall /path/to/xensesdk-*-cp312-*-linux_x86_64.whl
    ```
 
 ## Quick Start
