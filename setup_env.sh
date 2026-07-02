@@ -423,7 +423,7 @@ install_taccap() {
 if [[ -n "$2" ]]; then
     ENV_NAME="$2"
 else
-    ENV_NAME="lerobot-xense"
+    ENV_NAME="xense-taccap"
 fi
 
 # Check if the --conda parameter is passed

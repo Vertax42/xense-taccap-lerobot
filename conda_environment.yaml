@@ -1,4 +1,4 @@
-name: lerobot-xense
+name: xense-taccap
 channels:
   - conda-forge
   - nvidia

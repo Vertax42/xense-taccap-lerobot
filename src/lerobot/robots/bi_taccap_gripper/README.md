@@ -63,7 +63,7 @@ rule. Use this for a tracker whose serial does not follow the rule, or when enum
 ## Usage
 
 Self-driven — **no `--teleop`**. Prerequisite: `xense.taccap` importable in the
-`lerobot-xense` env (`bash ./setup_env.sh --install`).
+`xense-taccap` env (`bash ./setup_env.sh --install`).
 
 **Live Rerun visualization** (cameras + gripper only — both grippers, 4 tactiles and
 2 wrist cameras are discovered automatically):

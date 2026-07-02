@@ -35,8 +35,8 @@ tracks upstream and intentionally stays slim.
 ```bash
 git clone --recurse-submodules https://github.com/Vertax42/xense-taccap-lerobot.git
 cd xense-taccap-lerobot
-bash ./setup_env.sh --mamba lerobot-xense
-mamba activate lerobot-xense
+bash ./setup_env.sh --mamba xense-taccap
+mamba activate xense-taccap
 bash ./setup_env.sh --install
 ```
 

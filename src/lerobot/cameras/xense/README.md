@@ -21,7 +21,7 @@ top-level README's **Installation** section. To install it standalone:
 
 1. **Install xensesdk** from PyPI (2.x, cp312 manylinux wheel):
    ```bash
-   mamba activate lerobot-xense
+   mamba activate xense-taccap
    uv pip install "xensesdk>=2.0.0"
    ```
 

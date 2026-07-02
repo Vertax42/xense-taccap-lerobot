@@ -71,14 +71,14 @@ This repository uses `third_party/` git submodules to manage hardware SDK depend
 **Step 2:** 🐍 Create and activate the mamba environment:
 
 ```bash
-bash ./setup_env.sh --mamba lerobot-xense
-mamba activate lerobot-xense
+bash ./setup_env.sh --mamba xense-taccap
+mamba activate xense-taccap
 ```
 
 > The default env name baked into `conda_environment.yaml` is
-> `lerobot-xense`. You can pass a different name to `--mamba`,
+> `xense-taccap`. You can pass a different name to `--mamba`,
 > but the rest of this README and the openpi project assume
-> `lerobot-xense`.
+> `xense-taccap`.
 
 **Step 3:** 📦 Install LeRobot-Xense and all hardware SDK bindings:
 
