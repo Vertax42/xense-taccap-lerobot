@@ -142,6 +142,13 @@ class BiTaccapGripper(Robot):
 
         self._is_connected = False
 
+        # Graceful-degradation state for mid-episode camera loss: keep the last
+        # good frame per camera so a hot-unplug degrades to a stale/black frame
+        # instead of crashing the record loop, and remember which cameras died
+        # so the caller can stop cleanly and save what was recorded.
+        self._last_cam_frame: dict[str, np.ndarray] = {}
+        self._lost_cameras: set[str] = set()
+
     # ------------------------------------------------------------------ discovery
 
     def _discover_camera_configs(self) -> dict[str, Any]:
@@ -228,6 +235,13 @@ class BiTaccapGripper(Robot):
     @property
     def is_connected(self) -> bool:
         return self._is_connected
+
+    @property
+    def device_lost(self) -> bool:
+        """True once any camera has been detected as physically lost mid-episode
+        (hot-unplug / hub drop). The record loop polls this to stop cleanly and
+        save the in-progress episode instead of crashing on the next read."""
+        return bool(self._lost_cameras)
 
     @property
     def is_calibrated(self) -> bool:
@@ -410,9 +424,45 @@ class BiTaccapGripper(Robot):
                     self.logger.warn(f"  [{side}] IMU read failed: {e}")
 
         for cam_name, cam in self.cameras.items():
-            obs[cam_name] = cam.async_read()
+            obs[cam_name] = self._read_camera_or_fallback(cam_name, cam)
 
         return obs
+
+    def _read_camera_or_fallback(self, cam_name: str, cam: Any) -> np.ndarray:
+        """Read one camera, degrading gracefully on physical loss.
+
+        A hot-unplugged camera (USB drop / hub power loss) makes its background
+        read thread die; the next ``async_read`` raises ``RuntimeError`` ("read
+        thread is not running"). Letting that propagate crashes the record loop
+        and loses the in-progress episode. Instead we substitute the last good
+        frame (or a black frame on first-read loss), flag the camera as lost so
+        ``device_lost`` trips, and let the caller stop cleanly and save.
+
+        ``TimeoutError`` (a transient slow/dropped frame) is treated the same way
+        but is NOT flagged as lost — those recover on their own."""
+        try:
+            frame = cam.async_read()
+            self._last_cam_frame[cam_name] = frame
+            return frame
+        except TimeoutError as e:
+            self.logger.warning(f"  [{cam_name}] frame timeout, reusing last frame: {e}")
+            return self._fallback_frame(cam_name)
+        except Exception as e:
+            if cam_name not in self._lost_cameras:
+                self.logger.error(f"  [{cam_name}] camera lost mid-episode: {e}")
+                self._lost_cameras.add(cam_name)
+            return self._fallback_frame(cam_name)
+
+    def _fallback_frame(self, cam_name: str) -> np.ndarray:
+        """Last good frame for this camera, or a black frame of the declared
+        (H, W, 3) shape if none was ever captured."""
+        cached = self._last_cam_frame.get(cam_name)
+        if cached is not None:
+            return cached
+        cfg = self._camera_configs[cam_name]
+        frame = np.zeros((cfg.height, cfg.width, 3), dtype=np.uint8)
+        self._last_cam_frame[cam_name] = frame
+        return frame
 
     def send_action(self, action: dict[str, Any] | None = None) -> dict[str, Any]:
         """No-op: passive demonstration device. The operators drive the jaws
