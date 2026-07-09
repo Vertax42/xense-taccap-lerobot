@@ -12,6 +12,8 @@ for device-specific usage. For generic lerobot usage (datasets, policies,
 training scripts) refer to the
 [upstream README](https://github.com/huggingface/lerobot#readme).
 
+Language: [English](README.md) | [中文](README.zh-CN.md)
+
 ## 🔧 Installation
 
 Tested on Ubuntu 22.04, NVIDIA driver ≥ 570.144. Use
@@ -19,6 +21,44 @@ Tested on Ubuntu 22.04, NVIDIA driver ≥ 570.144. Use
 (strongly recommended over plain conda — it's much faster on the
 robostack-staging channel that ships ROS Humble + SOEM). v5.1 pins
 **Python 3.12** and **PyTorch ≥ 2.2** with CUDA 12.8.
+
+### 🚀 One-command bootstrap
+
+For the normal setup path, run the bootstrap script from the repository root:
+
+```bash
+bash scripts/bootstrap.sh --install-miniforge
+```
+
+This wraps the detailed steps below: submodule initialization, Miniforge/mamba
+environment creation, `setup_env.sh --install`, and import verification. If
+Miniforge/mamba is already installed, `--install-miniforge` is harmless; omit it
+if you prefer to manage conda yourself.
+
+Useful variants:
+
+```bash
+# Setup plus the local pytest suite
+bash scripts/bootstrap.sh --test
+
+# Same entrypoint via make
+make bootstrap
+make bootstrap-test
+```
+
+For a fork → modify → test → merge request workflow, use GitHub CLI (`gh`) after
+committing your local changes:
+
+```bash
+# Creates/syncs your fork, pushes the current branch, and opens a PR to main
+bash scripts/bootstrap.sh --all --branch <your-branch-name>
+```
+
+The script only performs remote fork/push/PR actions when requested with
+`--fork`, `--push`, `--pr`, or `--all`. Run `bash scripts/bootstrap.sh --help`
+for all options.
+
+### Manual setup
 
 ```bash
 curl -L -O "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
@@ -180,6 +220,132 @@ mmcli -L                                                               # gripper
 
 Revert by deleting the rule file and reloading. (Alternatively, on a dedicated
 robot PC with no cellular modem: `sudo systemctl disable --now ModemManager`.)
+
+## Robotics Service Autostart
+
+This section only registers the already-installed XenseVR PC Service daemon as
+a boot-time `systemd` service. The daemon itself comes from the original
+XenseVR-PC-Service `.deb` package and must be installed first; the autostart
+script does not vendor or download that binary package.
+
+Install the `.deb` package with the project installer. This is the normal
+one-command path: `setup_env.sh --install` resolves a local `.deb` from
+`$XENSEVR_DEB`, repo `dist/`, or `~/Downloads/`; if none is found, it downloads
+the matching-architecture asset from the release and installs it with `dpkg`.
+
+```bash
+bash ./setup_env.sh --install
+```
+
+If the `.deb` cannot be downloaded or installed, `setup_env.sh --install` fails
+so the missing daemon is not hidden. Set `XENSEVR_SKIP_DEB=1` only when you
+intentionally want to skip the daemon and install Python bindings separately.
+
+Or download the matching-architecture `.deb` from the original project release
+and install it manually:
+
+```bash
+# amd64 or arm64, depending on `dpkg --print-architecture`
+sudo dpkg -i ~/Downloads/XenseVR-PC-Service_0.1.0_amd64.deb
+sudo apt-get install -f -y
+```
+
+Release page:
+[`XenseVR-PC-Service v0.1.0`](https://github.com/Vertax42/XenseVR-PC-Service/releases/tag/v0.1.0).
+If you keep the `.deb` outside `~/Downloads/` or the repo `dist/` directory,
+point the installer at it with:
+
+```bash
+XENSEVR_DEB=/path/to/XenseVR-PC-Service_0.1.0_amd64.deb bash ./setup_env.sh --install
+```
+
+The expected install path is:
+
+```bash
+/opt/apps/roboticsservice/runService.sh
+/opt/apps/roboticsservice/RoboticsServiceProcess
+```
+
+After the `.deb` is installed, register the service for boot:
+
+```bash
+scripts/roboticsservice_autostart.sh install
+```
+
+The installer writes `/etc/systemd/system/roboticsservice.service`, enables it
+for boot, and starts it immediately. By default it runs as the detected login
+user. To run it as a specific user:
+
+```bash
+scripts/roboticsservice_autostart.sh install --user <username>
+```
+
+If `/opt/apps/roboticsservice/runService.sh` was started manually before
+installation, stop that process first. To let the installer stop the existing
+`RoboticsServiceProcess` and hand control to `systemd`, run:
+
+```bash
+scripts/roboticsservice_autostart.sh install --stop-existing
+```
+
+Useful service commands:
+
+```bash
+scripts/roboticsservice_autostart.sh start
+scripts/roboticsservice_autostart.sh stop
+scripts/roboticsservice_autostart.sh restart
+scripts/roboticsservice_autostart.sh status
+scripts/roboticsservice_autostart.sh logs
+scripts/roboticsservice_autostart.sh uninstall
+```
+
+Use `status` for detailed `systemd` output:
+
+```bash
+scripts/roboticsservice_autostart.sh status
+```
+
+Use `check` for a concise pass/fail verification suitable for acceptance tests
+or deployment scripts:
+
+```bash
+scripts/roboticsservice_autostart.sh check
+```
+
+The `check` command verifies that:
+
+- `/etc/systemd/system/roboticsservice.service` exists
+- `roboticsservice.service` is enabled for boot
+- `roboticsservice.service` is currently active
+- the `systemd` main process PID is running
+
+If `check` reports that the service is repeatedly `activating` and the journal
+shows `release mode` followed by `Deactivated successfully`, check for an
+already-running manual process:
+
+```bash
+pgrep -af '[R]oboticsServiceProcess'
+```
+
+Stop the manual process or rerun `install --stop-existing` so `systemd` owns the
+service lifecycle.
+
+Service logs are available through:
+
+```bash
+scripts/roboticsservice_autostart.sh logs
+```
+
+The generated unit does not call `/opt/apps/roboticsservice/runService.sh`
+directly because that script backgrounds `RoboticsServiceProcess`. Instead, the
+installer writes `/usr/local/bin/roboticsservice-systemd-start.sh` and a
+`Type=forking` unit with `PIDFile=/run/roboticsservice/roboticsservice.pid`, so
+`systemd` can track the service process. The wrapper uses the same runtime paths
+as `runService.sh`:
+
+- `LD_LIBRARY_PATH=/opt/apps/roboticsservice:/opt/apps/roboticsservice/lib:/opt/apps/roboticsservice/SDK/x64`
+- `QT_PLUGIN_PATH=/opt/apps/roboticsservice/plugins/`
+- `QT_QML_PATH=/opt/apps/roboticsservice/qml/`
 
 ## 🔑 The `LeRobotDataset` format
 

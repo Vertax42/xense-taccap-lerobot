@@ -80,6 +80,45 @@ create_environment() {
     echo -e "\n"
 }
 
+find_conda_base() {
+    local candidate
+    for candidate in "$HOME/miniforge3" "$HOME/mambaforge" "$HOME/miniconda3" "$HOME/anaconda3"; do
+        if [[ -f "$candidate/etc/profile.d/conda.sh" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    if command -v conda >/dev/null 2>&1; then
+        candidate="$(conda info --base 2>/dev/null || true)"
+        if [[ -n "$candidate" && -f "$candidate/etc/profile.d/conda.sh" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    fi
+
+    if command -v mamba >/dev/null 2>&1; then
+        candidate="$(mamba info --base 2>/dev/null || true)"
+        if [[ -n "$candidate" && -f "$candidate/etc/profile.d/conda.sh" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+source_conda_base() {
+    local base
+    base="$(find_conda_base)" || return 1
+    # shellcheck source=/dev/null
+    . "$base/etc/profile.d/conda.sh"
+    if [[ -f "$base/etc/profile.d/mamba.sh" ]]; then
+        # shellcheck source=/dev/null
+        . "$base/etc/profile.d/mamba.sh"
+    fi
+}
+
 # ── Shared helpers for hardware installation ──────────────────────────────────
 
 # conda installs a udev/ directory that confuses ctypes.util.find_library("udev"),
@@ -198,11 +237,18 @@ PY
 #   2. repo dist/ then ~/Downloads/...<arch>.deb     (local copy, no re-download)
 #   3. download the matching-arch asset from the GitHub release ($XENSEVR_DEB_URL
 #      overrides the default release URL)
-# Non-fatal: a failed/absent .deb only warns (the Python SDK still builds; the
-# service can be installed later). Idempotent: same installed version is skipped.
+# By default the .deb is required: a failed/absent service package fails
+# --install so the host is not left without /opt/apps/roboticsservice. Set
+# XENSEVR_SKIP_DEB=1 only when intentionally installing Python bindings without
+# the daemon. Idempotent: same installed version is skipped.
 install_xensevr_service() {
     echo ""
     echo "── XenseVR PC Service (.deb daemon) ──"
+
+    if [[ "${XENSEVR_SKIP_DEB:-0}" == "1" ]]; then
+        echo "  XENSEVR_SKIP_DEB=1 set — skipping .deb daemon install."
+        return 0
+    fi
 
     local ARCH DEB_VER DEB_URL DEB
     ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"   # amd64 | arm64
@@ -222,10 +268,11 @@ install_xensevr_service() {
         echo "  No local .deb found; downloading ${ARCH} asset from:"
         echo "    $DEB_URL"
         if ! curl -fL "$DEB_URL" -o "$DEB"; then
-            echo "  WARN: download failed — skipping service install."
+            echo "  ERROR: download failed."
             echo "  Get it manually from https://github.com/Vertax42/XenseVR-PC-Service/releases"
-            echo "  then: sudo dpkg -i XenseVR-PC-Service_*_${ARCH}.deb"
-            return 0
+            echo "  then rerun with:"
+            echo "    XENSEVR_DEB=/path/to/XenseVR-PC-Service_*_${ARCH}.deb bash ./setup_env.sh --install"
+            return 1
         fi
     fi
 
@@ -238,7 +285,11 @@ install_xensevr_service() {
     fi
 
     echo "  Installing xensevr-pc-service ${WANT:-?} from: $DEB"
-    sudo dpkg -i "$DEB" || sudo apt-get install -f -y
+    sudo dpkg -i "$DEB" || sudo apt-get install -f -y || return 1
+    [[ -x /opt/apps/roboticsservice/RoboticsServiceProcess ]] || {
+        echo "  ERROR: /opt/apps/roboticsservice/RoboticsServiceProcess was not installed."
+        return 1
+    }
     echo "  Installed to /opt/apps/roboticsservice. Start the service with:"
     echo "    /opt/apps/roboticsservice/runService.sh"
 }
@@ -429,11 +480,7 @@ fi
 # Check if the --conda parameter is passed
 if [[ "$1" == "--conda" ]]; then
     # Initialize conda
-    if [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
-        . "$HOME/miniconda3/etc/profile.d/conda.sh"
-    elif [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
-        . "$HOME/anaconda3/etc/profile.d/conda.sh"
-    else
+    if ! source_conda_base; then
         echo "Conda initialization script not found. Please install Miniconda3 or Anaconda3 or Miniforge3."
         exit 1
     fi
@@ -442,19 +489,13 @@ if [[ "$1" == "--conda" ]]; then
 # Check if the --mamba parameter is passed
 elif [[ "$1" == "--mamba" ]]; then
     # Initialize mamba (miniforge)
-    if [ -f "$HOME/miniforge3/etc/profile.d/conda.sh" ]; then
-        . "$HOME/miniforge3/etc/profile.d/conda.sh"
-    elif [ -f "$HOME/mambaforge/etc/profile.d/conda.sh" ]; then
-        . "$HOME/mambaforge/etc/profile.d/conda.sh"
-    else
+    if ! source_conda_base; then
         echo "Mamba initialization script not found. Please install Miniforge3 or Mambaforge."
         exit 1
     fi
-    # Also source mamba.sh if available for full mamba support
-    if [ -f "$HOME/miniforge3/etc/profile.d/mamba.sh" ]; then
-        . "$HOME/miniforge3/etc/profile.d/mamba.sh"
-    elif [ -f "$HOME/mambaforge/etc/profile.d/mamba.sh" ]; then
-        . "$HOME/mambaforge/etc/profile.d/mamba.sh"
+    if ! command -v mamba >/dev/null 2>&1; then
+        echo "Mamba command not found. Please install Miniforge/Mambaforge, or use --conda."
+        exit 1
     fi
     create_environment "mamba" "$ENV_NAME" || exit 1
 
@@ -469,8 +510,13 @@ elif [[ "$1" == "--install" ]]; then
     ENV_NAME=${CONDA_DEFAULT_ENV}
 
     # Detect conda/mamba command
-    if [ -f "$HOME/miniforge3/etc/profile.d/conda.sh" ]; then
+    CONDA_BASE="$(find_conda_base || true)"
+    if [[ -n "$CONDA_BASE" && -x "$CONDA_BASE/bin/mamba" ]]; then
+        CONDA_CMD="$CONDA_BASE/bin/mamba"
+    elif command -v mamba >/dev/null 2>&1; then
         CONDA_CMD="mamba"
+    elif [[ -n "$CONDA_BASE" && -x "$CONDA_BASE/bin/conda" ]]; then
+        CONDA_CMD="$CONDA_BASE/bin/conda"
     else
         CONDA_CMD="conda"
     fi
@@ -546,7 +592,7 @@ elif [[ "$1" == "--install" ]]; then
     echo "[INFO] Installing hardware SDK bindings..."
     echo ""
 
-    ( install_pico4 ) || echo "[WARN] pico4 installation skipped or failed (see above)"
+    install_pico4    || exit 1
     install_xense     || echo "[WARN] xense installation skipped or failed (see above)"
     install_taccap    || echo "[WARN] taccap installation skipped or failed (see above)"
 

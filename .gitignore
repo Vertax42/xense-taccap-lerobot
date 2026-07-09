@@ -31,6 +31,9 @@ Pipfile.lock
 ### Build & Distribution ###
 build/
 dist/
+Miniforge3-*.sh
+production_ui/*.tar.gz
+production_ui.zip
 sdist/
 wheels/
 downloads/

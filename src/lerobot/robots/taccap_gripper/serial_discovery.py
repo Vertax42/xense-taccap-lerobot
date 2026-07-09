@@ -87,6 +87,7 @@ _CAMERA_RE = re.compile(r"^XC[A-Z]\d{2}[ZA](\d{4})([ms])$")
 
 # Serial extractors for the /dev/v4l/by-id device names.
 _TACTILE_BYID_RE = re.compile(r"(GSPS01[A-Z]\d{2}[ZA]\d{4})")
+_TACTILE_CANDIDATE_BYID_RE = re.compile(r"(GSPS[0-9A-Za-z]+)")
 _CAMERA_BYID_RE = re.compile(r"(XC[A-Z]\d{2}[ZA]\d{4}[ms])")
 
 _PATCH_ROLE = {"m": "leader", "s": "follower"}
@@ -357,6 +358,133 @@ def discover_tactiles_by_hub(role: str) -> dict[str, dict[str, str]]:
                 "Is the gripper on that hub powered and enumerated?"
             )
         result[hub_side[hub][0]] = fingers
+    return result
+
+
+def diagnose_tactiles_by_hub(role: str) -> dict[str, Any]:
+    """Tolerant tactile-SN diagnostic for production tooling.
+
+    Unlike :func:`discover_tactiles_by_hub`, this helper keeps partial results:
+    every left/right gripper finger gets a status cell, malformed/unassigned
+    tactiles are reported under ``unknown``, and duplicates are marked in-place.
+    It is meant for UI/highlight flows where operators still need to see the SNs
+    that were read even when the rig is mis-wired.
+    """
+    role = normalize_role(role)
+    result: dict[str, Any] = {
+        "sides": {
+            side: {
+                finger: {
+                    "serial": "",
+                    "hub": "",
+                    "state": "missing",
+                    "message": f"No {finger} tactile sensor read for the {side} gripper.",
+                }
+                for finger in FINGERS
+            }
+            for side in SIDES
+        },
+        "unknown": [],
+        "errors": [],
+        "gripper_hubs": {},
+    }
+
+    try:
+        hub_side = _gripper_hub_sides(role)
+    except Exception as exc:
+        result["errors"].append(str(exc))
+        hub_side = {}
+
+    result["gripper_hubs"] = {
+        hub: {"side": side, "firmware_sn": firmware_sn}
+        for hub, (side, firmware_sn) in sorted(hub_side.items())
+    }
+    discovered = (
+        ", ".join(
+            f"{firmware_sn!r} ({side}) on hub {hub!r}"
+            for hub, (side, firmware_sn) in sorted(hub_side.items())
+        )
+        or "none"
+    )
+
+    seen: set[str] = set()
+    for path in glob.glob(f"{_BYID_DIR}/*"):
+        candidate = _TACTILE_CANDIDATE_BYID_RE.search(os.path.basename(path))
+        if not candidate:
+            continue
+        sn = candidate.group(1)
+        if sn in seen:
+            continue
+        seen.add(sn)
+
+        entry: dict[str, str] = {
+            "serial": sn,
+            "path": path,
+            "hub": "",
+            "state": "ok",
+            "message": "",
+        }
+        m = _TACTILE_RE.match(sn)
+        if not m:
+            entry["state"] = "error"
+            entry["message"] = (
+                f"Tactile serial {sn!r} does not match the rule "
+                "GSPS01<batch><line><seq> (e.g. GSPS01A24Z0003)."
+            )
+            result["unknown"].append(entry)
+            continue
+
+        hub = _device_hub(path, _V4L_BYPATH_DIR)
+        if hub is None:
+            entry["state"] = "error"
+            entry["message"] = (
+                f"Could not resolve a USB hub for tactile {sn!r} ({path}); "
+                "check /dev/v4l/by-path."
+            )
+            result["unknown"].append(entry)
+            continue
+
+        entry["hub"] = hub
+        finger = side_of_sequence(m.group(1))
+        entry["finger"] = finger
+        if hub not in hub_side:
+            entry["state"] = "error"
+            entry["message"] = (
+                f"Tactile sensor {sn!r} sits on USB hub {hub!r}, which has no "
+                f"matching {role} gripper. Discovered {role} grippers: {discovered}."
+            )
+            result["unknown"].append(entry)
+            continue
+
+        side, firmware_sn = hub_side[hub]
+        entry["side"] = side
+        entry["gripper_firmware_sn"] = firmware_sn
+        if side not in result["sides"]:
+            entry["state"] = "error"
+            entry["message"] = (
+                f"Tactile sensor {sn!r} maps to gripper {firmware_sn!r} on USB hub "
+                f"{hub!r}, but the gripper side {side!r} is not left/right."
+            )
+            result["unknown"].append(entry)
+            continue
+        cell = result["sides"][side][finger]
+        if cell["serial"]:
+            cell["serial"] = f"{cell['serial']}, {sn}"
+            cell["state"] = "error"
+            cell["hub"] = hub
+            cell["message"] = (
+                f"Two tactile sensors on {side} gripper hub {hub!r} resolve to "
+                f"the {finger} finger by SN parity: {cell['serial']}. Each "
+                "gripper must have one left-finger SN and one right-finger SN."
+            )
+        else:
+            cell["serial"] = sn
+            cell["state"] = "ok"
+            cell["hub"] = hub
+            cell["message"] = (
+                f"{side} gripper {firmware_sn!r}, {finger} finger, USB hub {hub!r}."
+            )
+
     return result
 
 

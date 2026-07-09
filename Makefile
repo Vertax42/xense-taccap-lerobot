@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: tests
+.PHONY: tests bootstrap bootstrap-test bootstrap-pr
 
 PYTHON_PATH := $(shell which python)
 
@@ -25,6 +25,16 @@ endif
 export PATH := $(dir $(PYTHON_PATH)):$(PATH)
 
 DEVICE ?= cpu
+ENV_NAME ?= lerobot-xense
+
+bootstrap:
+	bash scripts/bootstrap.sh --env-name $(ENV_NAME)
+
+bootstrap-test:
+	bash scripts/bootstrap.sh --env-name $(ENV_NAME) --test
+
+bootstrap-pr:
+	bash scripts/bootstrap.sh --env-name $(ENV_NAME) --all
 
 build-user:
 	docker build -f docker/Dockerfile.user -t lerobot-user .

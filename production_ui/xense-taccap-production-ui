@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${APP_DIR}/.." && pwd)"
+
+candidate_pythons=()
+
+if [[ -n "${XENSE_TACCAP_PYTHON:-}" ]]; then
+    candidate_pythons+=("${XENSE_TACCAP_PYTHON}")
+fi
+
+for conda_root in \
+    "${HOME}/miniforge3" \
+    "${HOME}/mambaforge" \
+    "${HOME}/miniconda3" \
+    "${HOME}/anaconda3"; do
+    candidate_pythons+=(
+        "${conda_root}/envs/xense-taccap/bin/python"
+        "${conda_root}/envs/lerobot-xense/bin/python"
+        "${conda_root}/envs/taccap/bin/python"
+    )
+done
+
+candidate_pythons+=("$(command -v python3 || true)" "$(command -v python || true)")
+
+PYTHON_BIN=""
+for python_bin in "${candidate_pythons[@]}"; do
+    if [[ -z "${python_bin}" || ! -x "${python_bin}" ]]; then
+        continue
+    fi
+    if "${python_bin}" -c "import PySide6" >/dev/null 2>&1; then
+        PYTHON_BIN="${python_bin}"
+        break
+    fi
+done
+
+if [[ -z "${PYTHON_BIN}" ]]; then
+    cat >&2 <<EOF
+Could not find a Python environment with PySide6.
+
+Install UI dependencies first, for example:
+  mamba activate xense-taccap
+  python -m pip install -r "${APP_DIR}/requirements.txt"
+
+Or run with an explicit interpreter:
+  XENSE_TACCAP_PYTHON=/path/to/python "${APP_DIR}/xense-taccap-production-ui"
+EOF
+    exit 1
+fi
+
+export PYTHONPATH="${REPO_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
+cd "${REPO_ROOT}"
+exec "${PYTHON_BIN}" "${APP_DIR}/app.py" "$@"
