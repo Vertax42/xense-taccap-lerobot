@@ -468,12 +468,30 @@ elif [[ "$1" == "--install" ]]; then
     fi
     ENV_NAME=${CONDA_DEFAULT_ENV}
 
-    # Detect conda/mamba command
-    if [ -f "$HOME/miniforge3/etc/profile.d/conda.sh" ]; then
+    # Detect the manager that owns the *currently active* environment, and drive
+    # every env operation below (env update + the taccap `install` in
+    # install_taccap) with it. mamba is preferred whenever the active install
+    # ships it — it is faster and is the intended solver for the robostack stack
+    # this env is built on — with conda as the fallback.
+    #
+    # We key off MAMBA_EXE/CONDA_EXE (exported by the shell hook of the active
+    # base) rather than a bare `-f ~/miniforge3/...` check, which mis-detects a
+    # mambaforge install (`~/mambaforge`) as conda and force-picks mamba whenever
+    # ~/miniforge3 merely exists — even for an active anaconda3 env.
+    if [[ -n "${MAMBA_EXE:-}" ]] && command -v mamba &>/dev/null; then
+        CONDA_CMD="mamba"                                  # miniforge / mambaforge
+    elif [[ -n "${CONDA_EXE:-}" && -x "$(dirname "$CONDA_EXE")/mamba" ]]; then
+        CONDA_CMD="mamba"                                  # mamba beside active conda
+    elif command -v mamba &>/dev/null; then
         CONDA_CMD="mamba"
-    else
+    elif command -v conda &>/dev/null; then
         CONDA_CMD="conda"
+    else
+        echo "[ERROR] Neither 'mamba' nor 'conda' is available on PATH."
+        echo "        Activate your environment (conda/mamba activate <env>) and retry."
+        exit 1
     fi
+    echo "[INFO] Using '$CONDA_CMD' to manage environment '$ENV_NAME'."
 
     echo "[INFO] Updating conda environment '$ENV_NAME' from: $CONDA_ENV_FILE"
     if ! $CONDA_CMD env update -f "$CONDA_ENV_FILE" -n "$ENV_NAME"; then
