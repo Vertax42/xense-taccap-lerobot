@@ -209,17 +209,17 @@ install_xensevr_service() {
     DEB_VER="0.1.0"
     DEB_URL="${XENSEVR_DEB_URL:-https://github.com/Vertax42/XenseVR-PC-Service/releases/download/v${DEB_VER}/XenseVR-PC-Service_${DEB_VER}_${ARCH}.deb}"
 
-    # 1. explicit override, else 2. a local copy (repo dist/ or ~/Downloads)
     DEB="${XENSEVR_DEB:-}"
-    if [[ -z "$DEB" ]]; then
-        DEB="$(ls -1 "$PROJECT_ROOT"/dist/[Xx]ense[Vv][Rr]-PC-Service_*_"${ARCH}".deb \
-                      "$HOME"/Downloads/[Xx]ense[Vv][Rr]-PC-Service_*_"${ARCH}".deb \
-               2>/dev/null | head -n1)"
-    fi
-    # 3. no local copy -> download the matching-arch asset from the release
-    if [[ -z "$DEB" || ! -f "$DEB" ]]; then
-        DEB="$HOME/Downloads/XenseVR-PC-Service_${DEB_VER}_${ARCH}.deb"
-        echo "  No local .deb found; downloading ${ARCH} asset from:"
+    if [[ -n "$DEB" ]]; then
+        if [[ ! -f "$DEB" ]]; then
+            echo "  WARN: XENSEVR_DEB points to a missing file: $DEB"
+            echo "  WARN: skipping service install."
+            return 0
+        fi
+        echo "  Using explicit .deb override: $DEB"
+    else
+        DEB="${TMPDIR:-/tmp}/XenseVR-PC-Service_${DEB_VER}_${ARCH}.deb"
+        echo "  Downloading ${ARCH} asset from:"
         echo "    $DEB_URL"
         if ! curl -fL "$DEB_URL" -o "$DEB"; then
             echo "  WARN: download failed — skipping service install."
