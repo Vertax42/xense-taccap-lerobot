@@ -20,7 +20,9 @@ Paste your HuggingFace access token (write permission) when prompted; it is stor
 `~/.cache/huggingface/token` and persists across sessions.
 
 Also ensure `xense.taccap` is importable (`bash ./setup_env.sh --install`) and, for
-6-DoF pose, the XenseVR PC service + Pico4 trackers are running.
+6-DoF pose, the XenseVR PC service + Pico4 trackers are running. For the optional
+Insight9 head camera, run `insight9-check-env --hidraw` and make sure its HID node is
+readable/writable.
 
 ## Teleoperate (live Rerun visualization)
 
@@ -70,6 +72,19 @@ A pinned side is used verbatim (no enumeration, no rule check); un-pinned sides 
 auto-discover. Other knobs: `--robot.role=follower` (bind Slave units), `--robot.gripper_open_rad`,
 `--robot.tactile_fps`, `--robot.wrist_camera_width/height/fps`.
 
+The bimanual rig can add the Insight9 RGB/VIO stream with:
+
+```bash
+    --robot.enable_head_camera=true \
+    --robot.head_camera_width=1088 \
+    --robot.head_camera_height=1920 \
+```
+
+Capture stores `head_rgb` plus the raw device-frame VIO pose as
+`head_camera.x/y/z/r1..r6`. The quaternion is converted to the same rotation-matrix
+first-two-columns representation used by the left/right gripper poses; no IMU or
+timing/age/status metadata is stored.
+
 ### Single (`taccap_gripper`)
 
 ```bash
@@ -92,7 +107,8 @@ Recording is self-driven (`self_driven_record_loop`, shifted-frame: `action[t]` 
 ```bash
 lerobot-record \
     --robot.type=bi_taccap_gripper \
-    --dataset.repo_id=Xense/taccap-g1-test-0624 \
+    --robot.enable_head_camera=true \
+    --dataset.repo_id=Xense/taccap-g1-test-0722 \
     --dataset.single_task="Pick up the cube" \
     --dataset.num_episodes=2 \
     --dataset.fps=30 \
@@ -100,7 +116,7 @@ lerobot-record \
     --dataset.reset_time_s=30 \
     --dataset.streaming_encoding=true \
     --dataset.push_to_hub=false \
-    --display_data=true
+    --display_data=false
 ```
 
 ### Single (`taccap_gripper`)
