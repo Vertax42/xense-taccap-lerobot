@@ -294,7 +294,7 @@ install_xense() {
     # Install xensesdk runtime deps explicitly because the wheel is installed
     # with --no-deps below (keeps the shared Robostack env's numpy/opencv/
     # cryptography pins from being disturbed by the wheel's own constraints).
-    # The rebuilt 2.0.0 wheel added cypack/ormsgpack/cyclonedds-nightly as
+    # xensesdk 2.1.1 requires cypack/ormsgpack/cyclonedds-nightly as
     # mandatory runtime deps — cypack is the FIRST import in xensesdk/__init__.py
     # and ormsgpack/cyclonedds are needed by the ezros layer — so they must be
     # listed here or `import xensesdk` fails with ModuleNotFoundError.
@@ -313,8 +313,7 @@ install_xense() {
         "ormsgpack>=1.11.0" \
         "cyclonedds-nightly==2025.7.29" \
         "pyudev; platform_system=='Linux'"
-    # Install xensesdk 2.x. It is published to PyPI (cp312 manylinux wheel as of
-    # 2.0.1), so install by name — no more out-of-band wheel to fetch. The
+    # Install the validated xensesdk 2.1.1 release by name. The
     # published wheel bundles the patched libxense_c.so flash reader
     # (concurrent-connect EBADF fix), so no separate xense_xu / pyxensexu build
     # is needed. --no-deps keeps the shared Robostack env's numpy/opencv/
@@ -328,7 +327,7 @@ install_xense() {
         uv pip install --no-deps --force-reinstall "$XENSESDK_WHEEL"
     else
         echo "[xense] Installing xensesdk from PyPI..."
-        uv pip install --no-deps --upgrade "xensesdk>=2.0.0"
+        uv pip install --no-deps --upgrade "xensesdk==2.1.1"
     fi
     # xensesdk requires a specific av version
     uv pip install av==15.1.0
