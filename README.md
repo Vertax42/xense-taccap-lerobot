@@ -61,11 +61,12 @@ This repository uses `third_party/` git submodules to manage hardware SDK depend
 > The **XenseVR PC Service daemon** (what the Pico4 teleop/tracker talks to) is
 > likewise shipped as a separate ~100 MB Debian package (installs to
 > `/opt/apps/roboticsservice`). `setup_env.sh --install` installs it
-> automatically: it uses a local copy if present (`$XENSEVR_DEB`, repo `dist/`,
-> or `~/Downloads/`), otherwise **downloads the matching-arch asset** from the
+> automatically by **downloading the matching-arch asset** from the
 > [v0.1.0 release](https://github.com/Vertax42/XenseVR-PC-Service/releases/tag/v0.1.0)
 > (override the URL with `$XENSEVR_DEB_URL`), then runs `sudo dpkg -i`
-> (idempotent — same version is skipped). Start it with
+> (idempotent — same version is skipped). It no longer searches repo `dist/`
+> or `~/Downloads/`; set `$XENSEVR_DEB` only when you explicitly need an
+> offline or patched local package. Start it with
 > `/opt/apps/roboticsservice/runService.sh`.
 
 **Step 2:** 🐍 Create and activate the mamba environment:

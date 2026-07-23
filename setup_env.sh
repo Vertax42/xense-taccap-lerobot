@@ -193,11 +193,11 @@ PY
 
 # Install the XenseVR PC Service daemon from its .deb. The package (~100 MB) is
 # the binary service the Pico4 teleop/tracker talks to (installs to
-# /opt/apps/roboticsservice); it is NOT vendored in-repo. Resolution priority:
-#   1. $XENSEVR_DEB                                  (explicit path override)
-#   2. repo dist/ then ~/Downloads/...<arch>.deb     (local copy, no re-download)
-#   3. download the matching-arch asset from the GitHub release ($XENSEVR_DEB_URL
-#      overrides the default release URL)
+# /opt/apps/roboticsservice); it is NOT vendored in-repo. By default,
+# setup_env.sh downloads the matching-arch asset directly from the GitHub release
+# ($XENSEVR_DEB_URL overrides the default release URL).
+# $XENSEVR_DEB remains an explicit path override for offline/patched builds; no
+# implicit dist/ or ~/Downloads cache lookup is done.
 # Non-fatal: a failed/absent .deb only warns (the Python SDK still builds; the
 # service can be installed later). Idempotent: same installed version is skipped.
 install_xensevr_service() {
