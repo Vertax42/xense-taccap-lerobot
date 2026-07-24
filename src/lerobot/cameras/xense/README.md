@@ -15,23 +15,24 @@ The Xense tactile sensor provides rich tactile-visual information including:
 
 ### Prerequisites
 
-1. **Install the project environment** from the repository root:
+The canonical way to install `xensesdk` (plus its runtime deps and the env
+fix-ups) is `bash ./setup_env.sh --install` from the repo root — see the
+top-level README's **Installation** section. To install it standalone:
+
+1. **Install xensesdk** from PyPI (2.x, cp312 manylinux wheel):
    ```bash
-   bash ./setup_env.sh --mamba lerobot-xense
-   mamba activate lerobot-xense
-   bash ./setup_env.sh --install
+   mamba activate xense-taccap
+   uv pip install "xensesdk>=2.0.0"
    ```
 
-2. **Provide the xensesdk wheel before running `--install`**:
-   ```bash
-   export XENSESDK_WHEEL=/path/to/xensesdk-*-cp312-*-linux_x86_64.whl
-   bash ./setup_env.sh --install
-   ```
+   Inside the shared Robostack env, add `--no-deps` and provide the runtime
+   deps yourself so xensesdk's own pins (`cryptography==43.0.3`, `numpy<=2.2.4`)
+   don't disturb the env — `setup_env.sh --install` does this for you.
 
-   If `XENSESDK_WHEEL` is unset, the installer also checks `dist/` and
-   `~/Downloads/`. The wheel is not vendored in this repository; see the
-   [top-level installation guide](../../../../README.md#-installation) for the
-   current distribution notes.
+2. **Offline / patched build** — point pip at a local wheel instead of PyPI:
+   ```bash
+   uv pip install --no-deps --force-reinstall /path/to/xensesdk-*-cp312-*-linux_x86_64.whl
+   ```
 
 3. **Verify that xensesdk is importable**:
    ```bash

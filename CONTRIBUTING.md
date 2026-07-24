@@ -35,13 +35,14 @@ tracks upstream and intentionally stays slim.
 ```bash
 git clone --recurse-submodules https://github.com/Vertax42/xense-taccap-lerobot.git
 cd xense-taccap-lerobot
-bash ./setup_env.sh --mamba lerobot-xense
-mamba activate lerobot-xense
+bash ./setup_env.sh --mamba xense-taccap
+mamba activate xense-taccap
 bash ./setup_env.sh --install
 ```
 
-See the README's **Installation** section for the hardware SDK details (the
-`xensesdk` wheel and the XenseVR PC Service `.deb`, both fetched out-of-band).
+See the README's **Installation** section for the hardware SDK details
+(`xensesdk` installs from PyPI; the XenseVR PC Service `.deb` is fetched
+out-of-band).
 
 ## Code style & checks
 

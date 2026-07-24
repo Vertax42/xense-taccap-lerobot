@@ -50,35 +50,36 @@ This repository uses `third_party/` git submodules to manage hardware SDK depend
 | `third_party/XenseVR-PC-Service` | `xensevr_pc_service_sdk` (Pico4 teleop/tracker) |
 | `third_party/XenseVR-RobotVision-PC` | ZED-M → Pico4 stereo passthrough (built separately) |
 
-> `xensesdk` is **not** a submodule and is **not** vendored in-repo (it is a
-> ~90 MB binary wheel that bundles the patched `libxense_c.so` flash reader).
-> Obtain the wheel out-of-band and place it in `~/Downloads/` (or the repo
-> `dist/` dir), or point the installer at it with
+> `xensesdk` is **not** a submodule and is **not** vendored in-repo — it is
+> published to PyPI (cp312 manylinux wheel that bundles the patched
+> `libxense_c.so` flash reader). `setup_env.sh --install` installs it directly
+> with `uv pip install xensesdk` (pinned `--no-deps` to protect the Robostack
+> env's numpy/opencv/cryptography). For an offline or patched build, point the
+> installer at a local wheel instead with
 > `export XENSESDK_WHEEL=/path/to/xensesdk-*-cp312-*-linux_x86_64.whl`.
-> `setup_env.sh --install` picks it up automatically. Once `xensesdk` 2.x is
-> published to PyPI this step becomes a plain `pip install xensesdk`.
 
 > The **XenseVR PC Service daemon** (what the Pico4 teleop/tracker talks to) is
 > likewise shipped as a separate ~100 MB Debian package (installs to
 > `/opt/apps/roboticsservice`). `setup_env.sh --install` installs it
-> automatically: it uses a local copy if present (`$XENSEVR_DEB`, repo `dist/`,
-> or `~/Downloads/`), otherwise **downloads the matching-arch asset** from the
+> automatically by **downloading the matching-arch asset** from the
 > [v0.1.0 release](https://github.com/Vertax42/XenseVR-PC-Service/releases/tag/v0.1.0)
 > (override the URL with `$XENSEVR_DEB_URL`), then runs `sudo dpkg -i`
-> (idempotent — same version is skipped). Start it with
+> (idempotent — same version is skipped). It no longer searches repo `dist/`
+> or `~/Downloads/`; set `$XENSEVR_DEB` only when you explicitly need an
+> offline or patched local package. Start it with
 > `/opt/apps/roboticsservice/runService.sh`.
 
 **Step 2:** 🐍 Create and activate the mamba environment:
 
 ```bash
-bash ./setup_env.sh --mamba lerobot-xense
-mamba activate lerobot-xense
+bash ./setup_env.sh --mamba xense-taccap
+mamba activate xense-taccap
 ```
 
 > The default env name baked into `conda_environment.yaml` is
-> `lerobot-xense`. You can pass a different name to `--mamba`,
+> `xense-taccap`. You can pass a different name to `--mamba`,
 > but the rest of this README and the openpi project assume
-> `lerobot-xense`.
+> `xense-taccap`.
 
 **Step 3:** 📦 Install LeRobot-Xense and all hardware SDK bindings:
 
@@ -90,7 +91,7 @@ This step will:
 
 - Update the conda environment from `conda_environment.yaml`
 - Install the main package from `pyproject.toml`
-- Install `xensesdk` from the wheel resolved out-of-band (see the note above — `~/Downloads/`, repo `dist/`, or `$XENSESDK_WHEEL`)
+- Install `xensesdk` from PyPI (`uv pip install xensesdk`; see the note above — override with a local wheel via `$XENSESDK_WHEEL` for offline/patched builds)
 - Install the XenseVR PC Service daemon from its `.deb` (resolved out-of-band — see the note above), then build the `third_party` SDK packages: `xensevr_pc_service_sdk` (Pico4) and `xense.taccap` (TacCap UMI gripper)
 
 **Step 4:** ✅ Verify the installation:

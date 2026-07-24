@@ -193,11 +193,11 @@ PY
 
 # Install the XenseVR PC Service daemon from its .deb. The package (~100 MB) is
 # the binary service the Pico4 teleop/tracker talks to (installs to
-# /opt/apps/roboticsservice); it is NOT vendored in-repo. Resolution priority:
-#   1. $XENSEVR_DEB                                  (explicit path override)
-#   2. repo dist/ then ~/Downloads/...<arch>.deb     (local copy, no re-download)
-#   3. download the matching-arch asset from the GitHub release ($XENSEVR_DEB_URL
-#      overrides the default release URL)
+# /opt/apps/roboticsservice); it is NOT vendored in-repo. By default,
+# setup_env.sh downloads the matching-arch asset directly from the GitHub release
+# ($XENSEVR_DEB_URL overrides the default release URL).
+# $XENSEVR_DEB remains an explicit path override for offline/patched builds; no
+# implicit dist/ or ~/Downloads cache lookup is done.
 # Non-fatal: a failed/absent .deb only warns (the Python SDK still builds; the
 # service can be installed later). Idempotent: same installed version is skipped.
 install_xensevr_service() {
@@ -209,17 +209,17 @@ install_xensevr_service() {
     DEB_VER="0.1.0"
     DEB_URL="${XENSEVR_DEB_URL:-https://github.com/Vertax42/XenseVR-PC-Service/releases/download/v${DEB_VER}/XenseVR-PC-Service_${DEB_VER}_${ARCH}.deb}"
 
-    # 1. explicit override, else 2. a local copy (repo dist/ or ~/Downloads)
     DEB="${XENSEVR_DEB:-}"
-    if [[ -z "$DEB" ]]; then
-        DEB="$(ls -1 "$PROJECT_ROOT"/dist/[Xx]ense[Vv][Rr]-PC-Service_*_"${ARCH}".deb \
-                      "$HOME"/Downloads/[Xx]ense[Vv][Rr]-PC-Service_*_"${ARCH}".deb \
-               2>/dev/null | head -n1)"
-    fi
-    # 3. no local copy -> download the matching-arch asset from the release
-    if [[ -z "$DEB" || ! -f "$DEB" ]]; then
-        DEB="$HOME/Downloads/XenseVR-PC-Service_${DEB_VER}_${ARCH}.deb"
-        echo "  No local .deb found; downloading ${ARCH} asset from:"
+    if [[ -n "$DEB" ]]; then
+        if [[ ! -f "$DEB" ]]; then
+            echo "  WARN: XENSEVR_DEB points to a missing file: $DEB"
+            echo "  WARN: skipping service install."
+            return 0
+        fi
+        echo "  Using explicit .deb override: $DEB"
+    else
+        DEB="${TMPDIR:-/tmp}/XenseVR-PC-Service_${DEB_VER}_${ARCH}.deb"
+        echo "  Downloading ${ARCH} asset from:"
         echo "    $DEB_URL"
         if ! curl -fL "$DEB_URL" -o "$DEB"; then
             echo "  WARN: download failed — skipping service install."
@@ -286,39 +286,15 @@ install_pico4() {
 install_xense() {
     echo ""
     echo "══════════════════════════════════════════"
-    echo " xensesdk (vendored wheel)"
+    echo " xensesdk (PyPI)"
     echo "══════════════════════════════════════════"
-
-    # Resolve the xensesdk wheel. The wheel is no longer vendored in-repo (it is
-    # a ~90 MB binary); fetch it out-of-band and point the installer at it.
-    # Priority:
-    #   1. $XENSESDK_WHEEL  (explicit override)
-    #   2. dist/*.whl       (legacy in-repo location, if you drop one there)
-    #   3. ~/Downloads/xensesdk-*.whl  (current distribution channel)
-    # TODO: once xensesdk 2.x is published to PyPI, replace this whole block with
-    #       `uv pip install xensesdk`.
-    local WHEEL="${XENSESDK_WHEEL:-}"
-    if [[ -z "$WHEEL" ]]; then
-        WHEEL="$(ls -1 "$PROJECT_ROOT"/dist/xensesdk-*-cp312-*-linux_x86_64.whl \
-                        "$HOME"/Downloads/xensesdk-*-cp312-*-linux_x86_64.whl \
-                 2>/dev/null | head -n1)"
-    fi
-
-    if [[ -z "$WHEEL" || ! -f "$WHEEL" ]]; then
-        echo "ERROR: xensesdk wheel not found."
-        echo "  Put xensesdk-<ver>-cp312-...-linux_x86_64.whl in ~/Downloads/ (or the"
-        echo "  repo dist/ dir), or set XENSESDK_WHEEL=/path/to/wheel, then re-run."
-        echo "  (Once xensesdk is on PyPI: 'uv pip install xensesdk' instead.)"
-        return 1
-    fi
-    echo "[xense] Using wheel: $WHEEL"
 
     fix_udev_discovery
 
     # Install xensesdk runtime deps explicitly because the wheel is installed
     # with --no-deps below (keeps the shared Robostack env's numpy/opencv/
     # cryptography pins from being disturbed by the wheel's own constraints).
-    # The rebuilt 2.0.0 wheel added cypack/ormsgpack/cyclonedds-nightly as
+    # xensesdk 2.1.1 requires cypack/ormsgpack/cyclonedds-nightly as
     # mandatory runtime deps — cypack is the FIRST import in xensesdk/__init__.py
     # and ormsgpack/cyclonedds are needed by the ezros layer — so they must be
     # listed here or `import xensesdk` fails with ModuleNotFoundError.
@@ -337,10 +313,22 @@ install_xense() {
         "ormsgpack>=1.11.0" \
         "cyclonedds-nightly==2025.7.29" \
         "pyudev; platform_system=='Linux'"
-    # Install xensesdk 2.0 from the resolved wheel. It bundles the patched
-    # libxense_c.so flash reader (concurrent-connect EBADF fix), so no separate
-    # xense_xu / pyxensexu build is needed. --no-deps keeps numpy 1.26.x.
-    uv pip install --no-deps --force-reinstall "$WHEEL"
+    # Install the validated xensesdk 2.1.1 release by name. The
+    # published wheel bundles the patched libxense_c.so flash reader
+    # (concurrent-connect EBADF fix), so no separate xense_xu / pyxensexu build
+    # is needed. --no-deps keeps the shared Robostack env's numpy/opencv/
+    # cryptography pins: xensesdk's own metadata hard-pins cryptography==43.0.3 /
+    # numpy<=2.2.4, which would otherwise fight the env (the explicit runtime
+    # deps installed above already cover what it needs at runtime).
+    # For an offline or patched build, set XENSESDK_WHEEL=/path/to/xensesdk-*.whl
+    # to install that file instead of pulling from PyPI.
+    if [[ -n "${XENSESDK_WHEEL:-}" && -f "${XENSESDK_WHEEL}" ]]; then
+        echo "[xense] Installing xensesdk from override wheel: $XENSESDK_WHEEL"
+        uv pip install --no-deps --force-reinstall "$XENSESDK_WHEEL"
+    else
+        echo "[xense] Installing xensesdk from PyPI..."
+        uv pip install --no-deps --upgrade "xensesdk==2.1.1"
+    fi
     # xensesdk requires a specific av version
     uv pip install av==15.1.0
 
@@ -434,7 +422,7 @@ install_taccap() {
 if [[ -n "$2" ]]; then
     ENV_NAME="$2"
 else
-    ENV_NAME="lerobot-xense"
+    ENV_NAME="xense-taccap"
 fi
 
 # Check if the --conda parameter is passed
@@ -479,12 +467,30 @@ elif [[ "$1" == "--install" ]]; then
     fi
     ENV_NAME=${CONDA_DEFAULT_ENV}
 
-    # Detect conda/mamba command
-    if [ -f "$HOME/miniforge3/etc/profile.d/conda.sh" ]; then
+    # Detect the manager that owns the *currently active* environment, and drive
+    # every env operation below (env update + the taccap `install` in
+    # install_taccap) with it. mamba is preferred whenever the active install
+    # ships it — it is faster and is the intended solver for the robostack stack
+    # this env is built on — with conda as the fallback.
+    #
+    # We key off MAMBA_EXE/CONDA_EXE (exported by the shell hook of the active
+    # base) rather than a bare `-f ~/miniforge3/...` check, which mis-detects a
+    # mambaforge install (`~/mambaforge`) as conda and force-picks mamba whenever
+    # ~/miniforge3 merely exists — even for an active anaconda3 env.
+    if [[ -n "${MAMBA_EXE:-}" ]] && command -v mamba &>/dev/null; then
+        CONDA_CMD="mamba"                                  # miniforge / mambaforge
+    elif [[ -n "${CONDA_EXE:-}" && -x "$(dirname "$CONDA_EXE")/mamba" ]]; then
+        CONDA_CMD="mamba"                                  # mamba beside active conda
+    elif command -v mamba &>/dev/null; then
         CONDA_CMD="mamba"
-    else
+    elif command -v conda &>/dev/null; then
         CONDA_CMD="conda"
+    else
+        echo "[ERROR] Neither 'mamba' nor 'conda' is available on PATH."
+        echo "        Activate your environment (conda/mamba activate <env>) and retry."
+        exit 1
     fi
+    echo "[INFO] Using '$CONDA_CMD' to manage environment '$ENV_NAME'."
 
     echo "[INFO] Updating conda environment '$ENV_NAME' from: $CONDA_ENV_FILE"
     if ! $CONDA_CMD env update -f "$CONDA_ENV_FILE" -n "$ENV_NAME"; then
