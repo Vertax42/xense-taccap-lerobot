@@ -7,3 +7,6 @@
 [submodule "third_party/XenseVR-RobotVision-PC"]
 	path = third_party/XenseVR-RobotVision-PC
 	url = git@github.com:Vertax42/XenseVR-RobotVision-PC.git
+[submodule "third_party/insight9-python-interface"]
+	path = third_party/insight9-python-interface
+	url = git@192.168.1.61:physical-ai/grippersdk/insight9-python-interface.git

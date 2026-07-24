@@ -29,6 +29,8 @@ Observation features (per side ``{s}`` in left/right):
     {s}_imu.accel/gyro/mag.{x,y,z}  -- optional
     {s}_wrist                       -- wrist UVC frame (if enable_wrist_camera)
     {s}_tactile_left / {s}_tactile_right -- tactile frames (sensor on left/right finger)
+    head_rgb                        -- Insight9 RGB (if enable_head_camera)
+    head_camera.x/y/z/r1..r6        -- Insight9-frame raw VIO pose
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ from typing import Any
 
 import numpy as np
 
+from lerobot.cameras.insight9 import Insight9Camera, Insight9CameraConfig
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.cameras.xense.configuration_xense import XenseTactileCameraConfig
@@ -117,13 +120,14 @@ class BiTaccapGripper(Robot):
         self._gripper: dict[str, Any] = {s: None for s in _SIDES}  # Leader/FollowerGripper
         self._endpoints: dict[str, Any] = {s: None for s in _SIDES}  # GripperEndpoints
         self._tracker: dict[str, Pico4TrackerReader | None] = {s: None for s in _SIDES}
-
         # Auto-discover tactile + wrist cameras and build their configs so the
         # observation schema is ready before connect(). Tactiles are paired to a
         # gripper by USB hub, so this scans the serial bus (grippers must be
         # powered at construction); wrist cameras are filesystem-only.
         self._camera_configs = self._discover_camera_configs()
         self.cameras = make_cameras_from_configs(self._camera_configs)
+        head_camera = self.cameras.get("head_rgb")
+        self._head_camera = head_camera if isinstance(head_camera, Insight9Camera) else None
 
         # Auto-discover the Pico4 motion tracker(s): enumerate from the XenseVR PC
         # service and assign one per side by serial (second-to-last digit, strict).
@@ -187,6 +191,17 @@ class BiTaccapGripper(Robot):
                     height=self.config.wrist_camera_height,
                     fps=self.config.wrist_camera_fps,
                 )
+
+        if self.config.enable_head_camera:
+            configs["head_rgb"] = Insight9CameraConfig(
+                library_path=self.config.head_camera_library_path,
+                width=self.config.head_camera_width,
+                height=self.config.head_camera_height,
+                fps=self.config.head_camera_fps,
+                startup_timeout_s=self.config.head_camera_startup_timeout_s,
+                stale_after_s=self.config.head_camera_stale_after_s,
+                stale_timeout_s=self.config.head_camera_stale_timeout_s,
+            )
         return configs
 
     # ------------------------------------------------------------------ schema
@@ -206,6 +221,10 @@ class BiTaccapGripper(Robot):
                     features[f"{side}_imu.accel.{axis}"] = float
                     features[f"{side}_imu.gyro.{axis}"] = float
                     features[f"{side}_imu.mag.{axis}"] = float
+
+        if self.config.enable_head_camera:
+            for key in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"):
+                features[f"head_camera.{key}"] = float
 
         # Tactile + wrist cameras (keys already left_/right_ prefixed).
         for cam_name, cam_cfg in self._camera_configs.items():
@@ -409,7 +428,19 @@ class BiTaccapGripper(Robot):
                 except Exception as e:
                     self.logger.warn(f"  [{side}] IMU read failed: {e}")
 
+        if self._head_camera is not None:
+            head = self._head_camera.read_snapshot_latest()
+            obs["head_rgb"] = head.rgb
+            for axis, value in zip(("x", "y", "z"), head.vio_position, strict=True):
+                obs[f"head_camera.{axis}"] = value
+            for key, value in zip(
+                ("r1", "r2", "r3", "r4", "r5", "r6"), head.vio_rotation_6d, strict=True
+            ):
+                obs[f"head_camera.{key}"] = float(value)
+
         for cam_name, cam in self.cameras.items():
+            if cam_name == "head_rgb":
+                continue
             obs[cam_name] = cam.async_read()
 
         return obs

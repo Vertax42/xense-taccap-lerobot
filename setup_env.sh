@@ -416,6 +416,33 @@ install_taccap() {
     echo "[taccap] Done. Verify with: python -c 'import xense.taccap; print(xense.taccap.__file__)'"
 }
 
+# ── Hardware module: Insight9 head camera ------------------------------------
+
+install_insight9() {
+    echo ""
+    echo "══════════════════════════════════════════"
+    echo " Insight9 Python interface"
+    echo "══════════════════════════════════════════"
+
+    local SDK_DIR="$PROJECT_ROOT/third_party/insight9-python-interface"
+    if [[ ! -f "$SDK_DIR/pyproject.toml" ]]; then
+        echo "ERROR: $SDK_DIR not found (submodule not initialized)."
+        echo "  Run: git submodule update --init third_party/insight9-python-interface"
+        return 1
+    fi
+
+    uv pip install -e "$SDK_DIR" --no-deps
+
+    python - <<'PY'
+from insight9_native import find_library
+from insight9_umi_camera import Insight9HeadCamera
+
+print("Insight9HeadCamera ->", Insight9HeadCamera)
+print("libinsight9.so ->", find_library())
+PY
+    echo "[insight9] Done. Device/HID readiness: insight9-check-env --hidraw"
+}
+
 # ── Argument parsing ──────────────────────────────────────────────────────────
 
 # Check if an environment name is provided
@@ -566,6 +593,7 @@ elif [[ "$1" == "--install" ]]; then
     ( install_pico4 ) || echo "[WARN] pico4 installation skipped or failed (see above)"
     install_xense     || echo "[WARN] xense installation skipped or failed (see above)"
     install_taccap    || echo "[WARN] taccap installation skipped or failed (see above)"
+    install_insight9  || echo "[WARN] insight9 installation skipped or failed (see above)"
 
 
     # ── Post-install verification ────────────────────────────────────────────
@@ -584,6 +612,7 @@ xensevr_pc_service_sdk|import importlib.metadata as M, xensevr_pc_service_sdk; p
 xensesdk|import importlib.metadata as M, xensesdk; print("v"+M.version("xensesdk"), "->", xensesdk.__file__)
 xensesdk flash|from xensesdk.flash.linux_backend import LinuxFlashBackend; print("available" if LinuxFlashBackend().available else "NOT available")
 taccap-gripper|import importlib.metadata as M, xense.taccap; print("v"+M.version("taccap-gripper"), "->", xense.taccap.__file__)
+insight9-python-interface|import importlib.metadata as M; from insight9_native import find_library; print("v"+M.version("insight9-python-interface"), "->", find_library())
 VERIFY
 
     echo ""
