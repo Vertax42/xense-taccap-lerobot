@@ -34,6 +34,11 @@ top-level README's **Installation** section. To install it standalone:
    uv pip install --no-deps --force-reinstall /path/to/xensesdk-*-cp312-*-linux_x86_64.whl
    ```
 
+3. **Verify that xensesdk is importable**:
+   ```bash
+   python -c 'import xensesdk; print("xensesdk OK ->", xensesdk.__file__)'
+   ```
+
 ## Quick Start
 
 ### 1. Find Available Sensors
@@ -106,30 +111,49 @@ XenseOutputType.MESH_3D_INIT     # shape=(35, 20, 3), initial mesh
 XenseOutputType.MESH_3D_FLOW     # shape=(35, 20, 3), deformation vector
 ```
 
-## Testing
+## Hardware Validation
 
-### Simple Test
+### Discover Connected Sensors
 ```bash
-python test_xense_simple.py
+python - <<'PY'
+from lerobot.cameras.xense import XenseTactileCamera
+
+for sensor in XenseTactileCamera.find_cameras():
+    print(sensor)
+PY
 ```
 
-This will:
-1. Find available sensors
-2. Connect to the first sensor
-3. Test synchronous reading (5 frames)
-4. Test asynchronous reading (10 frames)
-5. Measure FPS performance
+This uses the same `Sensor.scanSerialNumber()` path as the camera wrapper.
 
-### Full Test Suite
+### Read a Few Frames
 ```bash
-python test_xense_camera.py
+python - <<'PY'
+from lerobot.cameras.xense import XenseOutputType, XenseTactileCamera, XenseTactileCameraConfig
+
+sensors = XenseTactileCamera.find_cameras()
+if not sensors:
+    raise SystemExit("No Xense tactile sensors found.")
+
+camera = XenseTactileCamera(
+    XenseTactileCameraConfig(
+        serial_number=sensors[0]["serial_number"],
+        fps=30,
+        output_types=[XenseOutputType.DIFFERENCE],
+    )
+)
+camera.connect()
+try:
+    for _ in range(5):
+        frame = camera.read()
+        print(frame.shape, frame.dtype)
+finally:
+    camera.disconnect()
+PY
 ```
 
-Choose from:
-1. Synchronous reading test
-2. Asynchronous reading test
-3. Dual sensor test (bimanual)
-4. Run all tests
+For interactive SDK viewer examples, use the checked-in scripts
+`example1.py`, `example2.py`, `example_all_function.py`, or `example_remote.py`
+after replacing the hard-coded serial number with your device serial.
 
 ## Integration with BiARX5 Robot
 
@@ -267,18 +291,23 @@ XenseTactileCameraConfig(
 
 ### Import Error: "No module named 'xensesdk'"
 ```bash
-uv pip install xensesdk
+bash ./setup_env.sh --install
 ```
 
+`xensesdk` is currently installed from a local wheel resolved by
+`XENSESDK_WHEEL`, `dist/`, or `~/Downloads/`.
+
 ### Missing Dependencies
-Install all required packages:
+Re-run the installer in the activated `lerobot-xense` environment. It installs
+the runtime dependencies required by the xensesdk wheel.
+
 ```bash
-uv pip install cypack cryptography pyudev assimp_py==1.0.7 qtpy PyQt5 h5py lz4
+bash ./setup_env.sh --install
 ```
 
 ### Sensor Not Found
 - Check USB connection
-- Run `Sensor.getXenseDeviceList()` to see available devices
+- Run `XenseTactileCamera.find_cameras()` to see available devices
 - Verify serial number matches your sensor
 
 ### Qt Platform Plugin Issues
@@ -309,13 +338,14 @@ Main camera class implementing the Camera interface.
 
 ## Examples
 
-See the test scripts for complete examples:
-- `test_xense_simple.py`: Basic functionality test
-- `test_xense_camera.py`: Comprehensive test suite
+See the checked-in example scripts for complete examples:
+- `example1.py`: Local SDK viewer using a single sensor
+- `example2.py`: Local SDK viewer variant for a second hard-coded serial
+- `example_all_function.py`: Local viewer with force, marker, depth, and image outputs
+- `example_remote.py`: Remote-service viewer using `xensesdk.call_service`
 
 ## Support
 
 For Xense SDK issues, contact: qjrobot9966 (WeChat)
 
 For LeRobot integration issues, see the main LeRobot documentation.
-
