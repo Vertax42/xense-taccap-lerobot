@@ -33,6 +33,7 @@ Observation features (per side ``{s}`` in left/right):
 
 from __future__ import annotations
 
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import cached_property
 from typing import Any
@@ -54,6 +55,16 @@ from ..taccap_gripper.taccap_gripper import (
 from .config_bi_taccap_gripper import BiTaccapGripperConfig
 
 _SIDES = ("left", "right")
+
+# Freeze timeout for graceful degradation. If a camera's ``async_read`` keeps
+# returning the *same* frame object for this long, the stream is treated as
+# physically lost. This covers Xense tactile sensors, whose background read
+# thread survives a hot-unplug (it only stops on ``DeviceNotConnectedError``)
+# and whose ``async_read`` restarts the thread and returns the last cached
+# frame forever without raising — unlike the OpenCV wrist camera, which raises
+# once its read thread dies. Keep this well above the slowest camera's frame
+# interval so a sensor-slower-than-the-sample-loop rate mismatch never trips it.
+_CAM_FREEZE_TIMEOUT_S = 2.0
 
 # ---- TacCap-Gripper SDK -----------------------------------------------------
 try:
@@ -148,6 +159,9 @@ class BiTaccapGripper(Robot):
         # so the caller can stop cleanly and save what was recorded.
         self._last_cam_frame: dict[str, np.ndarray] = {}
         self._lost_cameras: set[str] = set()
+        # Monotonic time each camera last produced a genuinely new frame object,
+        # used to detect a frozen (non-raising) stream — see _read_camera_or_fallback.
+        self._last_new_frame_t: dict[str, float] = {}
 
     # ------------------------------------------------------------------ discovery
 
@@ -431,27 +445,61 @@ class BiTaccapGripper(Robot):
     def _read_camera_or_fallback(self, cam_name: str, cam: Any) -> np.ndarray:
         """Read one camera, degrading gracefully on physical loss.
 
-        A hot-unplugged camera (USB drop / hub power loss) makes its background
-        read thread die; the next ``async_read`` raises ``RuntimeError`` ("read
-        thread is not running"). Letting that propagate crashes the record loop
-        and loses the in-progress episode. Instead we substitute the last good
-        frame (or a black frame on first-read loss), flag the camera as lost so
-        ``device_lost`` trips, and let the caller stop cleanly and save.
+        Two distinct loss modes are handled, because the camera classes behave
+        differently on a hot-unplug:
 
-        ``TimeoutError`` (a transient slow/dropped frame) is treated the same way
+        * **Read raises** — an OpenCV/UVC wrist camera's background thread dies
+          after repeated failures and the next ``async_read`` raises
+          ``RuntimeError`` ("read thread is not running"). Letting that propagate
+          crashes the record loop and loses the in-progress episode.
+        * **Read freezes** — a Xense tactile sensor keeps its background thread
+          alive on error (it only stops on ``DeviceNotConnectedError``) and its
+          ``async_read`` restarts the thread and returns the *same* cached frame
+          object indefinitely, so an unplug never raises. We detect this by
+          watching for a genuinely new frame object; if none arrives within
+          ``_CAM_FREEZE_TIMEOUT_S`` the stream is treated as lost. Without this,
+          recording would silently continue writing stale tactile frames.
+
+        In both cases we substitute the last good frame (or a black frame on
+        first-read loss), flag the camera as lost so ``device_lost`` trips, and
+        let the caller stop cleanly and save.
+
+        ``TimeoutError`` (a transient slow/dropped frame) reuses the last frame
         but is NOT flagged as lost — those recover on their own."""
+        now = time.monotonic()
         try:
             frame = cam.async_read()
-            self._last_cam_frame[cam_name] = frame
-            return frame
         except TimeoutError as e:
             self.logger.warning(f"  [{cam_name}] frame timeout, reusing last frame: {e}")
             return self._fallback_frame(cam_name)
         except Exception as e:
-            if cam_name not in self._lost_cameras:
-                self.logger.error(f"  [{cam_name}] camera lost mid-episode: {e}")
-                self._lost_cameras.add(cam_name)
+            self._flag_lost(cam_name, f"camera lost mid-episode: {e}")
             return self._fallback_frame(cam_name)
+
+        # Freeze detection: a live stream yields a fresh array each frame; a
+        # frozen one returns the identical cached object every call. Only reset
+        # the clock on a genuinely new object, so a sensor slower than the sample
+        # loop (which legitimately re-reads one frame) does not trip it.
+        prev = self._last_cam_frame.get(cam_name)
+        if prev is None or frame is not prev:
+            self._last_new_frame_t[cam_name] = now
+        else:
+            frozen_for = now - self._last_new_frame_t.get(cam_name, now)
+            if frozen_for > _CAM_FREEZE_TIMEOUT_S:
+                self._flag_lost(
+                    cam_name,
+                    f"no new frame for {frozen_for:.1f}s (stream frozen, sensor likely unplugged)",
+                )
+
+        self._last_cam_frame[cam_name] = frame
+        return frame
+
+    def _flag_lost(self, cam_name: str, reason: str) -> None:
+        """Mark a camera as physically lost so ``device_lost`` trips. Idempotent;
+        logs once per camera."""
+        if cam_name not in self._lost_cameras:
+            self.logger.error(f"  [{cam_name}] {reason}")
+            self._lost_cameras.add(cam_name)
 
     def _fallback_frame(self, cam_name: str) -> np.ndarray:
         """Last good frame for this camera, or a black frame of the declared
