@@ -29,8 +29,8 @@ Observation features (per side ``{s}`` in left/right):
     {s}_imu.accel/gyro/mag.{x,y,z}  -- optional
     {s}_wrist                       -- wrist UVC frame (if enable_wrist_camera)
     {s}_tactile_left / {s}_tactile_right -- tactile frames (sensor on left/right finger)
-    head_rgb                        -- Insight9 RGB (if enable_head_camera)
-    head_camera.x/y/z/r1..r6        -- Insight9-frame raw VIO pose
+    head_rgb                        -- Insight RGB (if enable_head_camera)
+    head_camera.x/y/z/r1..r6        -- Insight-frame raw VIO pose
 """
 
 from __future__ import annotations

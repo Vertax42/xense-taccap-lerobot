@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""LeRobot camera adapter for the multimodal Insight9 head camera."""
+"""LeRobot camera adapter for the multimodal Insight head camera."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ class InsightSnapshot:
 
 
 class InsightCamera(Camera):
-    """Own the Insight9 SDK once and expose RGB plus raw VIO snapshots.
+    """Own the Insight SDK once and expose RGB plus raw VIO snapshots.
 
     The generic Camera methods return RGB only. ``read_snapshot_latest`` is the
     API used by ``BiTaccapGripper`` so RGB and VIO are sampled together without
@@ -134,7 +134,7 @@ class InsightCamera(Camera):
                 last_error = str(e)
             time.sleep(0.02)
         raise ConnectionError(
-            "Insight9 did not produce a complete decodable RGB/VIO sample within "
+            "Insight did not produce a complete decodable RGB/VIO sample within "
             f"{self.config.startup_timeout_s:.1f}s: {last_error}. Check native/UVC mode, "
             "USB bandwidth, and /dev/hidraw* permissions."
         )
@@ -151,11 +151,11 @@ class InsightCamera(Camera):
     def read_latest(self, max_age_ms: int = 500) -> NDArray[np.uint8]:
         snapshot = self.read_snapshot_latest()
         if self._last_good_color is None:
-            raise RuntimeError("no decodable Insight9 RGB frame received yet")
+            raise RuntimeError("no decodable Insight RGB frame received yet")
         age_ms = _age_seconds(time.time_ns(), self._last_good_color.host_time_ns) * 1000
         if age_ms > max_age_ms:
             raise TimeoutError(
-                f"Insight9 RGB cache is {age_ms:.1f}ms old (limit={max_age_ms}ms)."
+                f"Insight RGB cache is {age_ms:.1f}ms old (limit={max_age_ms}ms)."
             )
         return snapshot.rgb
 
@@ -180,9 +180,9 @@ class InsightCamera(Camera):
                 self._warn_decode(error)
 
         if self._last_good_rgb is None or self._last_good_color is None:
-            raise RuntimeError("no decodable Insight9 RGB frame received yet")
+            raise RuntimeError("no decodable Insight RGB frame received yet")
         if self._last_vio is None:
-            raise RuntimeError("no Insight9 VIO sample received yet")
+            raise RuntimeError("no Insight VIO sample received yet")
 
         color_age_s = _age_seconds(sample_host_time_ns, self._last_good_color.host_time_ns)
         vio_age_s = _age_seconds(sample_host_time_ns, self._last_vio.host_time_ns)
@@ -238,7 +238,7 @@ class InsightCamera(Camera):
     def _warn_decode(self, error: str) -> None:
         now = time.monotonic()
         if now - self._last_decode_warning_t >= 1.0:
-            self.logger.warn(f"Insight9 RGB decode failed; holding last good frame: {error}")
+            self.logger.warn(f"Insight RGB decode failed; holding last good frame: {error}")
             self._last_decode_warning_t = now
 
     def _warn_if_stale(self, ages: tuple[float, float]) -> None:
@@ -248,7 +248,7 @@ class InsightCamera(Camera):
         if now - self._last_stale_warning_t < 1.0:
             return
         self.logger.warn(
-            "Insight9 latest cache is stale: "
+            "Insight latest cache is stale: "
             f"rgb={ages[0]:.3f}s vio={ages[1]:.3f}s "
             f"threshold={self.config.stale_after_s:.3f}s"
         )
@@ -263,7 +263,7 @@ class InsightCamera(Camera):
         if not stale_streams:
             return
         raise TimeoutError(
-            "Insight9 head data stopped updating; aborting recording: "
+            "Insight head data stopped updating; aborting recording: "
             f"{' '.join(stale_streams)} limit={self.config.stale_timeout_s:.3f}s"
         )
 
