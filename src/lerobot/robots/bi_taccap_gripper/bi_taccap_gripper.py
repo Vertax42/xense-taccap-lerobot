@@ -218,6 +218,7 @@ class BiTaccapGripper(Robot):
                 library_path=self.config.head_camera_library_path,
                 width=self.config.head_camera_width,
                 height=self.config.head_camera_height,
+                crop_bias=self.config.head_camera_crop_bias,
                 fps=self.config.head_camera_fps,
                 startup_timeout_s=self.config.head_camera_startup_timeout_s,
                 stale_after_s=self.config.head_camera_stale_after_s,

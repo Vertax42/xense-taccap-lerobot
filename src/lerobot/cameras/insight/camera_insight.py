@@ -24,6 +24,7 @@ from typing import Any
 
 import cv2
 import numpy as np
+from pyinsight.rgbview import to_landscape
 from numpy.typing import NDArray
 
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
@@ -31,6 +32,13 @@ from lerobot.utils.robot_utils import get_logger, quaternion_to_rotation_6d
 
 from ..camera import Camera
 from .configuration_insight import InsightCameraConfig
+
+# The RGB sensor has exactly one mode - confirmed in the USB descriptors, which
+# advertise a single frame descriptor, and in ROS native mode, which exposes
+# nothing extra. It is portrait, and the scene is already upright in it, so the
+# landscape frames the dataset stores are cropped out of the tall frame rather
+# than rotated.
+SENSOR_WIDTH, SENSOR_HEIGHT = 1088, 1920
 
 
 @dataclass(frozen=True)
@@ -213,14 +221,19 @@ class InsightCamera(Camera):
         if bgr is None:
             return None, "cv2.imdecode returned None"
 
-        expected_shape = (int(self.height), int(self.width), 3)
-        if bgr.shape != expected_shape:
+        if bgr.shape[:2] != (SENSOR_HEIGHT, SENSOR_WIDTH):
             raise RuntimeError(
-                "Insight9 RGB shape does not match the configured dataset schema: "
-                f"actual={bgr.shape}, expected={expected_shape}. Update head_camera_width/height; "
-                "the adapter intentionally does not write resolution settings to the device."
+                "Insight RGB sensor frame is not the expected size: "
+                f"actual={bgr.shape[:2]}, expected={(SENSOR_HEIGHT, SENSOR_WIDTH)}. "
+                "This camera has exactly one RGB mode, so a change here means different "
+                "hardware or firmware, and the cropped field of view would no longer match "
+                "previously recorded episodes."
             )
-        return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), ""
+
+        # Crop before the colour conversion - it is a third of the pixels.
+        view = to_landscape(bgr, (int(self.width), int(self.height)),
+                            bias=self.config.crop_bias)
+        return cv2.cvtColor(view, cv2.COLOR_BGR2RGB), ""
 
     def _warn_decode(self, error: str) -> None:
         now = time.monotonic()
