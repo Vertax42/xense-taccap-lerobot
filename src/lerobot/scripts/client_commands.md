@@ -30,11 +30,22 @@ readable/writable.
 taccap teleoperator, so **no `--teleop` is required**. `lerobot-teleoperate` just streams
 `get_observation()` to Rerun.
 
-With the tracker on, the viewer adds a **3D pose + breadcrumb trajectory** view (`/world`):
-each gripper is a labelled marker at its live Pico4 pose, trailing the path it has swept —
-the same effect as the SDK's `rerun_dual_with_tracker.py` example. It is **on by default**
-under `--display_data=true`; add `--show_trajectory=false` to suppress it (or it auto-skips
-when `--robot.enable_tracker=false`, since there is no pose to draw). Same flag on `lerobot-record`.
+`--display_data=true` applies a blueprint rather than letting Rerun auto-lay-out, which
+would give a tactile pad the same screen area as the head camera. The layout adapts to what
+the rig actually reports:
+
+- **Left, largest**: `head_rgb` when the head camera is on, otherwise the 3D trajectory view.
+- **Right**: the 3D view (when the head camera took the left slot), then the wrist cameras,
+  then the tactile pads in their own grid.
+- **Bottom**: scalars split into tabs by unit — `gripper.pos`, head VIO position, head VIO
+  rotation, tcp pose, imu. One shared plot would be unreadable, since metres, unit-length
+  rotation components and accelerations do not share an axis.
+
+With the tracker on, the 3D view (`/world`) shows each gripper as a labelled marker at its
+live Pico4 pose, trailing the path it has swept — the same effect as the SDK's
+`rerun_dual_with_tracker.py` example. It is **on by default**; `--show_trajectory=false`
+drops that view only, leaving the rest of the layout in place, and it auto-skips when
+`--robot.enable_tracker=false` since there is no pose to draw. Same flag on `lerobot-record`.
 
 ### Bimanual (`bi_taccap_gripper`)
 

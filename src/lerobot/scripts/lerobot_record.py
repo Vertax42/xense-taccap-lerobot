@@ -457,8 +457,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
         # 3D pose + trajectory overlay (no-op if the device emits no tcp.* poses).
         traj_viz = None
-        if cfg.display_data and cfg.show_trajectory:
-            traj_viz = TaccapTrajectoryViz(robot.observation_features)
+        if cfg.display_data:
+            traj_viz = TaccapTrajectoryViz(
+                robot.observation_features, show_trajectory=cfg.show_trajectory
+            )
             if traj_viz.active:
                 traj_viz.setup()
             else:

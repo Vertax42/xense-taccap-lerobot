@@ -76,9 +76,14 @@ class TaccapTrajectoryViz:
         observation_features: dict[str, Any],
         trail_max: int = 300,
         signals: str = "all",
+        show_trajectory: bool = True,
     ) -> None:
         self._obs_features = dict(observation_features)
         self._trail_max = trail_max
+        # Suppresses the 3D pose trail only. The rest of the layout still
+        # applies, because this class owns the whole blueprint - gating it off
+        # here would drop the viewer back to auto-layout.
+        self._show_trajectory = show_trajectory
         # Which scalars the time-series panel shows: ``"all"`` (gripper.pos +
         # tcp.* + imu.*) or ``"gripper"`` (only the jaw position channel(s)).
         self._signals = signals
@@ -99,9 +104,29 @@ class TaccapTrajectoryViz:
         self._static_logged: set[str] = set()
 
     @property
+    def has_poses(self) -> bool:
+        """True when a tracker pose should be drawn in 3D."""
+        return bool(self._sides) and self._show_trajectory
+
+    @property
     def active(self) -> bool:
-        """True only when at least one side carries a tracker pose to draw."""
-        return bool(self._sides)
+        """True when there is anything worth laying out.
+
+        Poses are not required. Without a tracker there is no 3D trail, but the
+        cameras and scalars still benefit from a deliberate layout - and if this
+        returned False there, no blueprint would be sent at all and Rerun would
+        fall back to auto-layout, which scatters seven camera streams and thirty
+        scalars across equally-sized tiles.
+        """
+        return bool(self._sides) or bool(self._image_keys()) or bool(self._scalar_keys())
+
+    # ------------------------------------------------------------ key grouping
+
+    def _image_keys(self) -> list[str]:
+        return [k for k, v in self._obs_features.items() if isinstance(v, tuple)]
+
+    def _scalar_keys(self) -> list[str]:
+        return [k for k, v in self._obs_features.items() if not isinstance(v, tuple)]
 
     # ------------------------------------------------------------------ setup
 
@@ -113,7 +138,8 @@ class TaccapTrajectoryViz:
         """
         if not self.active:
             return
-        self._log_world_static()
+        if self.has_poses:
+            self._log_world_static()
         try:
             rr.send_blueprint(self._build_blueprint())
         except Exception as e:  # pragma: no cover — viewer-side, never fatal
@@ -142,45 +168,99 @@ class TaccapTrajectoryViz:
         )
 
     def _build_blueprint(self) -> rrb.Blueprint:
-        # line_grid=False drops Rerun's built-in 3D floor grid (we only want the
-        # origin axes + gripper markers + trajectory trail).
-        spatial = rrb.Spatial3DView(name="trajectory", origin="/world", line_grid=False)
+        """Lay the viewer out by what each stream is for, not by how many there are.
 
-        # One 2D view per camera image entity (logged as ``observation.<key>``).
-        # Tactiles first, then the wrist cameras (left_wrist / right_wrist) last —
-        # i.e. the wrists sit after right_tactile_right in the grid.
-        img_keys = [k for k, v in self._obs_features.items() if isinstance(v, tuple)]
-        img_keys = [k for k in img_keys if "wrist" not in k] + [
-            k for k in img_keys if "wrist" in k
-        ]
-        img_views = [
-            rrb.Spatial2DView(name=k, origin=f"/observation.{k}") for k in img_keys
-        ]
+        Rerun's auto-layout gives every entity an equal tile, which buries the
+        two streams an operator actually watches - the head view and the wrist
+        views - under four tactile pads and thirty scalar plots. So: head camera
+        large on the left, the views you glance at stacked on the right, tactiles
+        in their own grid, and the scalars grouped into tabs rather than piled
+        into one illegible plot.
+        """
+        img_keys = self._image_keys()
+        head = [k for k in img_keys if k.startswith("head")]
+        wrist = [k for k in img_keys if "wrist" in k]
+        tactile = [k for k in img_keys if k not in head and k not in wrist]
 
-        top = (
-            rrb.Horizontal(spatial, rrb.Grid(*img_views), column_shares=[3, 2])
-            if img_views
-            else spatial
-        )
+        def view(key: str) -> rrb.Spatial2DView:
+            return rrb.Spatial2DView(name=key, origin=f"/observation.{key}")
+
+        # Left column: the head camera if present, else the 3D trail, else wrists.
+        primary = None
+        if head:
+            primary = rrb.Vertical(*(view(k) for k in head))
+        elif self.has_poses:
+            # line_grid=False drops Rerun's built-in floor grid; we only want the
+            # origin axes, gripper markers and trail.
+            primary = rrb.Spatial3DView(name="trajectory", origin="/world", line_grid=False)
+
+        # Right column: 3D trail (when the head took the left slot), wrists, tactiles.
+        secondary: list[Any] = []
+        if head and self.has_poses:
+            secondary.append(
+                rrb.Spatial3DView(name="trajectory", origin="/world", line_grid=False)
+            )
+        if wrist:
+            secondary.append(rrb.Horizontal(*(view(k) for k in wrist), name="wrist"))
+        if tactile:
+            secondary.append(rrb.Grid(*(view(k) for k in tactile), name="tactile"))
+
+        if primary is not None and secondary:
+            top = rrb.Horizontal(primary, rrb.Vertical(*secondary), column_shares=[3, 2])
+        elif primary is not None:
+            top = primary
+        elif secondary:
+            top = rrb.Vertical(*secondary)
+        else:
+            top = rrb.TimeSeriesView(name="signals", origin="/")
+
+        signals = self._signals_view()
+        contents = rrb.Vertical(top, signals, row_shares=[3, 2]) if signals else top
         return rrb.Blueprint(
-            rrb.Vertical(top, self._signals_view(), row_shares=[3, 2]),
+            contents,
             rrb.BlueprintPanel(state="collapsed"),
             rrb.TimePanel(state="collapsed"),
         )
 
-    def _signals_view(self) -> rrb.TimeSeriesView:
-        """Bottom time-series panel. ``signals="gripper"`` restricts it to the
-        gripper position channel(s) (``observation.{side}gripper.pos``); ``"all"``
-        shows every scalar (gripper.pos, tcp.*, imu.*)."""
-        if self._signals == "gripper":
-            gripper_keys = [k for k in self._obs_features if k.endswith("gripper.pos")]
-            if gripper_keys:
-                return rrb.TimeSeriesView(
-                    name="gripper.pos",
-                    origin="/",
-                    contents=[f"+ /observation.{k}" for k in gripper_keys],
+    def _signals_view(self):
+        """Bottom panel, one tab per group of scalars.
+
+        A single plot of every scalar is unreadable: jaw position, metres of VIO
+        translation, unit-length rotation components and IMU accelerations share
+        no axis. Splitting them by unit keeps each tab's y-axis meaningful.
+
+        ``signals="gripper"`` narrows the default tab to the jaw channel(s), but
+        the other tabs stay available rather than being dropped.
+        """
+        tabs: list[Any] = []
+
+        def series(name: str, keys: list[str]) -> None:
+            if keys:
+                tabs.append(
+                    rrb.TimeSeriesView(
+                        name=name,
+                        origin="/",
+                        contents=[f"+ /observation.{k}" for k in keys],
+                    )
                 )
-        return rrb.TimeSeriesView(name="signals", origin="/")
+
+        scalars = self._scalar_keys()
+        series("gripper.pos", [k for k in scalars if k.endswith("gripper.pos")])
+        series("head VIO position", [k for k in scalars if k.startswith("head_camera.")
+                                     and k.split(".")[-1] in ("x", "y", "z")])
+        series("head VIO rotation", [k for k in scalars if k.startswith("head_camera.")
+                                     and k.split(".")[-1].startswith("r")])
+        series("tcp pose", [k for k in scalars if "_tcp." in k or k.startswith("tcp.")])
+        series("imu", [k for k in scalars if "_imu." in k or k.startswith("imu.")])
+
+        if not tabs:
+            return rrb.TimeSeriesView(name="signals", origin="/") if scalars else None
+        if len(tabs) == 1:
+            return tabs[0]
+        # "all" keeps a catch-all tab so nothing is unreachable from the layout.
+        if self._signals != "gripper":
+            tabs.append(rrb.TimeSeriesView(name="all", origin="/"))
+        return rrb.Tabs(*tabs, active_tab=0)
 
     # ------------------------------------------------------------------ per-step
 
