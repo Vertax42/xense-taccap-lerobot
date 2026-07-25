@@ -84,7 +84,7 @@ RGB or VIO staleness first warns after 0.2 s; if either stream remains unchanged
 than 3 s, recording aborts with a timeout instead of silently repeating old head data.
 
 Raw acquisition is isolated in
-[`../../cameras/insight9/camera_insight9.py`](../../cameras/insight9/camera_insight9.py).
+[`../../cameras/insight/camera_insight.py`](../../cameras/insight/camera_insight.py).
 The camera adapter keeps the original Insight9 VIO coordinate frame and converts only
 the quaternion representation to `r1..r6`; the robot adapter applies no
 head-to-gripper extrinsic.
@@ -121,7 +121,7 @@ lerobot-record \
     --display_data=true
 ```
 
-Before enabling it, run `insight9-check-env --hidraw`; the Insight9 HID node must be
+Before enabling it, run `pyinsight-check-env --hidraw`; the Insight9 HID node must be
 readable and writable by the recording user.
 
 ## 3D trajectory visualization

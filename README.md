@@ -7,7 +7,7 @@ Capture* Gripper) — a handheld **UMI** leader gripper for tactile data
 collection. This branch tracks **upstream lerobot v5.1**, slimmed to the
 TacCap-Gripper (single + bimanual) and its **Pico4** teleoperator/tracker, with
 Xense tactile cameras layered on top. The bimanual rig can optionally record an
-**Insight9 head camera** as RGB plus a raw-frame VIO pose represented in the same
+**Insight head camera** as RGB plus a raw-frame VIO pose represented in the same
 position + 6D rotation format as the gripper trackers. See
 [`src/lerobot/robots/taccap_gripper/README.md`](src/lerobot/robots/taccap_gripper/README.md)
 for device-specific usage. For generic lerobot usage (datasets, policies,
@@ -51,9 +51,9 @@ This repository uses `third_party/` git submodules to manage hardware SDK depend
 | `third_party/taccap-gripper` | `xense.taccap` (TacCap UMI tactile gripper SDK) |
 | `third_party/XenseVR-PC-Service` | `xensevr_pc_service_sdk` (Pico4 teleop/tracker) |
 | `third_party/XenseVR-RobotVision-PC` | ZED-M → Pico4 stereo passthrough (built separately) |
-| `third_party/insight9-python-interface` | `insight9-python-interface` (Insight9 native RGB/VIO/IMU bridge) |
+| `third_party/pyinsight` | `pyinsight` (Insight camera native RGB/VIO/IMU bridge) |
 
-`taccap-gripper` and `insight9-python-interface` are installed in editable mode.
+`taccap-gripper` and `pyinsight` are installed in editable mode.
 Changes made inside those initialized submodules are therefore picked up by the
 environment without rebuilding the main `lerobot` package.
 
@@ -99,7 +99,7 @@ This step will:
 - Update the conda environment from `conda_environment.yaml`
 - Install the main package from `pyproject.toml`
 - Install `xensesdk` from PyPI (`uv pip install xensesdk`; see the note above — override with a local wheel via `$XENSESDK_WHEEL` for offline/patched builds)
-- Install the XenseVR PC Service daemon from its `.deb` (resolved out-of-band — see the note above), then build/install the `third_party` SDK packages: `xensevr_pc_service_sdk` (Pico4), `xense.taccap` (TacCap UMI gripper), and the editable `insight9-python-interface`
+- Install the XenseVR PC Service daemon from its `.deb` (resolved out-of-band — see the note above), then build/install the `third_party` SDK packages: `xensevr_pc_service_sdk` (Pico4), `xense.taccap` (TacCap UMI gripper), and the editable `pyinsight`
 
 **Step 4:** ✅ Verify the installation:
 
@@ -107,7 +107,7 @@ This step will:
 python -c 'import xensevr_pc_service_sdk; print("xensevr_pc_service_sdk OK ->", xensevr_pc_service_sdk.__file__)'
 python -c 'import xensesdk; print("xensesdk OK ->", xensesdk.__file__)'
 python -c 'import xense.taccap; print("xense.taccap OK ->", xense.taccap.__file__)'
-python -c 'from insight9_native import find_library; print("Insight9 OK ->", find_library())'
+python -c 'from pyinsight import find_library; print("pyinsight OK ->", find_library())'
 ```
 
 **Step 5:** 📌 **Note on FFmpeg / video:** v5.1 no longer pins `ffmpeg`
@@ -195,7 +195,7 @@ The Python package and bundled `libinsight9.so` can be checked without opening t
 device:
 
 ```bash
-insight9-check-env --hidraw
+pyinsight-check-env --hidraw
 ```
 
 The relevant `/dev/hidraw*` node must report `read=True write=True`. On the current
@@ -203,13 +203,13 @@ Deep Mirror Insight9 hardware (`1d6b:0104`, product `insight 9`), a host can gra
 the `plugdev` group access with:
 
 ```bash
-sudo tee /etc/udev/rules.d/99-insight9.rules >/dev/null <<'EOF'
+sudo tee /etc/udev/rules.d/99-insight.rules >/dev/null <<'EOF'
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1d6b", ATTRS{idProduct}=="0104", ATTRS{product}=="insight 9", MODE="0660", GROUP="plugdev"
 EOF
 sudo usermod -aG plugdev "$USER"
 sudo udevadm control --reload-rules
 sudo udevadm trigger
-# Log out/in, then reconnect the camera and rerun insight9-check-env --hidraw.
+# Log out/in, then reconnect the camera and rerun pyinsight-check-env --hidraw.
 ```
 
 If a different Insight9 revision has another VID/PID, obtain it with `lsusb` and

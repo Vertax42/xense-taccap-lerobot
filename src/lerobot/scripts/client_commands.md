@@ -21,7 +21,7 @@ Paste your HuggingFace access token (write permission) when prompted; it is stor
 
 Also ensure `xense.taccap` is importable (`bash ./setup_env.sh --install`) and, for
 6-DoF pose, the XenseVR PC service + Pico4 trackers are running. For the optional
-Insight9 head camera, run `insight9-check-env --hidraw` and make sure its HID node is
+Insight9 head camera, run `pyinsight-check-env --hidraw` and make sure its HID node is
 readable/writable.
 
 ## Teleoperate (live Rerun visualization)
