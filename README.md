@@ -190,7 +190,7 @@ mmcli -L                                                               # gripper
 Revert by deleting the rule file and reloading. (Alternatively, on a dedicated
 robot PC with no cellular modem: `sudo systemctl disable --now ModemManager`.)
 
-**Step 8:** 🎥 **Insight9 native/HID readiness (only when using the head camera).**
+**Step 8:** 🎥 **Insight device readiness (only when using the head camera).**
 The Python package and bundled `libinsight9.so` can be checked without opening the
 device:
 
@@ -198,22 +198,34 @@ device:
 pyinsight-check-env --hidraw
 ```
 
-The relevant `/dev/hidraw*` node must report `read=True write=True`. On the current
-Deep Mirror Insight9 hardware (`1d6b:0104`, product `insight 9`), a host can grant
-the `plugdev` group access with:
+The camera needs **two** kinds of node, and the SDK fails to initialise if either
+is unreadable:
+
+| Node | Carries | Default owner |
+|------|---------|---------------|
+| `/dev/video4,6,8` (3 of 6) | RGB, stereo, depth | `root:video`, mode 660 |
+| `/dev/hidraw*` (2) | IMU, VIO | `root:plugdev`, mode 660 |
+
+On a host where those group defaults do not already apply, grant access with:
 
 ```bash
 sudo tee /etc/udev/rules.d/99-insight.rules >/dev/null <<'EOF'
-SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1d6b", ATTRS{idProduct}=="0104", ATTRS{product}=="insight 9", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="hidraw",      ATTRS{idVendor}=="3652", ATTRS{idProduct}=="0104", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="3652", ATTRS{idProduct}=="0104", MODE="0660", GROUP="video"
 EOF
-sudo usermod -aG plugdev "$USER"
+sudo usermod -aG plugdev,video "$USER"
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 # Log out/in, then reconnect the camera and rerun pyinsight-check-env --hidraw.
 ```
 
-If a different Insight9 revision has another VID/PID, obtain it with `lsusb` and
-adjust the rule rather than granting access to every HID device.
+`3652:0104` is what the camera actually reports — `lsusb` shows it as
+`LooperRobotics Insight Series USB AI Camera`. Confirm yours with `lsusb` before
+applying, and keep the VID/PID match rather than opening up every HID device.
+
+> Do not match on `ATTRS{product}`. The USB product string is
+> `Insight Series USB AI Camera` across the whole series, so a rule written
+> against a per-model name silently matches nothing.
 
 ## 🔑 The `LeRobotDataset` format
 
