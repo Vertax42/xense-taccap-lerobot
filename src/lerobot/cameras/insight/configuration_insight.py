@@ -19,9 +19,9 @@ from dataclasses import dataclass
 from ..configs import CameraConfig
 
 
-@CameraConfig.register_subclass("insight9")
+@CameraConfig.register_subclass("insight")
 @dataclass
-class Insight9CameraConfig(CameraConfig):
+class InsightCameraConfig(CameraConfig):
     """LeRobot adapter configuration for the Insight9 RGB/VIO head camera.
 
     ``width``/``height`` describe the frame shape expected by the dataset. They

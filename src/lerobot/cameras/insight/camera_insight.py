@@ -30,11 +30,11 @@ from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnected
 from lerobot.utils.robot_utils import get_logger, quaternion_to_rotation_6d
 
 from ..camera import Camera
-from .configuration_insight9 import Insight9CameraConfig
+from .configuration_insight import InsightCameraConfig
 
 
 @dataclass(frozen=True)
-class Insight9Snapshot:
+class InsightSnapshot:
     """Latest decoded RGB frame and raw-frame VIO pose from one SDK snapshot."""
 
     rgb: NDArray[np.uint8]
@@ -42,7 +42,7 @@ class Insight9Snapshot:
     vio_rotation_6d: tuple[float, float, float, float, float, float]
 
 
-class Insight9Camera(Camera):
+class InsightCamera(Camera):
     """Own the Insight9 SDK once and expose RGB plus raw VIO snapshots.
 
     The generic Camera methods return RGB only. ``read_snapshot_latest`` is the
@@ -50,12 +50,12 @@ class Insight9Camera(Camera):
     opening the native SDK more than once.
     """
 
-    config_class = Insight9CameraConfig
+    config_class = InsightCameraConfig
 
-    def __init__(self, config: Insight9CameraConfig):
+    def __init__(self, config: InsightCameraConfig):
         super().__init__(config)
         self.config = config
-        self.logger = get_logger("Insight9Camera")
+        self.logger = get_logger("InsightCamera")
 
         self._sdk_camera: Any | None = None
         self._is_connected = False
@@ -67,7 +67,7 @@ class Insight9Camera(Camera):
         self._last_decode_warning_t = 0.0
 
     def __str__(self) -> str:
-        return "Insight9Camera(head_rgb)"
+        return "InsightCamera(head_rgb)"
 
     @property
     def is_connected(self) -> bool:
@@ -84,15 +84,19 @@ class Insight9Camera(Camera):
             raise DeviceAlreadyConnectedError(f"{self} already connected")
 
         try:
-            from insight9_umi_camera import Insight9HeadCamera
+            # `Insight` is the SDK-level class; this module's own class is called
+            # InsightCamera, so importing the short name keeps the two apart.
+            from pyinsight import Insight
         except ImportError as e:
             raise ImportError(
-                "insight9-python-interface is required for the Insight9 head camera. "
-                "Initialize third_party/insight9-python-interface and run setup_env.sh --install."
+                "pyinsight is required for the Insight head camera. "
+                "Initialize third_party/pyinsight and run setup_env.sh --install."
             ) from e
 
         self._reset_cache()
-        self._sdk_camera = Insight9HeadCamera(
+        # enable_imu=False: the gripper IMUs cover inertial sensing, and skipping
+        # the 400 Hz callback keeps it off the Python side entirely.
+        self._sdk_camera = Insight(
             library_path=self.config.library_path,
             enable_images=True,
             enable_imu=False,
@@ -147,7 +151,7 @@ class Insight9Camera(Camera):
             )
         return snapshot.rgb
 
-    def read_snapshot_latest(self) -> Insight9Snapshot:
+    def read_snapshot_latest(self) -> InsightSnapshot:
         if not self.is_connected or self._sdk_camera is None:
             raise DeviceNotConnectedError(f"{self} is not connected")
 
@@ -184,7 +188,7 @@ class Insight9Camera(Camera):
             float(self._last_vio.qy),
             float(self._last_vio.qz),
         )
-        return Insight9Snapshot(
+        return InsightSnapshot(
             rgb=self._last_good_rgb,
             vio_position=(
                 float(self._last_vio.px),

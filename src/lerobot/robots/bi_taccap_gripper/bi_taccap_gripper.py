@@ -42,7 +42,7 @@ from typing import Any
 
 import numpy as np
 
-from lerobot.cameras.insight9 import Insight9Camera, Insight9CameraConfig
+from lerobot.cameras.insight import InsightCamera, InsightCameraConfig
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.cameras.xense.configuration_xense import XenseTactileCameraConfig
@@ -138,7 +138,7 @@ class BiTaccapGripper(Robot):
         self._camera_configs = self._discover_camera_configs()
         self.cameras = make_cameras_from_configs(self._camera_configs)
         head_camera = self.cameras.get("head_rgb")
-        self._head_camera = head_camera if isinstance(head_camera, Insight9Camera) else None
+        self._head_camera = head_camera if isinstance(head_camera, InsightCamera) else None
 
         # Auto-discover the Pico4 motion tracker(s): enumerate from the XenseVR PC
         # service and assign one per side by serial (second-to-last digit, strict).
@@ -214,7 +214,7 @@ class BiTaccapGripper(Robot):
                 )
 
         if self.config.enable_head_camera:
-            configs["head_rgb"] = Insight9CameraConfig(
+            configs["head_rgb"] = InsightCameraConfig(
                 library_path=self.config.head_camera_library_path,
                 width=self.config.head_camera_width,
                 height=self.config.head_camera_height,
