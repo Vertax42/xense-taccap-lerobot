@@ -121,11 +121,20 @@ class TaccapGripperConfig(RobotConfig):
 
     # ---- Tactile sensors (Xense; auto-discovered by serial) --------------
     tactile_fps: int = 30
-    tactile_output_types: list[str] = field(default_factory=lambda: ["rectify"])
+    tactile_output_types: list[str] = field(default_factory=lambda: ["difference"])
     """Defaults applied to every discovered tactile sensor. A single output type
-    yields one (H, W, 3) image; ``rectify`` is inference-free. Width/height are
-    auto-derived from the SDK's rectify_size (do not hard-code them — the rectify
-    array is (400, 700, 3))."""
+    yields one (H, W, 3) image. Default is ``difference`` (SDK
+    ``OutputType.AugDifference``): on this gel the raw ``rectify`` image carries
+    so little visible deformation that contact is hard to read, and the
+    augmented difference against the sensor's rest baseline amplifies it.
+    Both are inference-free, same (400, 700, 3) uint8 shape, so this costs
+    nothing at startup — switch back with ``--robot.tactile_output_types=rectify``
+    if you need the unsubtracted image. Width/height are auto-derived from the
+    SDK's rectify_size (do not hard-code them).
+
+    Note the baseline is captured when the sensor initialises, so the fingers
+    must be **unloaded** at connect — start with something already pressed
+    against the gel and that pressure is subtracted away for the whole run."""
 
     # ---- Wrist camera (OpenCV UVC; auto-discovered by serial) ------------
     enable_wrist_camera: bool = True

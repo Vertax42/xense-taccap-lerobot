@@ -227,8 +227,12 @@ enumeration is flaky — pin the serial directly with `--robot.tracker_serial=<S
 serial is used **verbatim**: no enumeration, no rule check (a typo surfaces as a device-not-found
 at connect). Leave it unset (default) to keep auto-discovery.
 
-- **Tactile** → obs keys `tactile_left` / `tactile_right`; the rectify image is landscape
-  `(400,700,3)` (width/height auto-derive — don't hard-code). Tune `--robot.tactile_fps`
+- **Tactile** → obs keys `tactile_left` / `tactile_right`; landscape `(400,700,3)` uint8
+  (width/height auto-derive — don't hard-code). Defaults to `difference` (SDK
+  `OutputType.AugDifference`), which amplifies deformation the raw `rectify` image barely
+  shows; its baseline is taken at sensor init, so keep the fingers **unloaded** at connect,
+  or the resting pressure is subtracted away for the whole run. Pass
+  `--robot.tactile_output_types=rectify` for the unsubtracted image. Tune `--robot.tactile_fps`
   / `--robot.tactile_output_types`; `--robot.expected_tactiles_per_side` validates the count.
   The two sensors are paired to this unit's gripper by **USB hub**; `left`/`right` finger
   comes from the GSPS serial's **last digit** (odd → `left`, even → `right`, 单左双右).
