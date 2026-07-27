@@ -19,7 +19,7 @@ import sys
 import sysconfig
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -29,10 +29,15 @@ import numpy as np
 from calibration_math import (
     IDENTITY_QUAT_WXYZ,
     PivotResult,
+    SOLIDWORKS_TRACKER_TO_EE_POS_M,
+    SOLIDWORKS_TRACKER_TO_EE_QUAT_WXYZ,
+    SOLIDWORKS_TRACKER_TO_EE_RPY_DEG,
     calibrated_ee_transform_world,
     cli_vector,
     estimated_ee_point_world,
     format_vector,
+    normalize_quat_wxyz,
+    rpy_degrees_to_quat_wxyz,
     raw_pico_pose_wxyz_to_world_matrix,
     solve_pivot,
 )
@@ -81,6 +86,7 @@ try:
         QAbstractItemView,
         QCheckBox,
         QComboBox,
+        QDoubleSpinBox,
         QFileDialog,
         QFrame,
         QGridLayout,
@@ -119,6 +125,11 @@ SIDE_COLORS = {
     "left": (255, 80, 80),
     "right": (80, 160, 255),
 }
+ORIENTATION_MODES = (
+    ("solidworks", "SolidWorks EE 坐标系"),
+    ("tracker_aligned", "与 tracker 一致"),
+    ("custom_rpy", "自定义 RPY"),
+)
 
 
 def _ensure_python_bin_on_path() -> None:
@@ -148,6 +159,7 @@ class SideState:
     ee_trail: deque[list[float]] = field(default_factory=lambda: deque(maxlen=600))
     static_logged: bool = False
     ee_static_logged: bool = False
+    result_source: str = ""
 
     @property
     def connected(self) -> bool:
@@ -205,6 +217,7 @@ class CalibrationWindow(QMainWindow):
 
         layout.addWidget(self._build_connection_group())
         layout.addWidget(self._build_sampling_group())
+        layout.addWidget(self._build_orientation_group())
         layout.addWidget(self._build_results_group())
         layout.addWidget(self._build_pose_monitor_group())
 
@@ -223,6 +236,7 @@ class CalibrationWindow(QMainWindow):
         layout.addWidget(self.log)
 
         self.setStyleSheet(self._stylesheet())
+        self._refresh_orientation_labels()
         self._refresh_result_labels()
         self._refresh_pose_labels()
 
@@ -317,6 +331,77 @@ class CalibrationWindow(QMainWindow):
         grid.addWidget(refresh_calibrated, 2, 1, 1, 3)
         return group
 
+    def _build_orientation_group(self) -> QGroupBox:
+        group = QGroupBox("EE 坐标系方向")
+        grid = QGridLayout(group)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+
+        self.orientation_mode: dict[str, QComboBox] = {}
+        self.orientation_rpy: dict[str, tuple[QDoubleSpinBox, QDoubleSpinBox, QDoubleSpinBox]] = {}
+        self.orientation_quat_labels: dict[str, QLabel] = {}
+
+        headers = ("侧别", "方向模式", "Roll X", "Pitch Y", "Yaw Z", "当前外参", "直接显示")
+        for col, text in enumerate(headers):
+            grid.addWidget(QLabel(text), 0, col)
+
+        for row, side in enumerate(SIDES, start=1):
+            side_title = QLabel(side.upper())
+            side_title.setObjectName("SideTitle")
+            mode = QComboBox()
+            for mode_id, label in ORIENTATION_MODES:
+                mode.addItem(label, mode_id)
+            mode.setCurrentIndex(0)
+
+            spins: list[QDoubleSpinBox] = []
+            for value in SOLIDWORKS_TRACKER_TO_EE_RPY_DEG[side]:
+                spin = QDoubleSpinBox()
+                spin.setRange(-360.0, 360.0)
+                spin.setDecimals(3)
+                spin.setSingleStep(1.0)
+                spin.setSuffix(" deg")
+                spin.setKeyboardTracking(False)
+                spin.setValue(float(value))
+                spins.append(spin)
+
+            quat_label = QLabel("")
+            quat_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            quat_label.setWordWrap(True)
+            apply_sw = QPushButton("应用 SW 全外参")
+            apply_sw.clicked.connect(lambda _checked=False, s=side: self.apply_solidworks_transform(s))
+
+            self.orientation_mode[side] = mode
+            self.orientation_rpy[side] = (spins[0], spins[1], spins[2])
+            self.orientation_quat_labels[side] = quat_label
+
+            grid.addWidget(side_title, row, 0)
+            grid.addWidget(mode, row, 1)
+            grid.addWidget(spins[0], row, 2)
+            grid.addWidget(spins[1], row, 3)
+            grid.addWidget(spins[2], row, 4)
+            grid.addWidget(quat_label, row, 5)
+            grid.addWidget(apply_sw, row, 6)
+
+            mode.currentIndexChanged.connect(lambda _idx, s=side: self._orientation_settings_changed(s))
+            for spin in spins:
+                spin.valueChanged.connect(lambda _value, s=side: self._orientation_settings_changed(s))
+            self._set_orientation_inputs_enabled(side)
+
+        apply_both = QPushButton("应用左右 SW 全外参")
+        apply_both.setObjectName("PrimaryButton")
+        apply_both.clicked.connect(self.apply_solidworks_transforms)
+        grid.addWidget(apply_both, len(SIDES) + 1, 0, 1, 2)
+
+        note = QLabel(
+            "Pivot 样本只求 EE 原点；这里选择 EE 坐标轴方向。"
+            "也可直接应用 SolidWorks 测出的完整 ^Tracker T_EE。"
+            "自定义 RPY 约定：R = Rz(yaw) * Ry(pitch) * Rx(roll)。"
+        )
+        note.setObjectName("Hint")
+        note.setWordWrap(True)
+        grid.addWidget(note, len(SIDES) + 2, 0, 1, 7)
+        return group
+
     def _build_results_group(self) -> QGroupBox:
         group = QGroupBox("标定结果")
         grid = QGridLayout(group)
@@ -334,8 +419,8 @@ class CalibrationWindow(QMainWindow):
             grid.addWidget(side_title, row, 0)
             grid.addWidget(label, row, 1)
         note = QLabel(
-            "注意：固定点 pivot 标定只能求 tracker_to_ee_pos。"
-            "tracker_to_ee_quat 当前保存为 identity；完整 TCP 朝向需要额外方向夹具。"
+            "注意：固定点 pivot 标定只能求 tracker_to_ee_pos；"
+            "tracker_to_ee_quat 来自上方选择的 EE 坐标系方向。"
         )
         note.setObjectName("Hint")
         note.setWordWrap(True)
@@ -486,6 +571,7 @@ class CalibrationWindow(QMainWindow):
         state.samples.append(state.last_world_from_tracker.copy())
         state.sample_times.append(datetime.now().strftime("%H:%M:%S"))
         state.result = None
+        state.result_source = ""
         state.ee_trail.clear()
         state.ee_static_logged = False
         index = len(state.samples)
@@ -509,16 +595,22 @@ class CalibrationWindow(QMainWindow):
     def compute_side(self, side: str, restart_rerun: bool = True) -> bool:
         state = self.states[side]
         try:
-            result = solve_pivot(state.samples, min_samples=int(self.min_samples.value()))
+            result = solve_pivot(
+                state.samples,
+                min_samples=int(self.min_samples.value()),
+                tracker_to_ee_quat=self._orientation_quat(side),
+            )
         except Exception as exc:
             QMessageBox.warning(self, f"{side} 求解失败", str(exc))
             self._append_log(f"[{side} solve error] {exc}")
             return False
         state.result = result
+        state.result_source = "pivot"
         state.ee_trail.clear()
         state.ee_static_logged = False
         self._append_log(
             f"[{side}] solved tracker_to_ee_pos={format_vector(result.tracker_to_ee_pos)} "
+            f"tracker_to_ee_quat={format_vector(result.tracker_to_ee_quat)} "
             f"rmse={result.rmse_m * 1000.0:.2f}mm max={result.max_error_m * 1000.0:.2f}mm "
             f"rank={result.rank} cond={result.condition:.1f}"
         )
@@ -530,12 +622,47 @@ class CalibrationWindow(QMainWindow):
             self._restart_rerun_with_current_state(f"{side} calibration solve")
         return True
 
+    def apply_solidworks_transforms(self) -> None:
+        for side in SIDES:
+            self.apply_solidworks_transform(side, restart_rerun=False)
+        self._restart_rerun_with_current_state("SolidWorks full tracker_to_ee transform")
+
+    def apply_solidworks_transform(self, side: str, restart_rerun: bool = True) -> None:
+        state = self.states[side]
+        self._set_orientation_mode(side, "solidworks")
+        result = PivotResult(
+            tracker_to_ee_pos=np.asarray(SOLIDWORKS_TRACKER_TO_EE_POS_M[side], dtype=np.float64),
+            tracker_to_ee_quat=normalize_quat_wxyz(SOLIDWORKS_TRACKER_TO_EE_QUAT_WXYZ[side]),
+            fixed_point_world=np.full(3, np.nan, dtype=np.float64),
+            residuals_m=np.asarray([], dtype=np.float64),
+            rmse_m=float("nan"),
+            mean_error_m=float("nan"),
+            max_error_m=float("nan"),
+            rank=0,
+            condition=float("nan"),
+        )
+        state.result = result
+        state.result_source = "solidworks_full_matrix"
+        state.ee_trail.clear()
+        state.ee_static_logged = False
+        self._append_log(
+            f"[{side}] applied SolidWorks ^Tracker T_EE "
+            f"pos={format_vector(result.tracker_to_ee_pos)} quat={format_vector(result.tracker_to_ee_quat)}"
+        )
+        self._refresh_orientation_labels()
+        self._refresh_table()
+        self._refresh_result_labels()
+        self._refresh_pose_labels()
+        if restart_rerun:
+            self._restart_rerun_with_current_state(f"{side} SolidWorks full tracker_to_ee transform")
+
     def clear_selected_side(self) -> None:
         side = self.side_combo.currentText()
         state = self.states[side]
         state.samples.clear()
         state.sample_times.clear()
         state.result = None
+        state.result_source = ""
         state.trail.clear()
         state.ee_trail.clear()
         state.ee_static_logged = False
@@ -553,12 +680,14 @@ class CalibrationWindow(QMainWindow):
 
     def save_results(self) -> None:
         payload = {
-            "type": "taccap_tracker_ee_pivot_calibration",
+            "type": "taccap_tracker_ee_calibration",
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "units": "meters",
             "notes": (
-                "Fixed-point pivot calibration estimates tracker_to_ee_pos only. "
-                "tracker_to_ee_quat is identity unless a separate orientation calibration is performed."
+                "Results may come from fixed-point pivot samples or a direct "
+                "SolidWorks ^Tracker T_EE transform. Pivot estimates "
+                "tracker_to_ee_pos only; tracker_to_ee_quat comes from the "
+                "selected EE orientation mode."
             ),
             "sides": {},
             "robot_args": {
@@ -575,17 +704,33 @@ class CalibrationWindow(QMainWindow):
             if result is None:
                 continue
             solved = True
+            orientation_mode, orientation_label = self._orientation_mode(side)
+            orientation_rpy_deg = self._orientation_rpy_deg(side)
+            source = state.result_source or "pivot"
+            fixed_point_world = (
+                result.fixed_point_world.tolist()
+                if np.all(np.isfinite(result.fixed_point_world))
+                else None
+            )
+            rmse_m = float(result.rmse_m) if np.isfinite(result.rmse_m) else None
+            mean_error_m = float(result.mean_error_m) if np.isfinite(result.mean_error_m) else None
+            max_error_m = float(result.max_error_m) if np.isfinite(result.max_error_m) else None
+            condition = float(result.condition) if np.isfinite(result.condition) else None
             side_payload = {
                 "tracker_serial": state.serial,
+                "calibration_source": source,
                 "tracker_to_ee_pos": result.tracker_to_ee_pos.tolist(),
                 "tracker_to_ee_quat": result.tracker_to_ee_quat.tolist(),
-                "fixed_point_world": result.fixed_point_world.tolist(),
+                "orientation_mode": orientation_mode,
+                "orientation_label": orientation_label,
+                "orientation_rpy_deg": list(orientation_rpy_deg),
+                "fixed_point_world": fixed_point_world,
                 "samples": len(state.samples),
-                "rmse_m": result.rmse_m,
-                "mean_error_m": result.mean_error_m,
-                "max_error_m": result.max_error_m,
+                "rmse_m": rmse_m,
+                "mean_error_m": mean_error_m,
+                "max_error_m": max_error_m,
                 "rank": result.rank,
-                "condition": result.condition,
+                "condition": condition,
             }
             payload["sides"][side] = side_payload
 
@@ -839,7 +984,11 @@ class CalibrationWindow(QMainWindow):
         if rr is None or not self._rerun_started or result is None:
             return
         self._log_ee_static_once(side)
-        world_from_ee = calibrated_ee_transform_world(world_from_tracker, result.tracker_to_ee_pos)
+        world_from_ee = calibrated_ee_transform_world(
+            world_from_tracker,
+            result.tracker_to_ee_pos,
+            result.tracker_to_ee_quat,
+        )
         pose = matrix_to_pose7d(world_from_ee, output_format="wxyz")
         xyzw = [float(pose[4]), float(pose[5]), float(pose[6]), float(pose[3])]
         rr.log(
@@ -892,6 +1041,8 @@ class CalibrationWindow(QMainWindow):
         result = state.result
         if rr is None or not self._rerun_started or result is None:
             return
+        if not np.all(np.isfinite(result.fixed_point_world)):
+            return
         rr.log(
             f"world/{side}/fixed_point",
             rr.Points3D(
@@ -913,13 +1064,95 @@ class CalibrationWindow(QMainWindow):
 
     # ------------------------------------------------------------------ UI updates
 
+    def _orientation_mode(self, side: str) -> tuple[str, str]:
+        combo = self.orientation_mode[side]
+        mode = str(combo.currentData() or "solidworks")
+        return mode, combo.currentText()
+
+    def _set_orientation_mode(self, side: str, mode_id: str) -> None:
+        combo = self.orientation_mode[side]
+        for index in range(combo.count()):
+            if combo.itemData(index) == mode_id:
+                combo.setCurrentIndex(index)
+                break
+        if mode_id == "solidworks":
+            for spin, value in zip(self.orientation_rpy[side], SOLIDWORKS_TRACKER_TO_EE_RPY_DEG[side], strict=True):
+                blocked = spin.blockSignals(True)
+                spin.setValue(float(value))
+                spin.blockSignals(blocked)
+        self._set_orientation_inputs_enabled(side)
+
+    def _orientation_rpy_deg(self, side: str) -> tuple[float, float, float]:
+        mode, _label = self._orientation_mode(side)
+        if mode == "tracker_aligned":
+            return (0.0, 0.0, 0.0)
+        if mode == "solidworks":
+            return tuple(float(v) for v in SOLIDWORKS_TRACKER_TO_EE_RPY_DEG[side])
+        roll, pitch, yaw = self.orientation_rpy[side]
+        return (float(roll.value()), float(pitch.value()), float(yaw.value()))
+
+    def _orientation_quat(self, side: str) -> np.ndarray:
+        mode, _label = self._orientation_mode(side)
+        if mode == "tracker_aligned":
+            return np.asarray(IDENTITY_QUAT_WXYZ, dtype=np.float64)
+        if mode == "solidworks":
+            return normalize_quat_wxyz(SOLIDWORKS_TRACKER_TO_EE_QUAT_WXYZ[side])
+        roll_deg, pitch_deg, yaw_deg = self._orientation_rpy_deg(side)
+        return rpy_degrees_to_quat_wxyz(roll_deg, pitch_deg, yaw_deg)
+
+    def _set_orientation_inputs_enabled(self, side: str) -> None:
+        mode, _label = self._orientation_mode(side)
+        enabled = mode == "custom_rpy"
+        for spin in self.orientation_rpy[side]:
+            spin.setEnabled(enabled)
+
+    def _orientation_settings_changed(self, side: str) -> None:
+        if not hasattr(self, "orientation_mode"):
+            return
+        self._set_orientation_inputs_enabled(side)
+        state = self.states[side]
+        if state.result is not None:
+            state.result = replace(state.result, tracker_to_ee_quat=self._orientation_quat(side))
+            mode, _label = self._orientation_mode(side)
+            if state.result_source == "solidworks_full_matrix" and mode != "solidworks":
+                state.result_source = "solidworks_position_selected_orientation"
+            elif state.result_source == "solidworks_position_selected_orientation" and mode == "solidworks":
+                state.result_source = "solidworks_full_matrix"
+            state.ee_static_logged = False
+            state.ee_trail.clear()
+            if state.last_world_from_tracker is not None and self._rerun_started:
+                self._log_ee_pose(side, state.last_world_from_tracker)
+                self._append_log(
+                    f"[{side}] updated EE orientation: "
+                    f"{self._orientation_mode(side)[1]} quat={format_vector(state.result.tracker_to_ee_quat)}"
+                )
+        self._refresh_orientation_labels()
+        self._refresh_result_labels()
+        self._refresh_pose_labels()
+
+    def _refresh_orientation_labels(self) -> None:
+        if not hasattr(self, "orientation_quat_labels"):
+            return
+        for side in SIDES:
+            self._set_orientation_inputs_enabled(side)
+            quat = self._orientation_quat(side)
+            rpy_deg = self._orientation_rpy_deg(side)
+            self.orientation_quat_labels[side].setText(
+                f"{format_vector(quat, precision=6)}  "
+                f"RPY(deg)={format_vector(rpy_deg, precision=3)}"
+            )
+
     def _refresh_table(self) -> None:
         rows = sum(len(state.samples) for state in self.states.values())
         self.sample_table.setRowCount(rows)
         row = 0
         for side in SIDES:
             state = self.states[side]
-            residuals = state.result.residuals_m if state.result is not None else None
+            residuals = (
+                state.result.residuals_m
+                if state.result is not None and state.result.residuals_m.shape == (len(state.samples),)
+                else None
+            )
             for index, sample in enumerate(state.samples, start=1):
                 pos = sample[:3, 3]
                 residual_mm = "" if residuals is None else f"{residuals[index - 1] * 1000.0:.2f}"
@@ -946,13 +1179,20 @@ class CalibrationWindow(QMainWindow):
             if result is None:
                 self.result_labels[side].setText(f"样本 {len(state.samples)} 个；未求解")
                 continue
+            _mode, orientation_label = self._orientation_mode(side)
+            source = state.result_source or "pivot"
+            rmse_text = "n/a" if not np.isfinite(result.rmse_m) else f"{result.rmse_m * 1000.0:.2f}mm"
+            max_text = "n/a" if not np.isfinite(result.max_error_m) else f"{result.max_error_m * 1000.0:.2f}mm"
+            cond_text = "n/a" if not np.isfinite(result.condition) else f"{result.condition:.1f}"
             text = (
+                f"source={source}  "
                 f"samples={len(state.samples)}  "
                 f"tracker_to_ee_pos={format_vector(result.tracker_to_ee_pos)}  "
                 f"tracker_to_ee_quat={format_vector(result.tracker_to_ee_quat)}  "
-                f"rmse={result.rmse_m * 1000.0:.2f}mm  "
-                f"max={result.max_error_m * 1000.0:.2f}mm  "
-                f"rank={result.rank}  cond={result.condition:.1f}"
+                f"orientation={orientation_label}  "
+                f"rmse={rmse_text}  "
+                f"max={max_text}  "
+                f"rank={result.rank}  cond={cond_text}"
             )
             self.result_labels[side].setText(text)
 
@@ -992,12 +1232,16 @@ class CalibrationWindow(QMainWindow):
                 status="静态外参",
                 pos=format_vector(result.tracker_to_ee_pos, precision=6),
                 quat=format_vector(result.tracker_to_ee_quat, precision=5),
-                note="刚性连接",
+                note=self._orientation_mode(side)[1],
             )
             if state.last_world_from_tracker is None:
                 self._set_pose_row(ee_key, status="等待 tracker 位姿")
             else:
-                world_from_ee = calibrated_ee_transform_world(state.last_world_from_tracker, result.tracker_to_ee_pos)
+                world_from_ee = calibrated_ee_transform_world(
+                    state.last_world_from_tracker,
+                    result.tracker_to_ee_pos,
+                    result.tracker_to_ee_quat,
+                )
                 pos, quat = self._format_pose_matrix_parts(world_from_ee)
                 self._set_pose_row(
                     ee_key,
@@ -1086,7 +1330,7 @@ class CalibrationWindow(QMainWindow):
             left: 8px;
             background: #ffffff;
         }
-        QLineEdit, QComboBox, QPlainTextEdit, QSpinBox, QTableWidget {
+        QLineEdit, QComboBox, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QTableWidget {
             background: #ffffff;
             border: 1px solid #cbd5e1;
             border-radius: 5px;

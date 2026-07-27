@@ -27,12 +27,19 @@ XENSE_TACCAP_PYTHON=/path/to/python ./calibrate-ui/xense-taccap-calibrate-ui
    `Motion.joints[].sn`，失败后再 fallback 到 `xensevr_pc_service_sdk`。
 3. 点击 `连接左右`。默认会打开 Rerun 三维窗口。
 4. 选择 `left` 或 `right`。
-5. 将对应夹爪的夹持端 / EE 接触点顶在同一个固定空间点上。
-6. 改变 tracker 姿态并点击 `记录当前位姿`。每侧至少 4 个样本，建议 8-12 个，姿态变化要足够大。
-7. 点击 `求解当前侧并刷新三维` 或 `求解左右并刷新三维`。求解成功后 Rerun 会自动重启并重放当前样本/结果。
-8. 检查 RMSE / max residual。残差过大时清空当前侧重采。
-9. 如需手动重放三维结果，点击 `重启 Rerun 显示标定 EE`。
-10. 点击 `保存结果 JSON`。
+5. 在 `EE 坐标系方向` 中选择每侧方向来源：
+   - `SolidWorks EE 坐标系`：使用仓库内置的 SolidWorks `^Tracker T_EE` 方向。
+   - `与 tracker 一致`：`tracker_to_ee_quat=[1,0,0,0]`。
+   - `自定义 RPY`：按 `R = Rz(yaw) * Ry(pitch) * Rx(roll)` 输入角度。
+6. 如果要直接使用 SolidWorks 测出的完整相对位姿，点击
+   `应用 SW 全外参` 或 `应用左右 SW 全外参`。这会直接设置
+   `tracker_to_ee_pos` 和 `tracker_to_ee_quat`，无需采样即可显示 EE。
+7. 如需用 pivot 微调 EE 原点位置，将对应夹爪的夹持端 / EE 接触点顶在同一个固定空间点上。
+8. 改变 tracker 姿态并点击 `记录当前位姿`。每侧至少 4 个样本，建议 8-12 个，姿态变化要足够大。
+9. 点击 `求解当前侧并刷新三维` 或 `求解左右并刷新三维`。求解成功后 Rerun 会自动重启并重放当前样本/结果。
+10. 检查 RMSE / max residual。残差过大时清空当前侧重采。
+11. 如需手动重放三维结果，点击 `重启 Rerun 显示标定 EE`。
+12. 点击 `保存结果 JSON`。
 
 窗口里的 `实时位姿 / 坐标链路` 会同步显示：
 
@@ -67,13 +74,24 @@ t_world_tracker_i + R_world_tracker_i @ p_tracker_ee = p_world_fixed
 输出的 `tracker_to_ee_pos` 就是 `p_tracker_ee`，单位为米。
 
 注意：这个方法只能求 EE / 夹持点的位置，不能单靠一个固定点求出完整 TCP 朝向。
-因此 `tracker_to_ee_quat` 当前保存为 identity：
+因此 `tracker_to_ee_quat` 由 UI 中的 EE 坐标系方向模式提供：
 
 ```text
-[1.0, 0.0, 0.0, 0.0]
+SolidWorks EE 坐标系 / 与 tracker 一致 / 自定义 RPY
 ```
 
-如果后续需要完整 6D TCP 外参，需要增加方向夹具或已知姿态约束。
+默认 SolidWorks 预设来自夹爪 CAD 坐标系。配置和 JSON 使用 `wxyz`
+四元数顺序；ROS `static_transform_publisher` 常用的 `xyzw` 顺序需要重排。
+如果后续需要通过实物重新求完整 6D TCP 外参，需要增加方向夹具或已知姿态约束。
+
+直接使用 SolidWorks 全外参时，UI 使用内置的 `^Tracker T_EE`：
+
+```text
+left  pos=[-0.160768654, -0.105859381, 0.024897320]
+left  quat(wxyz)=[0.136862131, -0.378705573, 0.913588080, -0.056636271]
+right pos=[-0.161933698, 0.106110099, 0.025322636]
+right quat(wxyz)=[0.136839046, 0.378463784, 0.913688271, 0.056692009]
+```
 
 ## 输出文件
 
@@ -87,7 +105,7 @@ JSON 中包含每侧结果和可用于 LeRobot 命令的 `robot_args`，例如�
 
 ```text
 --robot.left_tracker_to_ee_pos=[...]
---robot.left_tracker_to_ee_quat=[1,0,0,0]
+--robot.left_tracker_to_ee_quat=[qw,qx,qy,qz]
 --robot.right_tracker_to_ee_pos=[...]
---robot.right_tracker_to_ee_quat=[1,0,0,0]
+--robot.right_tracker_to_ee_quat=[qw,qx,qy,qz]
 ```
