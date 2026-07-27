@@ -292,6 +292,7 @@ class TaccapGripper(Robot):
                     serial_number=sn,
                     fps=self.config.tactile_fps,
                     output_types=list(self.config.tactile_output_types),
+                    diff_gain=self.config.tactile_diff_gain,
                 )
         if self.config.enable_wrist_camera:
             sn = self._disc_cameras.get(side)

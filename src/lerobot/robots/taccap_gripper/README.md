@@ -232,7 +232,12 @@ at connect). Leave it unset (default) to keep auto-discovery.
   `OutputType.AugDifference`), which amplifies deformation the raw `rectify` image barely
   shows; its baseline is taken at sensor init, so keep the fingers **unloaded** at connect,
   or the resting pressure is subtracted away for the whole run. Pass
-  `--robot.tactile_output_types=rectify` for the unsubtracted image. Tune `--robot.tactile_fps`
+  `--robot.tactile_output_types=rectify` for the unsubtracted image.
+  `--robot.tactile_diff_gain` (default `1.0`, sensors ship at `1.5`) is the linear gain on
+  that difference: 1.0 cuts per-pixel temporal noise from ~1.77 to ~1.18 grey levels and
+  stops the image clipping, but scales signal down with it — raise it if light contact
+  becomes invisible, set it to `None` to keep whatever the sensor was flashed with.
+  Tune `--robot.tactile_fps`
   / `--robot.tactile_output_types`; `--robot.expected_tactiles_per_side` validates the count.
   The two sensors are paired to this unit's gripper by **USB hub**; `left`/`right` finger
   comes from the GSPS serial's **last digit** (odd → `left`, even → `right`, 单左双右).

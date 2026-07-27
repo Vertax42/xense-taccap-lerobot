@@ -198,6 +198,7 @@ class BiTaccapGripper(Robot):
                         serial_number=sn,
                         fps=self.config.tactile_fps,
                         output_types=list(self.config.tactile_output_types),
+                        diff_gain=self.config.tactile_diff_gain,
                     )
             if getattr(self.config, f"{side}_enable_wrist_camera"):
                 sn = cameras.get(side)

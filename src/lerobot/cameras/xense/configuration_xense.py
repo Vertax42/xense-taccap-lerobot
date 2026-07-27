@@ -116,6 +116,16 @@ class XenseTactileCameraConfig(CameraConfig):
     # effect, and drop auto_wb/white_balance_t at your peril. None -> use the
     # sensor's xpack template unchanged.
     camera_properties: dict[str, float] | None = None
+    # Linear gain the SDK applies when building the AugDifference image
+    # (ctx_patch.process.diff_gain; stock value 1.5). Forwarded to
+    # Sensor.create(overrides={"process.diff_gain": ...}).
+    #
+    # It scales signal and noise alike, so it trades headroom against contrast
+    # rather than improving SNR: at 1.5 a resting GSPS01 measures ~1.77 grey
+    # levels of per-pixel temporal noise and clips at 155; at 1.0, ~1.18 and 138.
+    # Lower it when the difference image looks noisy or saturates, raise it when
+    # light contact is invisible. None -> leave the sensor's own value alone.
+    diff_gain: float | None = None
 
     def __post_init__(self):
         # Set default output types if not provided

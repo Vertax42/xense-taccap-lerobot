@@ -151,6 +151,7 @@ class XenseTactileCamera(Camera):
         self.disable_infer = config.disable_infer
         self.infer_mode = config.infer_mode
         self.camera_properties = config.camera_properties
+        self.diff_gain = config.diff_gain
         self.sensor = None
 
         # Threading for async read
@@ -214,15 +215,24 @@ class XenseTactileCamera(Camera):
                 create_kwargs["config_path"] = _XENSE_CONFIG_CACHE_DIR
             if self.infer_mode is not None:
                 create_kwargs["infer_mode"] = self.infer_mode
-            # Override the per-OS camera property template (exposure/brightness/
-            # white-balance...) via Sensor.create(overrides=...). The override key
-            # must be 2-level dotted ("camera.linux"/"camera.win"); the value is
-            # the full property dict (it replaces the template for that OS).
+            # Patch the sensor's config tree via Sensor.create(overrides=...).
+            # Keys are 2-level dotted paths into ctx_patch. A path may address a
+            # dict node, in which case the value REPLACES that node wholesale
+            # ("camera.linux" swaps the entire per-OS property template), or a
+            # single leaf, which is edited in place and leaves its siblings alone
+            # ("process.diff_gain" keeps rgb_ref_mean, base_grid and the rest).
+            # Accumulate into one dict — each source contributes its own key, and
+            # assigning here instead would silently drop whichever came first.
+            overrides: dict[str, Any] = {}
             if self.camera_properties:
                 import platform
 
                 os_key = "win" if platform.system().lower().startswith("win") else "linux"
-                create_kwargs["overrides"] = {f"camera.{os_key}": dict(self.camera_properties)}
+                overrides[f"camera.{os_key}"] = dict(self.camera_properties)
+            if self.diff_gain is not None:
+                overrides["process.diff_gain"] = float(self.diff_gain)
+            if overrides:
+                create_kwargs["overrides"] = overrides
             with _XENSE_SENSOR_CREATE_LOCK:
                 self.sensor = self._Sensor.create(self.serial_number, **create_kwargs)
         except Exception as e:

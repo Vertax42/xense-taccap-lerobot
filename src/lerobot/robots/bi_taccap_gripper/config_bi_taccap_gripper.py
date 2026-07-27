@@ -135,6 +135,12 @@ class BiTaccapGripperConfig(RobotConfig):
     don't hard-code. The baseline is taken at sensor init, so keep all four
     fingers unloaded at connect."""
 
+    tactile_diff_gain: float | None = 1.0
+    """Linear gain applied to the ``difference`` image
+    (``ctx_patch.process.diff_gain``, stock 1.5). 1.0 roughly a third less
+    per-pixel temporal noise and no clipping; it scales signal and noise alike,
+    so SNR is unchanged. None leaves the sensor's flashed value."""
+
     wrist_camera_width: int = 640
     wrist_camera_height: int = 480
     wrist_camera_fps: int = 30

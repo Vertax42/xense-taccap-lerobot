@@ -136,6 +136,14 @@ class TaccapGripperConfig(RobotConfig):
     must be **unloaded** at connect — start with something already pressed
     against the gel and that pressure is subtracted away for the whole run."""
 
+    tactile_diff_gain: float | None = 1.0
+    """Linear gain the SDK applies to the ``difference`` image
+    (``ctx_patch.process.diff_gain``). The sensors ship at 1.5, which is noisy
+    and clips on this gel; 1.0 measures ~1.18 grey levels of per-pixel temporal
+    noise instead of ~1.77 and stops saturating. Because it scales signal and
+    noise together the SNR is unchanged — it buys headroom, not clarity. Set to
+    None to leave whatever the sensor was flashed with."""
+
     # ---- Wrist camera (OpenCV UVC; auto-discovered by serial) ------------
     enable_wrist_camera: bool = True
     """Wire the wrist UVC camera under observation key ``wrist_cam`` (resolved
