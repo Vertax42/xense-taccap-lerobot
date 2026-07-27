@@ -6,7 +6,9 @@ It is scoped to a single device: the **TacCap-Gripper** (**TacCap** = *Tactile
 Capture* Gripper) — a handheld **UMI** leader gripper for tactile data
 collection. This branch tracks **upstream lerobot v5.1**, slimmed to the
 TacCap-Gripper (single + bimanual) and its **Pico4** teleoperator/tracker, with
-Xense tactile cameras layered on top. See
+Xense tactile cameras layered on top. The bimanual rig can optionally record an
+**Insight head camera** as RGB plus a raw-frame VIO pose represented in the same
+position + 6D rotation format as the gripper trackers. See
 [`src/lerobot/robots/taccap_gripper/README.md`](src/lerobot/robots/taccap_gripper/README.md)
 for device-specific usage. For generic lerobot usage (datasets, policies,
 training scripts) refer to the
@@ -89,6 +91,11 @@ This repository uses `third_party/` git submodules to manage hardware SDK depend
 | `third_party/taccap-gripper` | `xense.taccap` (TacCap UMI tactile gripper SDK) |
 | `third_party/XenseVR-PC-Service` | `xensevr_pc_service_sdk` (Pico4 teleop/tracker) |
 | `third_party/XenseVR-RobotVision-PC` | ZED-M → Pico4 stereo passthrough (built separately) |
+| `third_party/pyinsight` | `pyinsight` (Insight camera native RGB/VIO/IMU bridge) |
+
+`taccap-gripper` and `pyinsight` are installed in editable mode.
+Changes made inside those initialized submodules are therefore picked up by the
+environment without rebuilding the main `lerobot` package.
 
 > `xensesdk` is **not** a submodule and is **not** vendored in-repo — it is
 > published to PyPI (cp312 manylinux wheel that bundles the patched
@@ -105,8 +112,9 @@ This repository uses `third_party/` git submodules to manage hardware SDK depend
 > or `~/Downloads/`), otherwise **downloads the matching-arch asset** from the
 > [v0.1.0 release](https://github.com/Vertax42/XenseVR-PC-Service/releases/tag/v0.1.0)
 > (override the URL with `$XENSEVR_DEB_URL`), then runs `sudo dpkg -i`
-> (idempotent — same version is skipped). Start it with
-> `/opt/apps/roboticsservice/runService.sh`.
+> (idempotent — same version is skipped). Set `XENSEVR_SKIP_DEB=1` only when you
+> intentionally want to skip the daemon and install Python bindings separately.
+> Start it with `/opt/apps/roboticsservice/runService.sh`.
 
 **Step 2:** 🐍 Create and activate the mamba environment:
 
@@ -131,7 +139,7 @@ This step will:
 - Update the conda environment from `conda_environment.yaml`
 - Install the main package from `pyproject.toml`
 - Install `xensesdk` from PyPI (`uv pip install xensesdk`; see the note above — override with a local wheel via `$XENSESDK_WHEEL` for offline/patched builds)
-- Install the XenseVR PC Service daemon from its `.deb` (resolved out-of-band — see the note above), then build the `third_party` SDK packages: `xensevr_pc_service_sdk` (Pico4) and `xense.taccap` (TacCap UMI gripper)
+- Install the XenseVR PC Service daemon from its `.deb` (resolved out-of-band — see the note above), then build/install the `third_party` SDK packages: `xensevr_pc_service_sdk` (Pico4), `xense.taccap` (TacCap UMI gripper), and the editable `pyinsight`
 
 **Step 4:** ✅ Verify the installation:
 
@@ -139,6 +147,7 @@ This step will:
 python -c 'import xensevr_pc_service_sdk; print("xensevr_pc_service_sdk OK ->", xensevr_pc_service_sdk.__file__)'
 python -c 'import xensesdk; print("xensesdk OK ->", xensesdk.__file__)'
 python -c 'import xense.taccap; print("xense.taccap OK ->", xense.taccap.__file__)'
+python -c 'from pyinsight import find_library; print("pyinsight OK ->", find_library())'
 ```
 
 **Step 5:** 📌 **Note on FFmpeg / video:** v5.1 no longer pins `ffmpeg`
@@ -220,6 +229,43 @@ mmcli -L                                                               # gripper
 
 Revert by deleting the rule file and reloading. (Alternatively, on a dedicated
 robot PC with no cellular modem: `sudo systemctl disable --now ModemManager`.)
+
+**Step 8:** 🎥 **Insight device readiness (only when using the head camera).**
+The Python package and bundled `libinsight9.so` can be checked without opening the
+device:
+
+```bash
+pyinsight-check-env --hidraw
+```
+
+The camera needs **two** kinds of node, and the SDK fails to initialise if either
+is unreadable:
+
+| Node | Carries | Default owner |
+|------|---------|---------------|
+| `/dev/video4,6,8` (3 of 6) | RGB, stereo, depth | `root:video`, mode 660 |
+| `/dev/hidraw*` (2) | IMU, VIO | `root:plugdev`, mode 660 |
+
+On a host where those group defaults do not already apply, grant access with:
+
+```bash
+sudo tee /etc/udev/rules.d/99-insight.rules >/dev/null <<'EOF'
+SUBSYSTEM=="hidraw",      ATTRS{idVendor}=="3652", ATTRS{idProduct}=="0104", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="3652", ATTRS{idProduct}=="0104", MODE="0660", GROUP="video"
+EOF
+sudo usermod -aG plugdev,video "$USER"
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+# Log out/in, then reconnect the camera and rerun pyinsight-check-env --hidraw.
+```
+
+`3652:0104` is what the camera actually reports — `lsusb` shows it as
+`LooperRobotics Insight Series USB AI Camera`. Confirm yours with `lsusb` before
+applying, and keep the VID/PID match rather than opening up every HID device.
+
+> Do not match on `ATTRS{product}`. The USB product string is
+> `Insight Series USB AI Camera` across the whole series, so a rule written
+> against a per-model name silently matches nothing.
 
 ## Robotics Service Autostart
 
@@ -346,6 +392,7 @@ as `runService.sh`:
 - `LD_LIBRARY_PATH=/opt/apps/roboticsservice:/opt/apps/roboticsservice/lib:/opt/apps/roboticsservice/SDK/x64`
 - `QT_PLUGIN_PATH=/opt/apps/roboticsservice/plugins/`
 - `QT_QML_PATH=/opt/apps/roboticsservice/qml/`
+
 
 ## 🔑 The `LeRobotDataset` format
 

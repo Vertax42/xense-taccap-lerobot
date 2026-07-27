@@ -339,11 +339,18 @@ def teleoperate(cfg: TeleoperateConfig):
             teleop = make_teleoperator_from_config(cfg.teleop)
             teleop.connect()
 
-        # 3D pose + trajectory overlay (no-op if the device emits no tcp.* poses).
+        # Viewer layout, plus the 3D pose trail when a tracker supplies poses.
+        # Built whenever data is displayed: --show_trajectory=false suppresses the
+        # trail, not the blueprint, since dropping the blueprint would leave Rerun
+        # auto-laying-out every camera and scalar into equal tiles.
         traj_viz = None
-        if cfg.display_data and cfg.show_trajectory:
-            # teleop signals panel: show only the gripper position channel(s).
-            traj_viz = TaccapTrajectoryViz(robot.observation_features, signals="gripper")
+        if cfg.display_data:
+            # teleop signals panel: default to the gripper position channel(s).
+            traj_viz = TaccapTrajectoryViz(
+                robot.observation_features,
+                signals="gripper",
+                show_trajectory=cfg.show_trajectory,
+            )
             if traj_viz.active:
                 traj_viz.setup()
             else:

@@ -135,6 +135,24 @@ class BiTaccapGripperConfig(RobotConfig):
     wrist_camera_height: int = 480
     wrist_camera_fps: int = 30
 
+    # ---- Insight head camera ----------------------------------------------
+    enable_head_camera: bool = False
+    """Enable one process-global Insight RGB/VIO head camera."""
+    head_camera_library_path: str | None = None
+    head_camera_width: int = 1024
+    head_camera_height: int = 768
+    """Landscape crop taken from the sensor's fixed 1088x1920 portrait frame.
+
+    1024x768 is 4:3 at 0.94x of the largest 4:3 region available, keeping
+    72.0 x 57.2 of the 72.0 x 104.1 degrees the camera actually delivers.
+    """
+    head_camera_crop_bias: float = 0.5
+    """Where that crop sits on the tall axis: 0.0 top, 0.5 centre, 1.0 bottom."""
+    head_camera_fps: int = 30
+    head_camera_startup_timeout_s: float = 5.0
+    head_camera_stale_after_s: float = 0.2
+    head_camera_stale_timeout_s: float = 3.0
+
     def __post_init__(self):
         super().__post_init__()
         if self.role.strip().lower() not in (
@@ -146,6 +164,20 @@ class BiTaccapGripperConfig(RobotConfig):
             raise ValueError(
                 f"role must be leader/master or follower/slave, got {self.role!r}."
             )
+        if self.enable_head_camera:
+            if self.head_camera_width <= 0 or self.head_camera_height <= 0:
+                raise ValueError(
+                    "head_camera_width/head_camera_height must be positive, got "
+                    f"{self.head_camera_width}x{self.head_camera_height}."
+                )
+            if self.head_camera_fps <= 0:
+                raise ValueError("head_camera_fps must be positive.")
+            if self.head_camera_startup_timeout_s <= 0:
+                raise ValueError("head_camera_startup_timeout_s must be positive.")
+            if self.head_camera_stale_after_s <= 0:
+                raise ValueError("head_camera_stale_after_s must be positive.")
+            if self.head_camera_stale_timeout_s <= 0:
+                raise ValueError("head_camera_stale_timeout_s must be positive.")
         for side in _SIDES:
             if getattr(self, f"{side}_enable_gripper") and getattr(
                 self, f"{side}_gripper_open_rad"

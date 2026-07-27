@@ -342,6 +342,17 @@ def self_driven_record_loop(
         action = None
         if dataset is not None or display_data:
             observation = robot.get_observation()
+
+            # Graceful degradation on mid-episode hardware loss (e.g. a wrist
+            # camera hot-unplug): the robot returns fallback frames instead of
+            # raising, and flags device_lost. Stop the whole session cleanly so
+            # the in-progress episode is saved rather than crashing the loop.
+            if getattr(robot, "device_lost", False):
+                logger.error(
+                    "Device lost mid-recording; stopping to save recorded data."
+                )
+                events["stop_recording"] = True
+                break
             # Self-driven device: the demonstrated action is the pose + gripper
             # subset of this same observation sample (images excluded — we
             # iterate action_features, not the full obs). Single hardware read.
@@ -446,8 +457,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
         # 3D pose + trajectory overlay (no-op if the device emits no tcp.* poses).
         traj_viz = None
-        if cfg.display_data and cfg.show_trajectory:
-            traj_viz = TaccapTrajectoryViz(robot.observation_features)
+        if cfg.display_data:
+            traj_viz = TaccapTrajectoryViz(
+                robot.observation_features, show_trajectory=cfg.show_trajectory
+            )
             if traj_viz.active:
                 traj_viz.setup()
             else:

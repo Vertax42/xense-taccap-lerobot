@@ -23,17 +23,18 @@ dependencies:
   - spdlog=1.14.1
   - pkg-config
   - make
-  # ── CUDA (xensesdk / onnxruntime-gpu) ─────────────────────────────────────
+  # ── CUDA (xensesdk 2.1.1 / onnxruntime-gpu) ────────────────────────────────
   - nvidia::cuda-toolkit=12.8
   - nvidia::cudnn
   # ── Video (torchcodec / av) ────────────────────────────────────────────────
   # PyAV/torchcodec are installed from wheels later in setup_env.sh; ffmpeg is
   # kept out of the conda solve to avoid ICU/libxml2 conflicts.
   # ── Python base tools ─────────────────────────────────────────────────────
-  - numpy>=1.26.4 # pip installs (xensesdk) constrain the upper bound (<2.3.0)
+  - numpy>=1.26.4 # xensesdk==2.1.1 is installed by setup_env.sh with --no-deps; keep numpy <2.3.0 compatible
   - pip
   - wheel
   - pip:
       - uv
+      # xensesdk==2.1.1 is installed by ./setup_env.sh --install with --no-deps.
       - pyrealsense2
       - matplotlib

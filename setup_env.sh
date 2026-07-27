@@ -310,7 +310,7 @@ install_pico4() {
     fi
 
     # Install the PC Service daemon (.deb) the Python SDK will talk to.
-    install_xensevr_service
+    install_xensevr_service || return 1
 
     # Build the C SDK
     bash "$SDK_SRC/RoboticsService/PXREARobotSDK/build.sh"
@@ -345,7 +345,7 @@ install_xense() {
     # Install xensesdk runtime deps explicitly because the wheel is installed
     # with --no-deps below (keeps the shared Robostack env's numpy/opencv/
     # cryptography pins from being disturbed by the wheel's own constraints).
-    # The rebuilt 2.0.0 wheel added cypack/ormsgpack/cyclonedds-nightly as
+    # xensesdk 2.1.1 requires cypack/ormsgpack/cyclonedds-nightly as
     # mandatory runtime deps — cypack is the FIRST import in xensesdk/__init__.py
     # and ormsgpack/cyclonedds are needed by the ezros layer — so they must be
     # listed here or `import xensesdk` fails with ModuleNotFoundError.
@@ -364,8 +364,7 @@ install_xense() {
         "ormsgpack>=1.11.0" \
         "cyclonedds-nightly==2025.7.29" \
         "pyudev; platform_system=='Linux'"
-    # Install xensesdk 2.x. It is published to PyPI (cp312 manylinux wheel as of
-    # 2.0.1), so install by name — no more out-of-band wheel to fetch. The
+    # Install the validated xensesdk 2.1.1 release by name. The
     # published wheel bundles the patched libxense_c.so flash reader
     # (concurrent-connect EBADF fix), so no separate xense_xu / pyxensexu build
     # is needed. --no-deps keeps the shared Robostack env's numpy/opencv/
@@ -379,7 +378,7 @@ install_xense() {
         uv pip install --no-deps --force-reinstall "$XENSESDK_WHEEL"
     else
         echo "[xense] Installing xensesdk from PyPI..."
-        uv pip install --no-deps --upgrade "xensesdk>=2.0.0"
+        uv pip install --no-deps --upgrade "xensesdk==2.1.1"
     fi
     # xensesdk requires a specific av version
     uv pip install av==15.1.0
@@ -468,6 +467,32 @@ install_taccap() {
     echo "[taccap] Done. Verify with: python -c 'import xense.taccap; print(xense.taccap.__file__)'"
 }
 
+# ── Hardware module: Insight head camera --------------------------------------
+
+install_insight() {
+    echo ""
+    echo "══════════════════════════════════════════"
+    echo " pyinsight (Insight camera interface)"
+    echo "══════════════════════════════════════════"
+
+    local SDK_DIR="$PROJECT_ROOT/third_party/pyinsight"
+    if [[ ! -f "$SDK_DIR/pyproject.toml" ]]; then
+        echo "ERROR: $SDK_DIR not found (submodule not initialized)."
+        echo "  Run: git submodule update --init third_party/pyinsight"
+        return 1
+    fi
+
+    uv pip install -e "$SDK_DIR" --no-deps
+
+    python - <<'PY'
+from pyinsight import Insight, find_library
+
+print("Insight ->", Insight)
+print("libinsight9.so ->", find_library())
+PY
+    echo "[insight] Done. Device/HID readiness: pyinsight-check-env --hidraw"
+}
+
 # ── Argument parsing ──────────────────────────────────────────────────────────
 
 # Check if an environment name is provided
@@ -509,17 +534,30 @@ elif [[ "$1" == "--install" ]]; then
     fi
     ENV_NAME=${CONDA_DEFAULT_ENV}
 
-    # Detect conda/mamba command
-    CONDA_BASE="$(find_conda_base || true)"
-    if [[ -n "$CONDA_BASE" && -x "$CONDA_BASE/bin/mamba" ]]; then
-        CONDA_CMD="$CONDA_BASE/bin/mamba"
-    elif command -v mamba >/dev/null 2>&1; then
+    # Detect the manager that owns the *currently active* environment, and drive
+    # every env operation below (env update + the taccap `install` in
+    # install_taccap) with it. mamba is preferred whenever the active install
+    # ships it — it is faster and is the intended solver for the robostack stack
+    # this env is built on — with conda as the fallback.
+    #
+    # We key off MAMBA_EXE/CONDA_EXE (exported by the shell hook of the active
+    # base) rather than a bare `-f ~/miniforge3/...` check, which mis-detects a
+    # mambaforge install (`~/mambaforge`) as conda and force-picks mamba whenever
+    # ~/miniforge3 merely exists — even for an active anaconda3 env.
+    if [[ -n "${MAMBA_EXE:-}" ]] && command -v mamba &>/dev/null; then
+        CONDA_CMD="mamba"                                  # miniforge / mambaforge
+    elif [[ -n "${CONDA_EXE:-}" && -x "$(dirname "$CONDA_EXE")/mamba" ]]; then
+        CONDA_CMD="mamba"                                  # mamba beside active conda
+    elif command -v mamba &>/dev/null; then
         CONDA_CMD="mamba"
-    elif [[ -n "$CONDA_BASE" && -x "$CONDA_BASE/bin/conda" ]]; then
-        CONDA_CMD="$CONDA_BASE/bin/conda"
-    else
+    elif command -v conda &>/dev/null; then
         CONDA_CMD="conda"
+    else
+        echo "[ERROR] Neither 'mamba' nor 'conda' is available on PATH."
+        echo "        Activate your environment (conda/mamba activate <env>) and retry."
+        exit 1
     fi
+    echo "[INFO] Using '$CONDA_CMD' to manage environment '$ENV_NAME'."
 
     echo "[INFO] Updating conda environment '$ENV_NAME' from: $CONDA_ENV_FILE"
     if ! $CONDA_CMD env update -f "$CONDA_ENV_FILE" -n "$ENV_NAME"; then
@@ -595,6 +633,7 @@ elif [[ "$1" == "--install" ]]; then
     install_pico4    || exit 1
     install_xense     || echo "[WARN] xense installation skipped or failed (see above)"
     install_taccap    || echo "[WARN] taccap installation skipped or failed (see above)"
+    install_insight  || echo "[WARN] pyinsight installation skipped or failed (see above)"
 
 
     # ── Post-install verification ────────────────────────────────────────────
@@ -613,6 +652,7 @@ xensevr_pc_service_sdk|import importlib.metadata as M, xensevr_pc_service_sdk; p
 xensesdk|import importlib.metadata as M, xensesdk; print("v"+M.version("xensesdk"), "->", xensesdk.__file__)
 xensesdk flash|from xensesdk.flash.linux_backend import LinuxFlashBackend; print("available" if LinuxFlashBackend().available else "NOT available")
 taccap-gripper|import importlib.metadata as M, xense.taccap; print("v"+M.version("taccap-gripper"), "->", xense.taccap.__file__)
+pyinsight|import importlib.metadata as M; from pyinsight import find_library; print("v"+M.version("pyinsight"), "->", find_library())
 VERIFY
 
     echo ""

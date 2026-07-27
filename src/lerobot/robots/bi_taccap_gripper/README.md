@@ -4,6 +4,9 @@ Bimanual TacCap-Gripper handheld data-collection rig — two `taccap_gripper` un
 (left + right) driven as one robot. Passive/self-driven: `send_action()` is a no-op
 (jaw motors stay disabled, encoders read-only); pose comes from a per-side Pico4
 Ultra tracker, tactile + wrist cameras go through the standard `cameras` framework.
+An optional Insight head camera uses the same robot observation path and contributes
+RGB plus a raw-frame VIO pose; no head-to-gripper extrinsic calibration is required
+at capture time.
 
 Implemented with the **reimplement-with-prefixes** pattern (cf. `bi_elite_cs66_rt`):
 one `Robot` class, per-side handles in dicts keyed `"left"`/`"right"`, and every
@@ -21,8 +24,20 @@ Per side `{s}` ∈ {left, right}:
 | `{s}_imu.{accel,gyro,mag}.{x,y,z}` | `{s}_enable_imu` | IMU |
 | `{s}_wrist` | `{s}_enable_wrist_camera` | wrist UVC frame |
 | `{s}_tactile_left` / `{s}_tactile_right` | auto-discovered | tactile frame from the left / right finger sensor |
+| `head_rgb` | `enable_head_camera` | latest decoded Insight RGB frame |
+| `head_camera.x/y/z` | `enable_head_camera` | raw Insight VIO position in the camera's own coordinate frame |
+| `head_camera.r1..r6` | `enable_head_camera` | raw Insight VIO orientation as the first two rotation-matrix columns |
 
-`action_features` = the pose + `{s}_gripper.pos` subset (no cameras).
+`action_features` = the per-side gripper pose + `{s}_gripper.pos` subset; the head
+camera pose and all images remain observation-only. With both Pico4 trackers, both
+grippers and the Insight head camera enabled, `observation.state` has 29 dimensions (20 + 9).
+
+For each fixed-rate robot sample, the adapter calls the Insight SDK's `latest()`
+exactly once and takes the newest cached RGB and VIO values. The source XYZW quaternion
+is converted inside the camera adapter with the shared 6D conversion used by the Pico4
+trackers. A corrupt new JPEG holds the previous good RGB frame, and stale RGB/VIO caches
+produce a rate-limited runtime warning; no timing, age, status or IMU fields are stored
+in the dataset.
 
 ## Config — auto-discovered by serial rule
 
@@ -60,6 +75,29 @@ and/or `--robot.right_tracker_serial=<SN>`. A pinned side uses its serial **verb
 enumeration, no rule check); un-pinned sides still auto-discover by the second-to-last-digit
 rule. Use this for a tracker whose serial does not follow the rule, or when enumeration is flaky.
 
+Enable the head camera with `--robot.enable_head_camera=true`. It records `width=1024`,
+`height=768` at dataset FPS 30 — a landscape crop, not the raw sensor frame. The RGB
+stream has exactly one mode, 1088x1920 portrait, and no setting changes that, so a
+landscape frame has to be cut out of the tall one. 1024x768 is 4:3 at 0.94x of the
+largest 4:3 region available, keeping 72.0 x 57.2 of the 72.0 x 104.1 degrees the camera
+actually delivers.
+
+`--robot.head_camera_crop_bias` slides that window along the tall axis (0.0 top, 0.5
+centre, 1.0 bottom). Set it to suit how the camera is mounted; over a 104-degree vertical
+field the centre is rarely where the subject sits. Changing the size or the bias changes
+the recorded field of view, so episodes either side of such a change are not comparable.
+
+Override the native library lookup with
+`--robot.head_camera_library_path=/path/to/libinsight9.so` when needed. During recording,
+RGB or VIO staleness first warns after 0.2 s; if either stream remains unchanged for more
+than 3 s, recording aborts with a timeout instead of silently repeating old head data.
+
+Raw acquisition is isolated in
+[`../../cameras/insight/camera_insight.py`](../../cameras/insight/camera_insight.py).
+The camera adapter keeps the original Insight VIO coordinate frame and converts only
+the quaternion representation to `r1..r6`; the robot adapter applies no
+head-to-gripper extrinsic.
+
 ## Usage
 
 Self-driven — **no `--teleop`**. Prerequisite: `xense.taccap` importable in the
@@ -82,6 +120,7 @@ add `--robot.enable_tracker=false` to record tactile + gripper only:
 ```bash
 lerobot-record \
     --robot.type=bi_taccap_gripper \
+    --robot.enable_head_camera=true \
     --dataset.repo_id=Xense/<dataset_name> \
     --dataset.single_task="Pick up the cube" \
     --dataset.num_episodes=20 \
@@ -90,6 +129,9 @@ lerobot-record \
     --dataset.reset_time_s=30 \
     --display_data=true
 ```
+
+Before enabling it, run `pyinsight-check-env --hidraw`; the Insight HID nodes must be
+readable and writable by the recording user.
 
 ## 3D trajectory visualization
 
