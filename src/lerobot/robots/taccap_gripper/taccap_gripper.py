@@ -96,12 +96,6 @@ def resolve_wrist_camera_path(serial: str) -> str:
     return matches[0]
 
 
-# Config-cache key xensesdk uses for its per-serial config cache. Mirrors the
-# constant baked into the SDK (xensesdk.core.ctx_builders); if it ever drifts the
-# pre-warm just fails to decrypt and the SDK falls back to its own flash read.
-_XENSE_CONFIG_CACHE_PSWD = "Wz8mmWz2ALJ6X5Ic"
-
-
 def _wait_nodes_settle(serials, logger, timeout_s: float = 15.0) -> None:
     """Wait until each serial's ``/dev/v4l/by-id`` capture node is back + openable
     after a flash-read reset re-enumerated it."""
@@ -129,13 +123,24 @@ def prewarm_tactile_config_cache(camera_configs: dict[str, Any], logger) -> None
     """Warm the xensesdk per-serial config cache for tactile sensors **before**
     opening any camera.
 
-    A Sunplus (0x1300) flash read resets/re-enumerates the sensor. Doing that
-    concurrently (the parallel camera connect) on a cold cache races the SDK's
-    non-thread-safe flash lib and moves camera nodes mid-open. Reading here,
-    sequentially and only for **uncached Sunplus** sensors, makes cold start
-    safe; then we wait for the nodes to settle. A warm cache is just a cheap
-    ``exists()`` stat — no flash read, no reset, no extra cache decrypt (the SDK
-    still reads the cache once at connect)."""
+    The first open of a sensor reads its flash, which resets/re-enumerates the
+    device. Doing that concurrently (the parallel camera connect) on a cold
+    cache races the SDK's non-thread-safe flash lib and moves camera nodes
+    mid-open. Opening each uncached sensor here — sequentially, one at a time —
+    forces those flash reads to happen in a controlled order; then we wait for
+    the nodes to settle. A warm cache is just a cheap ``exists()`` stat: no
+    flash read, no reset (the SDK still reads the cache once at connect).
+
+    We deliberately drive this through plain ``Sensor.create``/``release``
+    rather than reaching into the flash backend and writing the cache
+    ourselves. The SDK owns the cache format and its encryption key, and an
+    earlier version of this function reimplemented that write — which meant
+    hardcoding the SDK's key in this file and pinning two private APIs
+    (``FlashClient``, ``is_sunplus``). Both were renamed upstream, so the
+    import failed, the whole pre-warm silently no-op'd through its except
+    branch, and the cold-start race it exists to prevent was live again. The
+    public path costs ~2s per uncached sensor on cold start and nothing when
+    warm, and cannot rot the same way."""
     serials = [
         cfg.serial_number
         for cfg in camera_configs.values()
@@ -144,36 +149,27 @@ def prewarm_tactile_config_cache(camera_configs: dict[str, Any], logger) -> None
     if not serials:
         return
     try:
-        from xensesdk.flash import FlashClient
-        from xensesdk.flash.sunplus_backend import is_sunplus
+        from xensesdk import Sensor
         from xensesdk.core.ctx_builders import CONFIG_CACHE_DIR
-        from xensesdk.utils.encrypt import encrypt_config_file
-    except Exception as e:  # SDK without the Sunplus/xbin path — nothing to do.
+    except Exception as e:  # No SDK — the tactile cameras will fail later anyway.
         logger.debug(f"Config pre-warm unavailable ({e}); skipping")
         return
 
-    uncached = [
-        sn for sn in serials if is_sunplus(sn) and not (CONFIG_CACHE_DIR / sn).exists()
-    ]
+    uncached = [sn for sn in serials if not (CONFIG_CACHE_DIR / sn).exists()]
     if not uncached:
         return  # warm cache: cheap stat only, no flash read / reset
 
     logger.info(
-        f"  Pre-warming config cache (cold start) for {len(uncached)} Sunplus sensor(s): {uncached}"
+        f"  Pre-warming config cache (cold start) for {len(uncached)} sensor(s): {uncached}"
     )
-    client = FlashClient()
-    try:
-        for sn in uncached:
-            try:
-                patch = client.read_patch(serial_number=sn)  # reads flash -> resets device
-                CONFIG_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-                encrypt_config_file(
-                    patch, CONFIG_CACHE_DIR / sn, password=_XENSE_CONFIG_CACHE_PSWD, format="xbin"
-                )
-            except Exception as e:
-                logger.warning(f"  Config pre-warm failed for {sn}: {e}")
-    finally:
-        client.cleanup()
+    for sn in uncached:
+        try:
+            # disable_infer keeps this to the flash read + cache write; the real
+            # connect re-creates the sensor with the caller's actual settings.
+            sensor = Sensor.create(sn, disable_infer=True)
+            sensor.release()
+        except Exception as e:
+            logger.warning(f"  Config pre-warm failed for {sn}: {e}")
 
     _wait_nodes_settle(uncached, logger)
 
