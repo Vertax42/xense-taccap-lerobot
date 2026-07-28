@@ -133,14 +133,13 @@ class BiTaccapGripper(Robot):
             ) from _TACCAP_SDK_IMPORT_ERROR
         if config.enable_tracker and not PICO4_TRACKER_AVAILABLE:
             raise ImportError(
-                "Pico4TrackerReader not available. Ensure "
-                "src/lerobot/teleoperators/pico4/tracker.py is importable."
+                "Pico4TrackerReader not available. Ensure src/lerobot/teleoperators/pico4/tracker.py is importable."
             )
 
         # Per-side hardware handles, populated on connect.
-        self._gripper: dict[str, Any] = {s: None for s in _SIDES}  # Leader/FollowerGripper
-        self._endpoints: dict[str, Any] = {s: None for s in _SIDES}  # GripperEndpoints
-        self._tracker: dict[str, Pico4TrackerReader | None] = {s: None for s in _SIDES}
+        self._gripper: dict[str, Any] = dict.fromkeys(_SIDES)  # Leader/FollowerGripper
+        self._endpoints: dict[str, Any] = dict.fromkeys(_SIDES)  # GripperEndpoints
+        self._tracker: dict[str, Pico4TrackerReader | None] = dict.fromkeys(_SIDES)
         # Auto-discover tactile + wrist cameras and build their configs so the
         # observation schema is ready before connect(). Tactiles are paired to a
         # gripper by USB hub, so this scans the serial bus (grippers must be
@@ -227,18 +226,14 @@ class BiTaccapGripper(Robot):
                     # config strings ("DIFFERENCE", "XenseOutputType.DIFFERENCE", …)
                     # into the same enum whose .value keys the read dict. Recorded
                     # type came first, so everything after it is display-only.
-                    display_keys = {
-                        ot.value: tactile_display_key(cam_name, ot.value)
-                        for ot in cfg.output_types[1:]
-                    }
+                    display_keys = {ot.value: tactile_display_key(cam_name, ot.value) for ot in cfg.output_types[1:]}
                     if display_keys:
                         self._tactile_display_keys[cam_name] = display_keys
             if getattr(self.config, f"{side}_enable_wrist_camera"):
                 sn = cameras.get(side)
                 if not sn:
                     raise ValueError(
-                        f"No {self._role} wrist camera found for the {side} side "
-                        f"(rule: {side} == {parity} sequence)."
+                        f"No {self._role} wrist camera found for the {side} side (rule: {side} == {parity} sequence)."
                     )
                 configs[f"{side}_wrist"] = OpenCVCameraConfig(
                     index_or_path=resolve_wrist_camera_path(sn),
@@ -384,9 +379,7 @@ class BiTaccapGripper(Robot):
         self.logger.info("Connecting BiTacCap-Gripper...")
 
         # 1. Grippers — auto-discovered by serial (side + role) on the bus.
-        enabled_gripper_sides = tuple(
-            s for s in _SIDES if getattr(self.config, f"{s}_enable_gripper")
-        )
+        enabled_gripper_sides = tuple(s for s in _SIDES if getattr(self.config, f"{s}_enable_gripper"))
         grippers = disco.discover_grippers(self._role) if enabled_gripper_sides else {}
         gripper_cls = LeaderGripper if self._role == "leader" else FollowerGripper
 
@@ -396,18 +389,14 @@ class BiTaccapGripper(Robot):
             if getattr(self.config, f"{side}_enable_gripper"):
                 endpoints = grippers.get(side)
                 if endpoints is None:
-                    raise RuntimeError(
-                        f"No {self._role} gripper discovered for the {side} side."
-                    )
+                    raise RuntimeError(f"No {self._role} gripper discovered for the {side} side.")
                 self._endpoints[side] = endpoints
                 self.logger.info(
                     f"  [{side}] TacCap-Gripper: side={endpoints.side} role={endpoints.role} "
                     f"fw_sn={endpoints.firmware_sn!r} mcu={endpoints.mcu_serial!r}"
                 )
                 self._gripper[side] = gripper_cls(endpoints.mcu_device)
-                self.logger.info(
-                    f"  [{side}] ✅ {gripper_cls.__name__} attached (MCU-only, read-only)"
-                )
+                self.logger.info(f"  [{side}] ✅ {gripper_cls.__name__} attached (MCU-only, read-only)")
 
             # 2. Pico4 tracker (auto-discovered SN per side, pinned here).
             if side in self._tracker_sn_by_side:
@@ -419,22 +408,16 @@ class BiTaccapGripper(Robot):
                     logger_name=f"{self.config.id or 'bi'}-{side}",
                 )
                 init_pose = (
-                    np.asarray(
-                        getattr(self.config, f"{side}_init_tcp_pose"), dtype=np.float64
-                    )
+                    np.asarray(getattr(self.config, f"{side}_init_tcp_pose"), dtype=np.float64)
                     if getattr(self.config, f"{side}_enable_init_pose_alignment")
                     else None
                 )
                 tracker.connect(current_tcp_pose_quat=init_pose)
                 self._tracker[side] = tracker
                 if init_pose is not None:
-                    self.logger.info(
-                        f"  [{side}] ✅ Pico4 tracker connected with UMI alignment"
-                    )
+                    self.logger.info(f"  [{side}] ✅ Pico4 tracker connected with UMI alignment")
                 else:
-                    self.logger.info(
-                        f"  [{side}] ✅ Pico4 tracker connected (world frame)"
-                    )
+                    self.logger.info(f"  [{side}] ✅ Pico4 tracker connected (world frame)")
 
         # 3. Cameras (tactile + wrist, auto-discovered in __init__).
         #    Pre-warm the config cache sequentially first so the parallel connect
@@ -518,9 +501,7 @@ class BiTaccapGripper(Robot):
             obs["head_rgb"] = head.rgb
             for axis, value in zip(("x", "y", "z"), head.vio_position, strict=True):
                 obs[f"head_camera.{axis}"] = value
-            for key, value in zip(
-                ("r1", "r2", "r3", "r4", "r5", "r6"), head.vio_rotation_6d, strict=True
-            ):
+            for key, value in zip(("r1", "r2", "r3", "r4", "r5", "r6"), head.vio_rotation_6d, strict=True):
                 obs[f"head_camera.{key}"] = float(value)
 
         for cam_name, cam in self.cameras.items():

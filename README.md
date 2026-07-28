@@ -2,8 +2,8 @@
 
 🤗 This repository is a fork of [`lerobot`](https://github.com/huggingface/lerobot)
 by XenseRobotics, used for Xense's multimodal tactile data acquisition system.
-It is scoped to a single device: the **TacCap-Gripper** (**TacCap** = *Tactile
-Capture* Gripper) — a handheld **UMI** leader gripper for tactile data
+It is scoped to a single device: the **TacCap-Gripper** (**TacCap** = _Tactile
+Capture_ Gripper) — a handheld **UMI** leader gripper for tactile data
 collection. This branch tracks **upstream lerobot v5.1**, slimmed to the
 TacCap-Gripper (single + bimanual) and its **Pico4** teleoperator/tracker, with
 Xense tactile cameras layered on top. The bimanual rig can optionally record an
@@ -46,12 +46,12 @@ cd xense-taccap-lerobot
 
 This repository uses `third_party/` git submodules to manage hardware SDK dependencies:
 
-| Submodule | Installed package |
-|-----------|-------------------|
-| `third_party/taccap-gripper` | `xense.taccap` (TacCap UMI tactile gripper SDK) |
-| `third_party/XenseVR-PC-Service` | `xensevr_pc_service_sdk` (Pico4 teleop/tracker) |
-| `third_party/XenseVR-RobotVision-PC` | ZED-M → Pico4 stereo passthrough (built separately) |
-| `third_party/pyinsight` | `pyinsight` (Insight camera native RGB/VIO/IMU bridge) |
+| Submodule                            | Installed package                                      |
+| ------------------------------------ | ------------------------------------------------------ |
+| `third_party/taccap-gripper`         | `xense.taccap` (TacCap UMI tactile gripper SDK)        |
+| `third_party/XenseVR-PC-Service`     | `xensevr_pc_service_sdk` (Pico4 teleop/tracker)        |
+| `third_party/XenseVR-RobotVision-PC` | ZED-M → Pico4 stereo passthrough (built separately)    |
+| `third_party/pyinsight`              | `pyinsight` (Insight camera native RGB/VIO/IMU bridge) |
 
 `taccap-gripper` and `pyinsight` are installed in editable mode.
 Changes made inside those initialized submodules are therefore picked up by the
@@ -151,7 +151,7 @@ python -c "from xense.taccap import scan_grippers
 for g in scan_grippers(): print(g.side.name, g.role.name, repr(g.firmware_sn))"
 ```
 
-> If `firmware_sn` is still empty *after* fixing permissions, the device's SN
+> If `firmware_sn` is still empty _after_ fixing permissions, the device's SN
 > was never burned (or its firmware is < V1.6) — that is a device/firmware
 > issue, not a host one.
 
@@ -201,10 +201,10 @@ pyinsight-check-env --hidraw
 The camera needs **two** kinds of node, and the SDK fails to initialise if either
 is unreadable:
 
-| Node | Carries | Default owner |
-|------|---------|---------------|
-| `/dev/video4,6,8` (3 of 6) | RGB, stereo, depth | `root:video`, mode 660 |
-| `/dev/hidraw*` (2) | IMU, VIO | `root:plugdev`, mode 660 |
+| Node                       | Carries            | Default owner            |
+| -------------------------- | ------------------ | ------------------------ |
+| `/dev/video4,6,8` (3 of 6) | RGB, stereo, depth | `root:video`, mode 660   |
+| `/dev/hidraw*` (2)         | IMU, VIO           | `root:plugdev`, mode 660 |
 
 On a host where those group defaults do not already apply, grant access with:
 

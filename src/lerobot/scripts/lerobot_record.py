@@ -46,8 +46,10 @@ from pprint import pformat
 # preload vendored JPEG/TIFF libraries that conflict with the conda OpenCV libs
 # used by xense.taccap.
 try:
-    from xense.taccap import FollowerGripper as _TaccapFollowerGripper  # noqa: F401
-    from xense.taccap import LeaderGripper as _TaccapLeaderGripper  # noqa: F401
+    from xense.taccap import (
+        FollowerGripper as _TaccapFollowerGripper,  # noqa: F401
+        LeaderGripper as _TaccapLeaderGripper,  # noqa: F401
+    )
 except ImportError:
     pass
 
@@ -69,6 +71,7 @@ from lerobot.robots import (  # noqa: F401
     make_robot_from_config,
     taccap_gripper,
 )
+from lerobot.robots.taccap_gripper.visualization import TaccapTrajectoryViz
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
@@ -95,7 +98,6 @@ from lerobot.utils.visualization_utils import (
     log_rerun_data,
     select_display_observation,
 )
-from lerobot.robots.taccap_gripper.visualization import TaccapTrajectoryViz
 
 logger = get_logger("lerobot_record")
 
@@ -136,11 +138,7 @@ def _format_slow_frame_obs_suffix(robot: Robot | None) -> str:
     cam_items = [
         (key[4:-4], float(value))
         for key, value in timing.items()
-        if (
-            key.startswith("cam[")
-            and key.endswith("]_ms")
-            and isinstance(value, (int, float))
-        )
+        if (key.startswith("cam[") and key.endswith("]_ms") and isinstance(value, (int, float)))
     ]
     cam_items.sort(key=lambda item: item[1], reverse=True)
 
@@ -150,9 +148,7 @@ def _format_slow_frame_obs_suffix(robot: Robot | None) -> str:
         visible_obs_items = [item for item in obs_part_items if item[1] >= 0.1]
         if not visible_obs_items:
             visible_obs_items = obs_part_items
-        top_parts = ", ".join(
-            f"{name}={value:.1f}ms" for name, value in visible_obs_items[:4]
-        )
+        top_parts = ", ".join(f"{name}={value:.1f}ms" for name, value in visible_obs_items[:4])
         parts.append(f"top_obs={top_parts}")
 
     return f" | {' '.join(parts)}" if parts else ""
@@ -176,9 +172,7 @@ def _record_loop_sleep(
 
     episode_t_s = time.perf_counter() - start_episode_t
     robot_name = (
-        getattr(robot, "name", None) or getattr(type(robot), "__name__", "record")
-        if robot is not None
-        else "record"
+        getattr(robot, "name", None) or getattr(type(robot), "__name__", "record") if robot is not None else "record"
     )
     logger.warn(
         f"[slow_frame] robot={robot_name} t={episode_t_s:.3f}s "
@@ -323,9 +317,7 @@ def self_driven_record_loop(
     to the screen while the recorded ``rectify`` image goes to disk.
     """
     if dataset is not None and dataset.fps != fps:
-        raise ValueError(
-            f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps})."
-        )
+        raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
 
     timestamp = 0
     start_episode_t = time.perf_counter()
@@ -358,29 +350,21 @@ def self_driven_record_loop(
             # raising, and flags device_lost. Stop the whole session cleanly so
             # the in-progress episode is saved rather than crashing the loop.
             if getattr(robot, "device_lost", False):
-                logger.error(
-                    "Device lost mid-recording; stopping to save recorded data."
-                )
+                logger.error("Device lost mid-recording; stopping to save recorded data.")
                 events["stop_recording"] = True
                 break
             # Self-driven device: the demonstrated action is the pose + gripper
             # subset of this same observation sample (images excluded — we
             # iterate action_features, not the full obs). Single hardware read.
-            action = {
-                k: observation[k] for k in robot.action_features if k in observation
-            }
+            action = {k: observation[k] for k in robot.action_features if k in observation}
 
         if dataset is not None:
-            current_observation_frame = build_dataset_frame(
-                dataset.features, observation, prefix=OBS_STR
-            )
+            current_observation_frame = build_dataset_frame(dataset.features, observation, prefix=OBS_STR)
             # Shifted-frame (错帧): the current pose (action[t]) is paired with
             # the PREVIOUS observation so the action leads obs by one step.
             # The first sample has no predecessor and is skipped.
             if prev_observation_frame is not None:
-                action_frame = build_dataset_frame(
-                    dataset.features, action, prefix=ACTION
-                )
+                action_frame = build_dataset_frame(dataset.features, action, prefix=ACTION)
                 frame = {
                     **prev_observation_frame,
                     **action_frame,

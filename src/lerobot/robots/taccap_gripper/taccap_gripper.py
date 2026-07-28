@@ -96,10 +96,7 @@ def resolve_wrist_camera_path(serial: str) -> str:
             "(plugged in? check `ls /dev/v4l/by-id/`)."
         )
     if len(matches) > 1:
-        raise RuntimeError(
-            f"Multiple wrist cameras match serial {serial!r}: {matches}. Use a more "
-            "specific serial."
-        )
+        raise RuntimeError(f"Multiple wrist cameras match serial {serial!r}: {matches}. Use a more specific serial.")
     return matches[0]
 
 
@@ -121,9 +118,7 @@ def _wait_nodes_settle(serials, logger, timeout_s: float = 15.0) -> None:
                     pass
             time.sleep(0.2)
         if not settled:
-            logger.warning(
-                f"  Sensor {sn} V4L2 node did not settle within {timeout_s:.0f}s after pre-warm"
-            )
+            logger.warning(f"  Sensor {sn} V4L2 node did not settle within {timeout_s:.0f}s after pre-warm")
 
 
 def prewarm_tactile_config_cache(camera_configs: dict[str, Any], logger) -> None:
@@ -166,9 +161,7 @@ def prewarm_tactile_config_cache(camera_configs: dict[str, Any], logger) -> None
     if not uncached:
         return  # warm cache: cheap stat only, no flash read / reset
 
-    logger.info(
-        f"  Pre-warming config cache (cold start) for {len(uncached)} sensor(s): {uncached}"
-    )
+    logger.info(f"  Pre-warming config cache (cold start) for {len(uncached)} sensor(s): {uncached}")
     for sn in uncached:
         try:
             # disable_infer keeps this to the flash read + cache write; the real
@@ -196,9 +189,7 @@ def tactile_display_key(cam_name: str, output_type: str) -> str:
     return f"{cam_name}_{output_type}"
 
 
-def tactile_camera_output_types(
-    record_types: list[str], display_types: list[str]
-) -> list[str]:
+def tactile_camera_output_types(record_types: list[str], display_types: list[str]) -> list[str]:
     """Output types to ask one tactile sensor for: recorded first, then the
     display-only ones (deduplicated, order preserved).
 
@@ -210,9 +201,7 @@ def tactile_camera_output_types(
     return types
 
 
-def split_camera_read(
-    cam_name: str, frame: Any, display_keys: dict[str, str] | None = None
-) -> dict[str, Any]:
+def split_camera_read(cam_name: str, frame: Any, display_keys: dict[str, str] | None = None) -> dict[str, Any]:
     """Fan one camera read out into observation keys.
 
     A tactile sensor asked for several output types returns
@@ -263,8 +252,7 @@ class TaccapGripper(Robot):
             ) from _TACCAP_SDK_IMPORT_ERROR
         if config.enable_tracker and not PICO4_TRACKER_AVAILABLE:
             raise ImportError(
-                "Pico4TrackerReader not available. Ensure "
-                "src/lerobot/teleoperators/pico4/tracker.py is importable."
+                "Pico4TrackerReader not available. Ensure src/lerobot/teleoperators/pico4/tracker.py is importable."
             )
 
         # Hardware handles, populated on connect.
@@ -280,11 +268,7 @@ class TaccapGripper(Robot):
             if config.expected_tactiles_per_side
             else {"left": {}, "right": {}}
         )
-        self._disc_cameras = (
-            disco.discover_wrist_cameras(self._role)
-            if config.enable_wrist_camera
-            else {}
-        )
+        self._disc_cameras = disco.discover_wrist_cameras(self._role) if config.enable_wrist_camera else {}
         self._side = self._resolve_side()
         self._camera_configs = self._build_camera_configs(self._side)
         self.cameras = make_cameras_from_configs(self._camera_configs)
@@ -325,12 +309,9 @@ class TaccapGripper(Robot):
             return next(iter(present))
         if not present:
             raise RuntimeError(
-                f"No {self._role} TacCap device discovered to infer a side; "
-                "connect one or set --robot.side=left|right."
+                f"No {self._role} TacCap device discovered to infer a side; connect one or set --robot.side=left|right."
             )
-        raise RuntimeError(
-            f"Both sides present {sorted(present)}; set --robot.side=left|right to pick one."
-        )
+        raise RuntimeError(f"Both sides present {sorted(present)}; set --robot.side=left|right to pick one.")
 
     def _build_camera_configs(self, side: str) -> dict[str, Any]:
         """Build ``tactile_{left,right}`` + ``wrist_cam`` configs for ``side``.
@@ -367,18 +348,14 @@ class TaccapGripper(Robot):
                 # config strings ("DIFFERENCE", "XenseOutputType.DIFFERENCE", …)
                 # into the same enum whose .value keys the read dict. Recorded
                 # type came first, so everything after it is display-only.
-                display_keys = {
-                    ot.value: tactile_display_key(cam_name, ot.value)
-                    for ot in cfg.output_types[1:]
-                }
+                display_keys = {ot.value: tactile_display_key(cam_name, ot.value) for ot in cfg.output_types[1:]}
                 if display_keys:
                     self._tactile_display_keys[cam_name] = display_keys
         if self.config.enable_wrist_camera:
             sn = self._disc_cameras.get(side)
             if not sn:
                 raise ValueError(
-                    f"No {self._role} wrist camera found for the {side} side "
-                    f"(rule: {side} == {parity} sequence)."
+                    f"No {self._role} wrist camera found for the {side} side (rule: {side} == {parity} sequence)."
                 )
             configs["wrist_cam"] = OpenCVCameraConfig(
                 index_or_path=resolve_wrist_camera_path(sn),
@@ -510,18 +487,14 @@ class TaccapGripper(Robot):
             grippers = disco.discover_grippers(self._role)
             self._endpoints = grippers.get(self._side)
             if self._endpoints is None:
-                raise RuntimeError(
-                    f"No {self._role} gripper discovered for the {self._side} side."
-                )
+                raise RuntimeError(f"No {self._role} gripper discovered for the {self._side} side.")
             gripper_cls = LeaderGripper if self._role == "leader" else FollowerGripper
             self.logger.info(
                 f"  TacCap-Gripper: side={self._endpoints.side} role={self._endpoints.role} "
                 f"fw_sn={self._endpoints.firmware_sn!r} mcu={self._endpoints.mcu_serial!r}"
             )
             self._gripper = gripper_cls(self._endpoints.mcu_device)
-            self.logger.info(
-                f"  ✅ {gripper_cls.__name__} attached (MCU-only, read-only — motor stays disabled)"
-            )
+            self.logger.info(f"  ✅ {gripper_cls.__name__} attached (MCU-only, read-only — motor stays disabled)")
 
         # 2. Pico4 tracker.
         if self._tracker_sn is not None:
@@ -540,8 +513,7 @@ class TaccapGripper(Robot):
             self._tracker.connect(current_tcp_pose_quat=init_pose)
             if init_pose is not None:
                 self.logger.info(
-                    f"  ✅ Pico4 tracker connected with UMI alignment "
-                    f"(init_tcp_pose={init_pose.tolist()})"
+                    f"  ✅ Pico4 tracker connected with UMI alignment (init_tcp_pose={init_pose.tolist()})"
                 )
             else:
                 self.logger.info("  ✅ Pico4 tracker connected (world frame)")
@@ -628,11 +600,7 @@ class TaccapGripper(Robot):
                 self.logger.warn(f"IMU read failed: {e}")
 
         for cam_name, cam in self.cameras.items():
-            obs.update(
-                split_camera_read(
-                    cam_name, cam.async_read(), self._tactile_display_keys.get(cam_name)
-                )
-            )
+            obs.update(split_camera_read(cam_name, cam.async_read(), self._tactile_display_keys.get(cam_name)))
 
         return obs
 

@@ -104,18 +104,14 @@ def normalize_role(role: str) -> str:
     """Map a user-facing role string to canonical ``leader``/``follower``."""
     key = str(role).strip().lower()
     if key not in _ROLE_ALIASES:
-        raise ValueError(
-            f"Unknown role {role!r}; expected one of: leader/master or follower/slave."
-        )
+        raise ValueError(f"Unknown role {role!r}; expected one of: leader/master or follower/slave.")
     return _ROLE_ALIASES[key]
 
 
 def side_of_sequence(sequence: str) -> str:
     """Odd trailing digit → ``left``, even → ``right`` (the Xense side rule)."""
     if not sequence or not sequence[-1].isdigit():
-        raise ValueError(
-            f"Serial sequence {sequence!r} has no trailing digit to derive a side from."
-        )
+        raise ValueError(f"Serial sequence {sequence!r} has no trailing digit to derive a side from.")
     return "left" if int(sequence[-1]) % 2 == 1 else "right"
 
 
@@ -183,10 +179,7 @@ def assign_pico_trackers(serials, sides=SIDES) -> dict[str, str]:
         parity = "odd" if side == "left" else "even"
         got = grouped.get(side, [])
         if len(got) > 1:
-            raise ValueError(
-                f"Multiple Pico4 trackers map to the {side} side "
-                f"(2nd-to-last digit {parity}): {got}."
-            )
+            raise ValueError(f"Multiple Pico4 trackers map to the {side} side (2nd-to-last digit {parity}): {got}.")
         if not got:
             raise ValueError(
                 f"No Pico4 tracker found for the {side} side (need a serial whose "
@@ -235,10 +228,7 @@ def parse_camera_serial(sn: str) -> tuple[str, str]:
     """
     m = _CAMERA_RE.match(sn)
     if not m:
-        raise ValueError(
-            f"Camera serial {sn!r} does not match the rule "
-            "XC<batch><line><seq><m|s> (e.g. XCA24Z0003m)."
-        )
+        raise ValueError(f"Camera serial {sn!r} does not match the rule XC<batch><line><seq><m|s> (e.g. XCA24Z0003m).")
     return side_of_sequence(m.group(1)), _PATCH_ROLE[m.group(2)]
 
 
@@ -286,8 +276,7 @@ def _gripper_hub_sides(role: str) -> dict[str, tuple[str, str]]:
         side = ep.side.name.lower()
         if hub in hub_side:
             raise ValueError(
-                f"Two {role} grippers resolve to the same USB hub {hub!r} "
-                f"(sides {hub_side[hub][0]!r} and {side!r})."
+                f"Two {role} grippers resolve to the same USB hub {hub!r} (sides {hub_side[hub][0]!r} and {side!r})."
             )
         hub_side[hub] = (side, ep.firmware_sn)
     return hub_side
@@ -320,15 +309,11 @@ def discover_tactiles_by_hub(role: str) -> dict[str, dict[str, str]]:
         seen.add(sn)
         if not _TACTILE_RE.match(sn):
             raise ValueError(
-                f"Tactile serial {sn!r} does not match the rule "
-                "GSPS01<batch><line><seq> (e.g. GSPS01A24Z0003)."
+                f"Tactile serial {sn!r} does not match the rule GSPS01<batch><line><seq> (e.g. GSPS01A24Z0003)."
             )
         hub = _device_hub(path, _V4L_BYPATH_DIR)
         if hub is None:
-            raise ValueError(
-                f"Could not resolve a USB hub for tactile {sn!r} ({path}); "
-                "check /dev/v4l/by-path."
-            )
+            raise ValueError(f"Could not resolve a USB hub for tactile {sn!r} ({path}); check /dev/v4l/by-path.")
         finger = side_of_sequence(sn[-4:])  # last digit → left/right finger
         fingers = hub_fingers.setdefault(hub, {})
         if finger in fingers:
@@ -340,13 +325,7 @@ def discover_tactiles_by_hub(role: str) -> dict[str, dict[str, str]]:
         fingers[finger] = sn
 
     # Join hub → side. Every tactile hub must carry a matching gripper.
-    discovered = (
-        ", ".join(
-            f"{sn!r} ({side}) on hub {hub!r}"
-            for hub, (side, sn) in sorted(hub_side.items())
-        )
-        or "none"
-    )
+    discovered = ", ".join(f"{sn!r} ({side}) on hub {hub!r}" for hub, (side, sn) in sorted(hub_side.items())) or "none"
     result: dict[str, dict[str, str]] = {"left": {}, "right": {}}
     for hub, fingers in hub_fingers.items():
         if hub not in hub_side:
@@ -430,9 +409,7 @@ def discover_taccap(
     """
     role = normalize_role(role)
     grippers = discover_grippers(role) if with_gripper else {}
-    tactiles = (
-        discover_tactiles_by_hub(role) if expected_tactiles_per_side else {"left": {}, "right": {}}
-    )
+    tactiles = discover_tactiles_by_hub(role) if expected_tactiles_per_side else {"left": {}, "right": {}}
     cameras = discover_wrist_cameras(role) if with_wrist_camera else {}
 
     result: dict[str, dict] = {}
@@ -445,10 +422,7 @@ def discover_taccap(
         }
         if with_gripper:
             if side not in grippers:
-                raise ValueError(
-                    f"No {role} gripper found for the {side} side "
-                    f"(rule: {side} == {parity} sequence)."
-                )
+                raise ValueError(f"No {role} gripper found for the {side} side (rule: {side} == {parity} sequence).")
             info["gripper"] = grippers[side]
         if expected_tactiles_per_side:
             got = tactiles.get(side, {})
@@ -461,8 +435,7 @@ def discover_taccap(
         if with_wrist_camera:
             if side not in cameras:
                 raise ValueError(
-                    f"No {role} wrist camera found for the {side} side "
-                    f"(rule: {side} == {parity} sequence)."
+                    f"No {role} wrist camera found for the {side} side (rule: {side} == {parity} sequence)."
                 )
             info["wrist_camera_serial"] = cameras[side]
         result[side] = info

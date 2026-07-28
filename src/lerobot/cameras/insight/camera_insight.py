@@ -24,8 +24,8 @@ from typing import Any
 
 import cv2
 import numpy as np
-from pyinsight.rgbview import to_landscape
 from numpy.typing import NDArray
+from pyinsight.rgbview import to_landscape
 
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.utils.robot_utils import get_logger, quaternion_to_rotation_6d
@@ -154,9 +154,7 @@ class InsightCamera(Camera):
             raise RuntimeError("no decodable Insight RGB frame received yet")
         age_ms = _age_seconds(time.time_ns(), self._last_good_color.host_time_ns) * 1000
         if age_ms > max_age_ms:
-            raise TimeoutError(
-                f"Insight RGB cache is {age_ms:.1f}ms old (limit={max_age_ms}ms)."
-            )
+            raise TimeoutError(f"Insight RGB cache is {age_ms:.1f}ms old (limit={max_age_ms}ms).")
         return snapshot.rgb
 
     def read_snapshot_latest(self) -> InsightSnapshot:
@@ -231,8 +229,7 @@ class InsightCamera(Camera):
             )
 
         # Crop before the colour conversion - it is a third of the pixels.
-        view = to_landscape(bgr, (int(self.width), int(self.height)),
-                            bias=self.config.crop_bias)
+        view = to_landscape(bgr, (int(self.width), int(self.height)), bias=self.config.crop_bias)
         return cv2.cvtColor(view, cv2.COLOR_BGR2RGB), ""
 
     def _warn_decode(self, error: str) -> None:

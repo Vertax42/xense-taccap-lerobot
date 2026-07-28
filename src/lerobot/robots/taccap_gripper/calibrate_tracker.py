@@ -33,15 +33,13 @@ from lerobot.teleoperators.pico4.tracker import Pico4TrackerReader
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("tracker_sn", nargs="?", default=None,
-                        help="Pico4 tracker serial. Default = first available.")
-    parser.add_argument("--duration", type=float, default=0.0,
-                        help="Run for N seconds, then exit. 0 = until Ctrl+C.")
+    parser.add_argument("tracker_sn", nargs="?", default=None, help="Pico4 tracker serial. Default = first available.")
+    parser.add_argument("--duration", type=float, default=0.0, help="Run for N seconds, then exit. 0 = until Ctrl+C.")
     args = parser.parse_args()
 
     reader = Pico4TrackerReader(tracker_sn=args.tracker_sn)
     reader.connect()
-    print(f"[calibrate] tracker connected. Press Ctrl+C to stop.")
+    print("[calibrate] tracker connected. Press Ctrl+C to stop.")
 
     t_start = time.monotonic()
     try:

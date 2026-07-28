@@ -32,7 +32,7 @@ class TeleopEvents(Enum):
     IS_INTERVENTION = "is_intervention"
     TERMINATE_EPISODE = "terminate_episode"
     BACK_HOME = "back_home"
-    
+
 
 def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
     # All teleoperators (pico4 / bi_pico4) resolve through the draccus

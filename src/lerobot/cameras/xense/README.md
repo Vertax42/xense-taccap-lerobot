@@ -5,6 +5,7 @@ This module integrates Xense tactile sensors into the LeRobot camera framework, 
 ## Overview
 
 The Xense tactile sensor provides rich tactile-visual information including:
+
 - **Force Distribution**: 3D force at each point (35×20×3)
 - **Force Resultant**: 6D force/torque vector (6,)
 - **Depth Maps**: Surface depth information (700×400)
@@ -20,6 +21,7 @@ fix-ups) is `bash ./setup_env.sh --install` from the repo root — see the
 top-level README's **Installation** section. To install it standalone:
 
 1. **Install xensesdk** from PyPI (2.x, cp312 manylinux wheel):
+
    ```bash
    mamba activate xense-taccap
    uv pip install "xensesdk>=2.0.0"
@@ -30,6 +32,7 @@ top-level README's **Installation** section. To install it standalone:
    don't disturb the env — `setup_env.sh --install` does this for you.
 
 2. **Offline / patched build** — point pip at a local wheel instead of PyPI:
+
    ```bash
    uv pip install --no-deps --force-reinstall /path/to/xensesdk-*-cp312-*-linux_x86_64.whl
    ```
@@ -114,6 +117,7 @@ XenseOutputType.MESH_3D_FLOW     # shape=(35, 20, 3), deformation vector
 ## Hardware Validation
 
 ### Discover Connected Sensors
+
 ```bash
 python - <<'PY'
 from lerobot.cameras.xense import XenseTactileCamera
@@ -126,6 +130,7 @@ PY
 This uses the same `Sensor.scanSerialNumber()` path as the camera wrapper.
 
 ### Read a Few Frames
+
 ```bash
 python - <<'PY'
 from lerobot.cameras.xense import XenseOutputType, XenseTactileCamera, XenseTactileCameraConfig
@@ -203,6 +208,7 @@ cameras = {
 ## V4L2 High Load Handling
 
 Under high system load (multiple cameras, recording), V4L2 timeout warnings may occur:
+
 ```
 [ WARN:35@48.719] global cap_v4l.cpp:1049 tryIoctl VIDEOIO(V4L2:/dev/video22): select() timeout.
 ```
@@ -210,6 +216,7 @@ Under high system load (multiple cameras, recording), V4L2 timeout warnings may 
 ### Automatic Handling
 
 The camera automatically handles V4L2 timeouts:
+
 - **Retry Logic**: Automatically retries up to 3 times on timeout errors
 - **Smart Error Suppression**: Only logs warnings after 10 consecutive failures
 - **Exponential Backoff**: Adds delays between retries to reduce system load
@@ -218,6 +225,7 @@ The camera automatically handles V4L2 timeouts:
 ### Optimization Strategies
 
 #### 1. Reduce FPS (Most Effective)
+
 ```python
 # Lower FPS reduces V4L2 load significantly
 XenseTactileCameraConfig(
@@ -228,6 +236,7 @@ XenseTactileCameraConfig(
 ```
 
 #### 2. Reduce Resolution (High Impact)
+
 ```python
 # Reducing rectify_size improves performance by 4x
 XenseTactileCameraConfig(
@@ -240,6 +249,7 @@ XenseTactileCameraConfig(
 ```
 
 #### 3. Use Only Necessary Output Types
+
 ```python
 # Request only needed data types to reduce processing
 XenseTactileCameraConfig(
@@ -250,6 +260,7 @@ XenseTactileCameraConfig(
 ```
 
 #### 4. Increase Warmup Time
+
 ```python
 # Longer warmup helps stabilize sensor under load
 XenseTactileCameraConfig(
@@ -260,6 +271,7 @@ XenseTactileCameraConfig(
 ```
 
 #### 5. Recommended High-Load Configuration
+
 ```python
 # Optimized configuration for recording with multiple cameras
 XenseTactileCameraConfig(
@@ -274,11 +286,13 @@ XenseTactileCameraConfig(
 ### System-Level Optimizations
 
 1. **Grant Real-Time Priority** (for CAN communication):
+
    ```bash
    sudo setcap cap_sys_nice=ep $(readlink -f $(which python))
    ```
 
 2. **Reduce Other Camera FPS**: If using multiple cameras, reduce FPS across all:
+
    ```python
    # Reduce all camera FPS proportionally
    RealSenseCameraConfig(fps=30, ...)  # Instead of 60
@@ -290,6 +304,7 @@ XenseTactileCameraConfig(
 ## Troubleshooting
 
 ### Import Error: "No module named 'xensesdk'"
+
 ```bash
 bash ./setup_env.sh --install
 ```
@@ -298,6 +313,7 @@ bash ./setup_env.sh --install
 `XENSESDK_WHEEL`, `dist/`, or `~/Downloads/`.
 
 ### Missing Dependencies
+
 Re-run the installer in the activated `lerobot-xense` environment. It installs
 the runtime dependencies required by the xensesdk wheel.
 
@@ -306,11 +322,13 @@ bash ./setup_env.sh --install
 ```
 
 ### Sensor Not Found
+
 - Check USB connection
 - Run `XenseTactileCamera.find_cameras()` to see available devices
 - Verify serial number matches your sensor
 
 ### Qt Platform Plugin Issues
+
 See xensesdk documentation for Qt-related troubleshooting.
 
 ## API Reference
@@ -320,6 +338,7 @@ See xensesdk documentation for Qt-related troubleshooting.
 Configuration class for Xense sensors.
 
 **Parameters**:
+
 - `serial_number` (str): Sensor serial number (e.g., "OG000344")
 - `fps` (int, optional): Target frame rate (default: 60)
 - `output_types` (list[XenseOutputType], optional): Data types to read
@@ -330,6 +349,7 @@ Configuration class for Xense sensors.
 Main camera class implementing the Camera interface.
 
 **Methods**:
+
 - `connect(warmup=True)`: Connect to sensor
 - `read()`: Synchronous read, returns dict of arrays
 - `async_read(timeout_ms=200)`: Asynchronous read with timeout
@@ -339,6 +359,7 @@ Main camera class implementing the Camera interface.
 ## Examples
 
 See the checked-in example scripts for complete examples:
+
 - `example1.py`: Local SDK viewer using a single sensor
 - `example2.py`: Local SDK viewer variant for a second hard-coded serial
 - `example_all_function.py`: Local viewer with force, marker, depth, and image outputs

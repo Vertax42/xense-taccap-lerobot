@@ -112,7 +112,13 @@ class TaccapGripperConfig(RobotConfig):
     pending live verification on real deployment hardware."""
 
     init_tcp_pose: tuple[float, float, float, float, float, float, float] = (
-        0.693307, -0.114902, 0.14589, 0.004567, 0.003238, 0.999984, 0.001246,
+        0.693307,
+        -0.114902,
+        0.14589,
+        0.004567,
+        0.003238,
+        0.999984,
+        0.001246,
     )
     """Robot TCP pose at the operator's "init" stance, as
     ``[x, y, z, qw, qx, qy, qz]``, in the world frame. Default is an example
@@ -169,9 +175,7 @@ class TaccapGripperConfig(RobotConfig):
         super().__post_init__()
 
         if self.role.strip().lower() not in ("leader", "master", "follower", "slave"):
-            raise ValueError(
-                f"role must be leader/master or follower/slave, got {self.role!r}."
-            )
+            raise ValueError(f"role must be leader/master or follower/slave, got {self.role!r}.")
         if self.side is not None and self.side.strip().lower() not in ("left", "right"):
             raise ValueError(f"side must be left, right, or None, got {self.side!r}.")
 
