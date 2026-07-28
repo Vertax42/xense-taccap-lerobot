@@ -213,6 +213,10 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401", "F403"]
+# xensesdk sample programs, kept close to the vendor's own docs so they can be
+# diffed against them. Their `View` / `View2d` / `MASTER_SERVICE` locals are the
+# SDK's naming, and example2 must patch ctypes before importing xensesdk.
+"src/lerobot/cameras/xense/example*.py" = ["N806", "E402"]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
@@ -251,6 +255,11 @@ default.extend-ignore-identifiers-re = [
     "ROBOTIS",
     "OT_VALUE",
 ]
+# Words read as typos but spelled the way we mean them: the English prefix in
+# mis-installed / mis-burned / mis-counted, Shepperd's method (quaternion from a
+# rotation matrix), Simple Open EtherCAT Master, and the "PN" typos splits out
+# of "PNGs".
+default.extend-words = { mis = "mis", Shepperd = "Shepperd", SOEM = "SOEM", PN = "PN" }
 
 [tool.mypy]
 python_version = "3.12"
