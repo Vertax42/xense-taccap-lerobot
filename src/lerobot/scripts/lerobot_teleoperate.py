@@ -38,8 +38,10 @@ from pprint import pformat
 # preload vendored JPEG/TIFF libraries that conflict with the conda OpenCV libs
 # used by xense.taccap.
 try:
-    from xense.taccap import FollowerGripper as _TaccapFollowerGripper  # noqa: F401
-    from xense.taccap import LeaderGripper as _TaccapLeaderGripper  # noqa: F401
+    from xense.taccap import (
+        FollowerGripper as _TaccapFollowerGripper,  # noqa: F401
+        LeaderGripper as _TaccapLeaderGripper,  # noqa: F401
+    )
 except ImportError:
     pass
 
@@ -54,6 +56,7 @@ from lerobot.robots import (  # noqa: F401
     make_robot_from_config,
     taccap_gripper,
 )
+from lerobot.robots.taccap_gripper.visualization import TaccapTrajectoryViz
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
@@ -72,7 +75,6 @@ from lerobot.utils.visualization_utils import (
     log_rerun_data,
     select_display_observation,
 )
-from lerobot.robots.taccap_gripper.visualization import TaccapTrajectoryViz
 
 logger = get_logger("Teleoperate")
 
@@ -202,9 +204,7 @@ def _teleop_loop_sleep(
 
     session_t_s = time.perf_counter() - session_start_t
     robot_name = (
-        getattr(robot, "name", None) or getattr(type(robot), "__name__", "teleop")
-        if robot is not None
-        else "teleop"
+        getattr(robot, "name", None) or getattr(type(robot), "__name__", "teleop") if robot is not None else "teleop"
     )
     logger.warn(
         f"[slow_frame] robot={robot_name} t={session_t_s:.3f}s "
@@ -265,9 +265,7 @@ def self_driven_teleop_loop(
                 if traj_viz is not None:
                     traj_viz.log(display_obs)
                 if not debug_timing:
-                    scalar_items = [
-                        (k, v) for k, v in obs.items() if not isinstance(v, np.ndarray)
-                    ]
+                    scalar_items = [(k, v) for k, v in obs.items() if not isinstance(v, np.ndarray)]
                     print("\n" + "-" * (display_len + 12))
                     print(f"{'NAME':<{display_len}} | {'OBS':>9}")
                     for key, value in scalar_items:
@@ -309,9 +307,7 @@ def self_driven_teleop_loop(
 def teleoperate(cfg: TeleoperateConfig):
     logger.info(pformat(asdict(cfg)))
     if cfg.dryrun:
-        logger.warn(
-            "DRYRUN MODE ENABLED - Actions will be printed but NOT sent to robot"
-        )
+        logger.warn("DRYRUN MODE ENABLED - Actions will be printed but NOT sent to robot")
 
     if cfg.display_data:
         teleop_name = cfg.teleop.type if cfg.teleop else "none"
@@ -320,11 +316,7 @@ def teleoperate(cfg: TeleoperateConfig):
 
     display_compressed_images = (
         True
-        if (
-            cfg.display_data
-            and cfg.display_ip is not None
-            and cfg.display_port is not None
-        )
+        if (cfg.display_data and cfg.display_ip is not None and cfg.display_port is not None)
         else cfg.display_compressed_images
     )
 
@@ -339,9 +331,7 @@ def teleoperate(cfg: TeleoperateConfig):
             )
 
         # --- taccap_gripper / bi_taccap_gripper (self-driven, data-stream + Rerun) ---
-        logger.info(
-            f"Detected {cfg.robot.type} (self-driven) — streaming observations to Rerun"
-        )
+        logger.info(f"Detected {cfg.robot.type} (self-driven) — streaming observations to Rerun")
         robot = make_robot_from_config(cfg.robot)
         robot.connect()
         # Self-driven robots have no teleoperator; an optional --teleop is accepted

@@ -50,22 +50,20 @@ from lerobot.robots.taccap_gripper import TaccapGripper, TaccapGripperConfig
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--side", default=None, choices=["left", "right"],
-                        help="Which gripper (only needed when both are connected).")
-    parser.add_argument("--role", default="leader", choices=["leader", "follower"],
-                        help="Device role to bind (default leader/Master).")
-    parser.add_argument("--tracker", action="store_true",
-                        help="Enable the Pico4 motion tracker.")
-    parser.add_argument("--tracker-sn", default=None,
-                        help="Pico4 tracker serial (required to record pose).")
-    parser.add_argument("--no-wrist", action="store_true",
-                        help="Disable the wrist UVC camera.")
-    parser.add_argument("--imu", action="store_true",
-                        help="Enable IMU readings.")
-    parser.add_argument("--open-rad", type=float, default=1.7,
-                        help="Encoder rad when jaw fully open (TC-GU-01 ~= 1.7).")
-    parser.add_argument("--frames", type=int, default=10,
-                        help="How many observation frames to print.")
+    parser.add_argument(
+        "--side", default=None, choices=["left", "right"], help="Which gripper (only needed when both are connected)."
+    )
+    parser.add_argument(
+        "--role", default="leader", choices=["leader", "follower"], help="Device role to bind (default leader/Master)."
+    )
+    parser.add_argument("--tracker", action="store_true", help="Enable the Pico4 motion tracker.")
+    parser.add_argument("--tracker-sn", default=None, help="Pico4 tracker serial (required to record pose).")
+    parser.add_argument("--no-wrist", action="store_true", help="Disable the wrist UVC camera.")
+    parser.add_argument("--imu", action="store_true", help="Enable IMU readings.")
+    parser.add_argument(
+        "--open-rad", type=float, default=1.7, help="Encoder rad when jaw fully open (TC-GU-01 ~= 1.7)."
+    )
+    parser.add_argument("--frames", type=int, default=10, help="How many observation frames to print.")
     args = parser.parse_args()
 
     cfg = TaccapGripperConfig(

@@ -2,7 +2,7 @@
 
 Thanks for your interest in contributing! **LeRobot-Xense** is a downstream fork
 of [🤗 LeRobot](https://github.com/huggingface/lerobot), scoped to a single
-device: the **TacCap-Gripper** (TacCap = *Tactile Capture* Gripper) — a handheld
+device: the **TacCap-Gripper** (TacCap = _Tactile Capture_ Gripper) — a handheld
 **UMI** leader gripper for tactile data collection — together with the **Pico4**
 teleoperator/tracker and Xense tactile cameras.
 

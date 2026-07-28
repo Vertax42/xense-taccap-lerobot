@@ -49,8 +49,10 @@ from pprint import pformat
 # preload vendored JPEG/TIFF libraries that conflict with the conda OpenCV libs
 # used by xense.taccap.
 try:
-    from xense.taccap import FollowerGripper as _TaccapFollowerGripper  # noqa: F401
-    from xense.taccap import LeaderGripper as _TaccapLeaderGripper  # noqa: F401
+    from xense.taccap import (
+        FollowerGripper as _TaccapFollowerGripper,  # noqa: F401
+        LeaderGripper as _TaccapLeaderGripper,  # noqa: F401
+    )
 except ImportError:
     pass
 

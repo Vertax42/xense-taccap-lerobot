@@ -17,17 +17,17 @@ the single [`taccap_gripper`](../taccap_gripper/README.md).
 
 Per side `{s}` ∈ {left, right}:
 
-| Key | When | Meaning |
-|---|---|---|
-| `{s}_tcp.x/y/z`, `{s}_tcp.r1..r6` | `{s}_enable_tracker` | Pico4 → EE 6D pose |
-| `{s}_gripper.pos` | `{s}_enable_gripper` | normalised jaw, 0=closed / 1=open |
-| `{s}_imu.{accel,gyro,mag}.{x,y,z}` | `{s}_enable_imu` | IMU |
-| `{s}_wrist` | `{s}_enable_wrist_camera` | wrist UVC frame |
-| `{s}_tactile_left` / `{s}_tactile_right` | auto-discovered | **recorded** tactile frame from the left / right finger sensor (`rectify`) |
-| `{s}_tactile_{left,right}_difference` | `tactile_display_output_types` | **display-only** amplified-deformation view of the same read — Rerun only, never recorded |
-| `head_rgb` | `enable_head_camera` | latest decoded Insight RGB frame |
-| `head_camera.x/y/z` | `enable_head_camera` | raw Insight VIO position in the camera's own coordinate frame |
-| `head_camera.r1..r6` | `enable_head_camera` | raw Insight VIO orientation as the first two rotation-matrix columns |
+| Key                                      | When                           | Meaning                                                                                   |
+| ---------------------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------- |
+| `{s}_tcp.x/y/z`, `{s}_tcp.r1..r6`        | `{s}_enable_tracker`           | Pico4 → EE 6D pose                                                                        |
+| `{s}_gripper.pos`                        | `{s}_enable_gripper`           | normalised jaw, 0=closed / 1=open                                                         |
+| `{s}_imu.{accel,gyro,mag}.{x,y,z}`       | `{s}_enable_imu`               | IMU                                                                                       |
+| `{s}_wrist`                              | `{s}_enable_wrist_camera`      | wrist UVC frame                                                                           |
+| `{s}_tactile_left` / `{s}_tactile_right` | auto-discovered                | **recorded** tactile frame from the left / right finger sensor (`rectify`)                |
+| `{s}_tactile_{left,right}_difference`    | `tactile_display_output_types` | **display-only** amplified-deformation view of the same read — Rerun only, never recorded |
+| `head_rgb`                               | `enable_head_camera`           | latest decoded Insight RGB frame                                                          |
+| `head_camera.x/y/z`                      | `enable_head_camera`           | raw Insight VIO position in the camera's own coordinate frame                             |
+| `head_camera.r1..r6`                     | `enable_head_camera`           | raw Insight VIO orientation as the first two rotation-matrix columns                      |
 
 `action_features` = the per-side gripper pose + `{s}_gripper.pos` subset; the head
 camera pose and all images remain observation-only. With both Pico4 trackers, both
@@ -63,7 +63,7 @@ Xense serial rule:
 **Tactile left/right** (`{side}_tactile_{left,right}`) is resolved by **USB hub**,
 not by the tactile serial alone: the two GSPS sensors sharing a gripper's USB hub
 are that gripper's pair, and the gripper's `side` is read from its **firmware SN**
-over the wire (`scan_grippers()` → `ep.side`, i.e. `Cmd::GetSn` — *not* the CH343
+over the wire (`scan_grippers()` → `ep.side`, i.e. `Cmd::GetSn` — _not_ the CH343
 `mcu_serial`). Within the pair, the **finger** is the GSPS serial's last digit
 (odd → `left` sensor, even → `right`, 单左双右). Because this needs the gripper SDK
 scan, tactile discovery runs at construction (grippers must be powered then).

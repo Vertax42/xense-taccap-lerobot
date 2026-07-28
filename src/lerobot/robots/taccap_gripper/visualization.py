@@ -98,9 +98,7 @@ class TaccapTrajectoryViz:
                 name = key[: -len("_tcp.x")]
                 self._sides.append((f"{name}_", name))
 
-        self._trails: dict[str, deque] = {
-            name: deque(maxlen=trail_max) for _, name in self._sides
-        }
+        self._trails: dict[str, deque] = {name: deque(maxlen=trail_max) for _, name in self._sides}
         self._static_logged: set[str] = set()
 
     @property
@@ -144,8 +142,7 @@ class TaccapTrajectoryViz:
             rr.send_blueprint(self._build_blueprint())
         except Exception as e:  # pragma: no cover — viewer-side, never fatal
             logger.warning(
-                f"trajectory blueprint not applied ({type(e).__name__}: {e}); "
-                "falling back to Rerun auto-layout"
+                f"trajectory blueprint not applied ({type(e).__name__}: {e}); falling back to Rerun auto-layout"
             )
 
     def reset(self) -> None:
@@ -197,9 +194,7 @@ class TaccapTrajectoryViz:
         # Right column: 3D trail (when the head took the left slot), wrists, tactiles.
         secondary: list[Any] = []
         if head and self.has_poses:
-            secondary.append(
-                rrb.Spatial3DView(name="trajectory", origin="/world", line_grid=False)
-            )
+            secondary.append(rrb.Spatial3DView(name="trajectory", origin="/world", line_grid=False))
         if wrist:
             secondary.append(rrb.Horizontal(*(view(k) for k in wrist), name="wrist"))
         if tactile:
@@ -246,10 +241,14 @@ class TaccapTrajectoryViz:
 
         scalars = self._scalar_keys()
         series("gripper.pos", [k for k in scalars if k.endswith("gripper.pos")])
-        series("head VIO position", [k for k in scalars if k.startswith("head_camera.")
-                                     and k.split(".")[-1] in ("x", "y", "z")])
-        series("head VIO rotation", [k for k in scalars if k.startswith("head_camera.")
-                                     and k.split(".")[-1].startswith("r")])
+        series(
+            "head VIO position",
+            [k for k in scalars if k.startswith("head_camera.") and k.split(".")[-1] in ("x", "y", "z")],
+        )
+        series(
+            "head VIO rotation",
+            [k for k in scalars if k.startswith("head_camera.") and k.split(".")[-1].startswith("r")],
+        )
         series("tcp pose", [k for k in scalars if "_tcp." in k or k.startswith("tcp.")])
         series("imu", [k for k in scalars if "_imu." in k or k.startswith("imu.")])
 

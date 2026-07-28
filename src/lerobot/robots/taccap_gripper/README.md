@@ -1,6 +1,6 @@
 # `taccap_gripper` — Handheld data-collection device
 
-The **TacCap-Gripper** (**TacCap** = *Tactile Capture* Gripper) is a handheld
+The **TacCap-Gripper** (**TacCap** = _Tactile Capture_ Gripper) is a handheld
 **UMI** leader gripper for tactile data collection.
 
 Single-arm handheld data-collection pipeline. The device is **self-driven**:
@@ -64,6 +64,7 @@ init_tcp_pose: tuple[float, ...] = (
 ```
 
 Workflow when ready to enable:
+
 1. Place the gripper in its "init" stance — physically matching the
    robot's home configuration on a workbench (same orientation +
    roughly the height the robot's EE would reach).
@@ -87,7 +88,7 @@ and downstream tooling must reframe.
 
 > **Serial-port permissions (one-time host setup).** The gripper MCU enumerates
 > as `/dev/ttyACM*`, owned by the `dialout` group. If your user is not in
-> `dialout`, the SDK can *list* the grippers but cannot open the port to read
+> `dialout`, the SDK can _list_ the grippers but cannot open the port to read
 > the firmware SN — `scan_grippers()` then reports `role=Unknown` / empty
 > `firmware_sn`, and `connect()` fails with
 > `RuntimeError: No <role> gripper discovered for the <side> side.` (the
@@ -201,7 +202,7 @@ python -m lerobot.robots.taccap_gripper.taccap_gripper_example \
 allows `teleop=None` for it). Recording is handled by the dedicated
 `self_driven_record_loop` in `lerobot_record.py` (the device is routed there
 via `SELF_DRIVEN_RECORD_ROBOTS`). Each recorded row uses **shifted-frame**
-pairing: the observation from step *t-1* is paired with the pose at step *t*
+pairing: the observation from step _t-1_ is paired with the pose at step _t_
 (Pico4 pose + normalised `gripper.pos`) as the action, so the action leads
 its observation by one step — a real "move-to-next" target rather than the
 degenerate same-frame pose. One frame is dropped per episode (the first
@@ -257,6 +258,7 @@ at connect). Leave it unset (default) to keep auto-discovery.
   Tune `--robot.tactile_fps`; `--robot.expected_tactiles_per_side` validates the count.
   The two sensors are paired to this unit's gripper by **USB hub**; `left`/`right` finger
   comes from the GSPS serial's **last digit** (odd → `left`, even → `right`, 单左双右).
+
 - **Wrist** → obs key `wrist_cam`; `--robot.enable_wrist_camera=false` skips. Tune
   `--robot.wrist_camera_width/_height/_fps`.
 - **Role**: `--robot.role=follower` binds the Slave units (default `leader`).
@@ -282,15 +284,15 @@ defensive fallback for callers that don't pre-warm.
 
 ## What gets recorded per frame
 
-| Key | Source | Shape / type |
-|---|---|---|
-| `tcp.x`, `tcp.y`, `tcp.z` | Pico4 tracker → EE | float (m) |
-| `tcp.r1`..`tcp.r6` | 6-D rotation of EE | float |
-| `gripper.pos` | TacCap encoder, normalised | float ∈ [0, 1] |
-| `imu.accel.{x,y,z}` (opt) | TacCap IMU | float (m/s²) |
-| `imu.gyro.{x,y,z}` (opt) | TacCap IMU | float (rad/s) |
-| `imu.mag.{x,y,z}` (opt) | TacCap IMU | float (µT) |
-| `<camera_name>` per camera | `cameras/` framework | uint8 (H, W, 3) |
+| Key                        | Source                     | Shape / type    |
+| -------------------------- | -------------------------- | --------------- |
+| `tcp.x`, `tcp.y`, `tcp.z`  | Pico4 tracker → EE         | float (m)       |
+| `tcp.r1`..`tcp.r6`         | 6-D rotation of EE         | float           |
+| `gripper.pos`              | TacCap encoder, normalised | float ∈ [0, 1]  |
+| `imu.accel.{x,y,z}` (opt)  | TacCap IMU                 | float (m/s²)    |
+| `imu.gyro.{x,y,z}` (opt)   | TacCap IMU                 | float (rad/s)   |
+| `imu.mag.{x,y,z}` (opt)    | TacCap IMU                 | float (µT)      |
+| `<camera_name>` per camera | `cameras/` framework       | uint8 (H, W, 3) |
 
 Tactile cameras contribute their **recorded** view only (`rectify` by default). The
 `tactile_{left,right}_difference` keys `get_observation()` also returns are display-only:

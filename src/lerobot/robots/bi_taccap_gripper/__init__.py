@@ -8,5 +8,5 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-from .config_bi_taccap_gripper import BiTaccapGripperConfig
 from .bi_taccap_gripper import BiTaccapGripper
+from .config_bi_taccap_gripper import BiTaccapGripperConfig

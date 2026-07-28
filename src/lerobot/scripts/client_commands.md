@@ -136,17 +136,6 @@ lerobot-record \
 
 ### Single (`taccap_gripper`)
 
-
-
-
-
-
-
-
-
-
-
-
 ```bash
 lerobot-record \
     --robot.type=taccap_gripper \

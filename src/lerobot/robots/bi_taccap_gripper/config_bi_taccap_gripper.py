@@ -97,9 +97,7 @@ class BiTaccapGripperConfig(RobotConfig):
     left_tracker_to_ee_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
     left_tracker_to_ee_quat: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
     left_enable_init_pose_alignment: bool = False
-    left_init_tcp_pose: tuple[float, float, float, float, float, float, float] = (
-        _DEFAULT_INIT_TCP_POSE
-    )
+    left_init_tcp_pose: tuple[float, float, float, float, float, float, float] = _DEFAULT_INIT_TCP_POSE
 
     left_enable_wrist_camera: bool = True
 
@@ -115,9 +113,7 @@ class BiTaccapGripperConfig(RobotConfig):
     right_tracker_to_ee_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
     right_tracker_to_ee_quat: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
     right_enable_init_pose_alignment: bool = False
-    right_init_tcp_pose: tuple[float, float, float, float, float, float, float] = (
-        _DEFAULT_INIT_TCP_POSE
-    )
+    right_init_tcp_pose: tuple[float, float, float, float, float, float, float] = _DEFAULT_INIT_TCP_POSE
 
     right_enable_wrist_camera: bool = True
 
@@ -186,9 +182,7 @@ class BiTaccapGripperConfig(RobotConfig):
             "follower",
             "slave",
         ):
-            raise ValueError(
-                f"role must be leader/master or follower/slave, got {self.role!r}."
-            )
+            raise ValueError(f"role must be leader/master or follower/slave, got {self.role!r}.")
         if self.enable_head_camera:
             if self.head_camera_width <= 0 or self.head_camera_height <= 0:
                 raise ValueError(
@@ -214,9 +208,7 @@ class BiTaccapGripperConfig(RobotConfig):
                 "--robot.tactile_display_output_types."
             )
         for side in _SIDES:
-            if getattr(self, f"{side}_enable_gripper") and getattr(
-                self, f"{side}_gripper_open_rad"
-            ) <= 0:
+            if getattr(self, f"{side}_enable_gripper") and getattr(self, f"{side}_gripper_open_rad") <= 0:
                 raise ValueError(
                     f"{side}_gripper_open_rad must be positive, got "
                     f"{getattr(self, f'{side}_gripper_open_rad')}. Closed=0 is fixed by the "
