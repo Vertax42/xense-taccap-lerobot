@@ -29,6 +29,7 @@ lerobot-teleoperate \
 ```
 """
 
+import contextlib
 import time
 import traceback
 from dataclasses import asdict, dataclass
@@ -37,13 +38,11 @@ from pprint import pformat
 # Load TacCap native libs before cv2/Pillow/torchvision. Those packages may
 # preload vendored JPEG/TIFF libraries that conflict with the conda OpenCV libs
 # used by xense.taccap.
-try:
+with contextlib.suppress(ImportError):  # SDK absent: the TacCap robots fail later with a clear error
     from xense.taccap import (
         FollowerGripper as _TaccapFollowerGripper,  # noqa: F401
         LeaderGripper as _TaccapLeaderGripper,  # noqa: F401
     )
-except ImportError:
-    pass
 
 import numpy as np
 import rerun as rr
@@ -361,7 +360,9 @@ def teleoperate(cfg: TeleoperateConfig):
             else:
                 traj_viz = None
 
-        try:
+        # Ctrl+C is the normal way to end a teleop session: fall through to the
+        # finally block below and disconnect cleanly rather than dumping a traceback.
+        with contextlib.suppress(KeyboardInterrupt):
             self_driven_teleop_loop(
                 robot=robot,
                 fps=cfg.fps,
@@ -372,8 +373,6 @@ def teleoperate(cfg: TeleoperateConfig):
                 traj_viz=traj_viz,
                 display_features=display_features,
             )
-        except KeyboardInterrupt:
-            pass
 
     except Exception as e:
         logger.error(f"Error in teleoperation: {e}\n{traceback.format_exc()}")

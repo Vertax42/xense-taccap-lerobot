@@ -35,6 +35,7 @@ lerobot-check-dataset --repo-id Xense/assemble_box_with_phone_stand --episode-in
 """
 
 import argparse
+import contextlib
 import json
 import logging
 import subprocess
@@ -50,7 +51,7 @@ from lerobot.utils.constants import HF_LEROBOT_HOME
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
-PASS = "[OK]"
+PASS = "[OK]"  # nosec B105 — a log prefix, not a credential
 FAIL = "[FAIL]"
 WARN = "[WARN]"
 
@@ -83,7 +84,7 @@ def _check(
 
 def _ffprobe_stream(path: Path) -> dict:
     """Return the first video stream info dict from ffprobe, or empty dict on failure."""
-    r = subprocess.run(
+    r = subprocess.run(  # nosec B607
         ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", str(path)],
         capture_output=True,
         text=True,
@@ -327,7 +328,7 @@ def check_data_file_refs(
         )
         return
 
-    unique_pairs = sorted({(int(c), int(f)) for c, f in zip(eps_df[chunk_col], eps_df[file_col])})
+    unique_pairs = sorted({(int(c), int(f)) for c, f in zip(eps_df[chunk_col], eps_df[file_col], strict=True)})
 
     for chunk_idx, file_idx in unique_pairs:
         rel_path = f"data/chunk-{chunk_idx:03d}/file-{file_idx:03d}.parquet"
@@ -371,10 +372,8 @@ def check_videos(
     if ep_meta_files:
         ep_frames: list[pd.DataFrame] = []
         for f in ep_meta_files:
-            try:
+            with contextlib.suppress(Exception):  # skip an unreadable shard
                 ep_frames.append(pq.read_table(f).to_pandas())
-            except Exception:
-                pass
         eps = pd.concat(ep_frames, ignore_index=True) if ep_frames else pd.DataFrame()
     else:
         eps = pd.DataFrame()
@@ -400,10 +399,7 @@ def check_videos(
             continue
 
         # Determine which video files to check (based on filtered episodes)
-        if episode_indices is not None:
-            ep_rows = eps.loc[eps["episode_index"].isin(episode_indices)]
-        else:
-            ep_rows = eps
+        ep_rows = eps.loc[eps["episode_index"].isin(episode_indices)] if episode_indices is not None else eps
 
         # Group by (chunk_index, file_index) — one check per video file
         file_groups = ep_rows.groupby([chunk_col, file_col])

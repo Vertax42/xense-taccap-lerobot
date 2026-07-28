@@ -37,6 +37,7 @@ lerobot-record \
 ```
 """
 
+import contextlib
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -45,13 +46,11 @@ from pprint import pformat
 # Load TacCap native libs before cv2/Pillow/torchvision. Those packages may
 # preload vendored JPEG/TIFF libraries that conflict with the conda OpenCV libs
 # used by xense.taccap.
-try:
+with contextlib.suppress(ImportError):  # SDK absent: the TacCap robots fail later with a clear error
     from xense.taccap import (
         FollowerGripper as _TaccapFollowerGripper,  # noqa: F401
         LeaderGripper as _TaccapLeaderGripper,  # noqa: F401
     )
-except ImportError:
-    pass
 
 from lerobot.cameras import (  # noqa: F401
     CameraConfig,  # noqa: F401

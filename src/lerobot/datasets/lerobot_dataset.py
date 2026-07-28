@@ -904,10 +904,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         }
 
         # Determine requested episodes
-        if self.episodes is None:
-            requested_episodes = set(range(self.meta.total_episodes))
-        else:
-            requested_episodes = set(self.episodes)
+        requested_episodes = set(range(self.meta.total_episodes)) if self.episodes is None else set(self.episodes)
 
         # Check if all requested episodes are available in cached data
         if not requested_episodes.issubset(available_episodes):
@@ -1518,10 +1515,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         temp_path: Path | None = None,
     ) -> dict:
         # Encode episode frames into a temporary video
-        if temp_path is None:
-            ep_path = self._encode_temporary_episode_video(video_key, episode_index)
-        else:
-            ep_path = temp_path
+        ep_path = self._encode_temporary_episode_video(video_key, episode_index) if temp_path is None else temp_path
 
         ep_size_in_mb = get_file_size_in_mb(ep_path)
         ep_duration_in_s = get_video_duration_in_s(ep_path)

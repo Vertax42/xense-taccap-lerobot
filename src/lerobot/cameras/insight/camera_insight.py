@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import cv2
 import numpy as np
@@ -64,6 +64,10 @@ class InsightCamera(Camera):
         super().__init__(config)
         self.config = config
         self.logger = get_logger("InsightCamera")
+        # The landscape crop taken out of the sensor's fixed portrait frame.
+        # InsightCameraConfig.__post_init__ always fills width/height (they
+        # default to 1024x768); the base CameraConfig only types them optional.
+        self._crop_size = (cast(int, config.width), cast(int, config.height))
 
         self._sdk_camera: Any | None = None
         self._is_connected = False
@@ -194,6 +198,7 @@ class InsightCamera(Camera):
             float(self._last_vio.qy),
             float(self._last_vio.qz),
         )
+        r1, r2, r3, r4, r5, r6 = (float(value) for value in rotation_6d)
         return InsightSnapshot(
             rgb=self._last_good_rgb,
             vio_position=(
@@ -201,7 +206,9 @@ class InsightCamera(Camera):
                 float(self._last_vio.py),
                 float(self._last_vio.pz),
             ),
-            vio_rotation_6d=tuple(float(value) for value in rotation_6d),
+            # Unpacked rather than tuple(...) so the 6 components the dataclass
+            # declares are checkable, and a shape change here fails loudly.
+            vio_rotation_6d=(r1, r2, r3, r4, r5, r6),
         )
 
     def _decode_color(self, image: Any) -> tuple[NDArray[np.uint8] | None, str]:
@@ -229,7 +236,7 @@ class InsightCamera(Camera):
             )
 
         # Crop before the colour conversion - it is a third of the pixels.
-        view = to_landscape(bgr, (int(self.width), int(self.height)), bias=self.config.crop_bias)
+        view = to_landscape(bgr, self._crop_size, bias=self.config.crop_bias)
         return cv2.cvtColor(view, cv2.COLOR_BGR2RGB), ""
 
     def _warn_decode(self, error: str) -> None:

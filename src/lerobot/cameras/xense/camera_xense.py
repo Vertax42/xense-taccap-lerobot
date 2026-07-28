@@ -16,10 +16,11 @@
 Provides the XenseTactileCamera class for capturing tactile data from Xense sensors.
 """
 
+import contextlib
 import time
 from pathlib import Path
 from threading import Event, Lock, RLock, Thread
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -66,7 +67,7 @@ def _patch_ctypes_find_library_for_udev() -> None:
                     candidate = line.split("=>", 1)[1].strip()
                     if os.path.exists(candidate):
                         return candidate
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
         # Common fallbacks (Ubuntu/Debian)
@@ -140,7 +141,9 @@ class XenseTactileCamera(Camera):
 
         self.config = config
         self.serial_number = config.serial_number
-        self.output_types = config.output_types
+        # The config field is widened to accept strings from the CLI/YAML;
+        # __post_init__ has already normalised them into enum members by now.
+        self.output_types = cast(list[XenseOutputType], config.output_types)
         self.warmup_s = config.warmup_s
         self.rectify_size = config.rectify_size
         self.raw_size = config.raw_size
@@ -148,7 +151,8 @@ class XenseTactileCamera(Camera):
         self.infer_mode = config.infer_mode
         self.camera_properties = config.camera_properties
         self.diff_gain = config.diff_gain
-        self.sensor = None
+        # xensesdk ships no stubs, so the Sensor handle stays untyped.
+        self.sensor: Any = None
 
         # Threading for async read
         self.thread: Thread | None = None
@@ -170,7 +174,7 @@ class XenseTactileCamera(Camera):
 
         # Pre-build sensor output types list for better performance
         # This avoids reconstructing the mapping on every read() call
-        self._sensor_output_types_cache = None
+        self._sensor_output_types_cache: list[Any] | None = None
         # Keep a key so changing output_types at runtime can invalidate cache
         self._sensor_output_types_cache_key: tuple[XenseOutputType, ...] | None = None
 
@@ -200,7 +204,7 @@ class XenseTactileCamera(Camera):
             # xensesdk>=2.0: `api`/`use_gpu` were removed; the SDK auto-selects the
             # camera backend and GPU. `disable_infer` skips the inference-engine load
             # for image-only outputs; `infer_mode` (None=SDK default) picks the variant.
-            create_kwargs = {
+            create_kwargs: dict[str, Any] = {
                 "rectify_size": self.rectify_size,
                 "raw_size": self.raw_size,
                 "disable_infer": self.disable_infer,
@@ -243,10 +247,8 @@ class XenseTactileCamera(Camera):
             # Do warmup reads to stabilize the sensor
             start_time = time.time()
             while time.time() - start_time < self.warmup_s:
-                try:
+                with contextlib.suppress(Exception):  # errors are expected while warming up
                     self.read()
-                except Exception:
-                    pass  # Ignore errors during warmup
                 time.sleep(0.1)
             self._start_read_thread()
 
@@ -417,7 +419,10 @@ class XenseTactileCamera(Camera):
                 f"{len(self.output_types)} were requested ({self.output_types})."
             )
 
-        return {ot.value: _bgr_to_rgb_if_needed(ot, arr) for ot, arr in zip(self.output_types, data, strict=True)}
+        return {
+            output_type.value: _bgr_to_rgb_if_needed(output_type, arr)
+            for output_type, arr in zip(self.output_types, data, strict=True)
+        }
 
     def read(self, color_mode=None) -> np.ndarray | dict[str, np.ndarray]:
         """

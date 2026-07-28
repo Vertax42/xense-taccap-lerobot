@@ -226,7 +226,10 @@ class BiTaccapGripper(Robot):
                     # config strings ("DIFFERENCE", "XenseOutputType.DIFFERENCE", …)
                     # into the same enum whose .value keys the read dict. Recorded
                     # type came first, so everything after it is display-only.
-                    display_keys = {ot.value: tactile_display_key(cam_name, ot.value) for ot in cfg.output_types[1:]}
+                    display_keys = {
+                        output_type.value: tactile_display_key(cam_name, output_type.value)
+                        for output_type in cfg.output_types[1:]
+                    }
                     if display_keys:
                         self._tactile_display_keys[cam_name] = display_keys
             if getattr(self.config, f"{side}_enable_wrist_camera"):
@@ -592,7 +595,7 @@ class BiTaccapGripper(Robot):
         black = np.zeros((cfg.height, cfg.width, 3), dtype=np.uint8)
         output_types = getattr(cfg, "output_types", None) or []
         frame: np.ndarray | dict[str, np.ndarray] = (
-            {ot.value: black.copy() for ot in output_types} if len(output_types) > 1 else black
+            {output_type.value: black.copy() for output_type in output_types} if len(output_types) > 1 else black
         )
         self._last_cam_frame[cam_name] = frame
         return frame
