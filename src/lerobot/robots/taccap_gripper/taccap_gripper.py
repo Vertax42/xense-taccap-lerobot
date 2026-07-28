@@ -28,8 +28,15 @@ Observation features:
     imu.accel.{x,y,z} (optional)     -- m/s²
     imu.gyro.{x,y,z}  (optional)     -- rad/s
     imu.mag.{x,y,z}   (optional)     -- µT
-    tactile_left / tactile_right     -- tactile frames (sensor on left/right finger)
+    tactile_left / tactile_right     -- recorded tactile frames (sensor on
+                                        left/right finger), ``rectify`` by default
     wrist_cam                        -- wrist UVC frame (if enable_wrist_camera)
+
+Display-only keys (present in ``get_observation()`` and in ``display_features``,
+absent from ``observation_features``, so Rerun shows them but the dataset never
+sees them — see ``tactile_display_output_types``):
+    tactile_{left,right}_difference  -- amplified deformation view of the same
+                                        sensor read
 """
 
 from __future__ import annotations
@@ -174,6 +181,56 @@ def prewarm_tactile_config_cache(camera_configs: dict[str, Any], logger) -> None
     _wait_nodes_settle(uncached, logger)
 
 
+# ---- Recorded vs display-only tactile streams -------------------------------
+# One sensor read carries two views: the recorded one (rectify — everything the
+# sensor saw) and the display one (the amplified difference the operator reads
+# contact from). The SDK hands both back from a single ``selectSensorInfo``, so
+# the split is purely a matter of which observation key each lands on: the
+# recorded view keeps the camera's own key and is the only one in
+# ``observation_features``; each display view gets a ``{camera}_{type}`` sibling
+# that only Rerun ever sees. Shared with ``bi_taccap_gripper``.
+
+
+def tactile_display_key(cam_name: str, output_type: str) -> str:
+    """Observation key carrying ``output_type`` as a display-only view of ``cam_name``."""
+    return f"{cam_name}_{output_type}"
+
+
+def tactile_camera_output_types(
+    record_types: list[str], display_types: list[str]
+) -> list[str]:
+    """Output types to ask one tactile sensor for: recorded first, then the
+    display-only ones (deduplicated, order preserved).
+
+    A display type that is also the recorded type collapses to a single request —
+    the recorded key then simply doubles as the displayed one.
+    """
+    types = list(record_types)
+    types += [t for t in display_types if t not in types]
+    return types
+
+
+def split_camera_read(
+    cam_name: str, frame: Any, display_keys: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """Fan one camera read out into observation keys.
+
+    A tactile sensor asked for several output types returns
+    ``{output_type: array}`` (``XenseTactileCamera._format_read_result``); every
+    other camera returns a bare array. ``display_keys`` maps output type →
+    display-only observation key for this camera; whichever type is left over is
+    the recorded one and keeps ``cam_name``.
+    """
+    if not isinstance(frame, dict):
+        return {cam_name: frame}
+
+    display_keys = display_keys or {}
+    obs: dict[str, Any] = {}
+    for output_type, data in frame.items():
+        obs[display_keys.get(output_type, cam_name)] = data
+    return obs
+
+
 class TaccapGripper(Robot):
     """TacCap-Gripper handheld data-collection device.
 
@@ -276,9 +333,15 @@ class TaccapGripper(Robot):
         )
 
     def _build_camera_configs(self, side: str) -> dict[str, Any]:
-        """Build ``tactile_{left,right}`` + ``wrist_cam`` configs for ``side``."""
+        """Build ``tactile_{left,right}`` + ``wrist_cam`` configs for ``side``.
+
+        Also fills ``self._tactile_display_keys`` (camera → {output type →
+        display-only observation key}), the map ``get_observation`` and
+        ``display_features`` use to route the extra, unrecorded views.
+        """
         parity = "odd" if side == "left" else "even"
         configs: dict[str, Any] = {}
+        self._tactile_display_keys: dict[str, dict[str, str]] = {}
         n_exp = self.config.expected_tactiles_per_side
         if n_exp:
             got = self._disc_tactiles.get(side, {})
@@ -287,13 +350,29 @@ class TaccapGripper(Robot):
                     f"Expected {n_exp} {side} tactile sensors (on the {side} "
                     f"gripper's USB hub), found {len(got)}: {sorted(got.values())}."
                 )
+            output_types = tactile_camera_output_types(
+                list(self.config.tactile_output_types),
+                list(self.config.tactile_display_output_types),
+            )
             for finger, sn in sorted(got.items()):
-                configs[f"tactile_{finger}"] = XenseTactileCameraConfig(
+                cam_name = f"tactile_{finger}"
+                cfg = XenseTactileCameraConfig(
                     serial_number=sn,
                     fps=self.config.tactile_fps,
-                    output_types=list(self.config.tactile_output_types),
+                    output_types=output_types,
                     diff_gain=self.config.tactile_diff_gain,
                 )
+                configs[cam_name] = cfg
+                # Read the types back off the camera config: it normalises the
+                # config strings ("DIFFERENCE", "XenseOutputType.DIFFERENCE", …)
+                # into the same enum whose .value keys the read dict. Recorded
+                # type came first, so everything after it is display-only.
+                display_keys = {
+                    ot.value: tactile_display_key(cam_name, ot.value)
+                    for ot in cfg.output_types[1:]
+                }
+                if display_keys:
+                    self._tactile_display_keys[cam_name] = display_keys
         if self.config.enable_wrist_camera:
             sn = self._disc_cameras.get(side)
             if not sn:
@@ -331,6 +410,29 @@ class TaccapGripper(Robot):
         for cam_name, cam_cfg in self._camera_configs.items():
             features[cam_name] = (cam_cfg.height, cam_cfg.width, 3)
 
+        return features
+
+    @cached_property
+    def display_features(self) -> dict[str, type | tuple]:
+        """Rerun-facing schema: ``observation_features`` with each tactile camera's
+        recorded stream swapped for its display-only view(s), in place.
+
+        The dataset gets ``rectify`` (``observation_features``), the operator gets
+        the amplified ``difference`` (this). Swapping rather than adding keeps the
+        recorded stream out of the viewer entirely — same tile count, same Rerun
+        image bandwidth as before the split — and keeps tactile in the same slot
+        of the blueprint. Cameras with no display-only view are passed through, so
+        without ``tactile_display_output_types`` this is just
+        ``observation_features``.
+        """
+        features: dict[str, type | tuple] = {}
+        for key, spec in self.observation_features.items():
+            display_keys = self._tactile_display_keys.get(key)
+            if display_keys:
+                for display_key in display_keys.values():
+                    features[display_key] = spec
+            else:
+                features[key] = spec
         return features
 
     @cached_property
@@ -526,7 +628,11 @@ class TaccapGripper(Robot):
                 self.logger.warn(f"IMU read failed: {e}")
 
         for cam_name, cam in self.cameras.items():
-            obs[cam_name] = cam.async_read()
+            obs.update(
+                split_camera_read(
+                    cam_name, cam.async_read(), self._tactile_display_keys.get(cam_name)
+                )
+            )
 
         return obs
 

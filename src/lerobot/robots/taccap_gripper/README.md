@@ -172,6 +172,12 @@ On by default; `--show_trajectory=false` suppresses it, and it auto-skips when
 `--robot.enable_tracker=false` (no pose to draw). Implemented in
 [`visualization.py`](visualization.py) and shared by both teleoperate and record.
 
+The viewer is laid out from the robot's `display_features` rather than
+`observation_features` — same schema, except each tactile sensor shows its display-only
+`difference` view in place of the recorded `rectify` one, and `log_rerun_data` is fed the
+matching subset of the observation (`select_display_observation`), so the recorded stream
+never reaches Rerun.
+
 ## Standalone smoke test
 
 Verifies the robot stack independently of `lerobot-record`. Devices are
@@ -228,17 +234,27 @@ serial is used **verbatim**: no enumeration, no rule check (a typo surfaces as a
 at connect). Leave it unset (default) to keep auto-discovery.
 
 - **Tactile** → obs keys `tactile_left` / `tactile_right`; landscape `(400,700,3)` uint8
-  (width/height auto-derive — don't hard-code). Defaults to `difference` (SDK
-  `OutputType.AugDifference`), which amplifies deformation the raw `rectify` image barely
-  shows; its baseline is taken at sensor init, so keep the fingers **unloaded** at connect,
-  or the resting pressure is subtracted away for the whole run. Pass
-  `--robot.tactile_output_types=rectify` for the unsubtracted image.
+  (width/height auto-derive — don't hard-code). Each sensor is read once per frame for
+  **two views with two destinations**:
+  - **recorded** — `--robot.tactile_output_types`, default `rectify` (exactly one type).
+    The unsubtracted image; this is the only tactile key in `observation_features`, so
+    it is the only one that lands in the dataset.
+  - **displayed** — `--robot.tactile_display_output_types`, default `difference` (SDK
+    `OutputType.AugDifference`), published as `tactile_{left,right}_difference`. It
+    amplifies deformation the raw `rectify` image barely shows, which is what you want
+    to watch live, but it is deliberately kept out of `observation_features` and never
+    recorded: its baseline is taken at sensor init, so a finger loaded at connect would
+    have that pressure subtracted out of the whole run. Keep the fingers **unloaded** at
+    connect for a readable live view. Set to `'[]'` to skip the second read; Rerun then
+    shows the recorded stream.
+
+  Rerun is fed `display_features` (recorded stream swapped for the displayed one), so
+  the viewer shows only `difference` and the tile count is unchanged.
   `--robot.tactile_diff_gain` (default `1.0`, sensors ship at `1.5`) is the linear gain on
   that difference: 1.0 cuts per-pixel temporal noise from ~1.77 to ~1.18 grey levels and
   stops the image clipping, but scales signal down with it — raise it if light contact
   becomes invisible, set it to `None` to keep whatever the sensor was flashed with.
-  Tune `--robot.tactile_fps`
-  / `--robot.tactile_output_types`; `--robot.expected_tactiles_per_side` validates the count.
+  Tune `--robot.tactile_fps`; `--robot.expected_tactiles_per_side` validates the count.
   The two sensors are paired to this unit's gripper by **USB hub**; `left`/`right` finger
   comes from the GSPS serial's **last digit** (odd → `left`, even → `right`, 单左双右).
 - **Wrist** → obs key `wrist_cam`; `--robot.enable_wrist_camera=false` skips. Tune
@@ -275,6 +291,11 @@ defensive fallback for callers that don't pre-warm.
 | `imu.gyro.{x,y,z}` (opt) | TacCap IMU | float (rad/s) |
 | `imu.mag.{x,y,z}` (opt) | TacCap IMU | float (µT) |
 | `<camera_name>` per camera | `cameras/` framework | uint8 (H, W, 3) |
+
+Tactile cameras contribute their **recorded** view only (`rectify` by default). The
+`tactile_{left,right}_difference` keys `get_observation()` also returns are display-only:
+they are absent from `observation_features`, so `build_dataset_frame` never sees them and
+nothing is written for them.
 
 The 6-D rotation convention matches `vive_tracker`:
 `r1..r3` is the first column of the rotation matrix, `r4..r6` is the

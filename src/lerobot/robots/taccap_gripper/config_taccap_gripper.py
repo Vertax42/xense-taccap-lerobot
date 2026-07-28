@@ -121,28 +121,40 @@ class TaccapGripperConfig(RobotConfig):
 
     # ---- Tactile sensors (Xense; auto-discovered by serial) --------------
     tactile_fps: int = 30
-    tactile_output_types: list[str] = field(default_factory=lambda: ["difference"])
-    """Defaults applied to every discovered tactile sensor. A single output type
-    yields one (H, W, 3) image. Default is ``difference`` (SDK
-    ``OutputType.AugDifference``): on this gel the raw ``rectify`` image carries
-    so little visible deformation that contact is hard to read, and the
-    augmented difference against the sensor's rest baseline amplifies it.
-    Both are inference-free, same (400, 700, 3) uint8 shape, so this costs
-    nothing at startup — switch back with ``--robot.tactile_output_types=rectify``
-    if you need the unsubtracted image. Width/height are auto-derived from the
-    SDK's rectify_size (do not hard-code them).
+    tactile_output_types: list[str] = field(default_factory=lambda: ["rectify"])
+    """The **recorded** tactile stream, applied to every discovered sensor. Exactly
+    one output type (each sensor contributes one (H, W, 3) image to
+    ``observation_features``, hence one dataset video key). Default ``rectify``:
+    the unsubtracted image, which keeps every bit the sensor saw. The amplified
+    ``difference`` view is easier to read live but is destructive — it is taken
+    against a baseline captured at sensor init, so any pressure resting on the
+    gel at connect is subtracted away for the whole run, and that must not reach
+    the dataset. See ``tactile_display_output_types`` for the live view.
+    Width/height are auto-derived from the SDK's rectify_size (do not hard-code)."""
 
-    Note the baseline is captured when the sensor initialises, so the fingers
-    must be **unloaded** at connect — start with something already pressed
-    against the gel and that pressure is subtracted away for the whole run."""
+    tactile_display_output_types: list[str] = field(default_factory=lambda: ["difference"])
+    """Extra tactile streams requested from the sensor for **display only**.
+    Default ``difference`` (SDK ``OutputType.AugDifference``): on this gel the raw
+    ``rectify`` image carries so little visible deformation that contact is hard
+    to read, and the augmented difference against the rest baseline amplifies it,
+    so this is what the operator watches in Rerun.
+
+    Each type here is published under ``{camera}_{type}`` (e.g.
+    ``tactile_left_difference``). Those keys are deliberately absent from
+    ``observation_features``, so ``build_dataset_frame`` never sees them and they
+    never land on disk; they are what ``display_features`` puts in front of Rerun
+    *instead of* the recorded stream. Both image types are inference-free and come
+    from the same ``selectSensorInfo`` call, so the extra stream is cheap. Set to
+    an empty list to skip it entirely (Rerun then shows the recorded stream)."""
 
     tactile_diff_gain: float | None = 1.0
     """Linear gain the SDK applies to the ``difference`` image
-    (``ctx_patch.process.diff_gain``). The sensors ship at 1.5, which is noisy
-    and clips on this gel; 1.0 measures ~1.18 grey levels of per-pixel temporal
-    noise instead of ~1.77 and stops saturating. Because it scales signal and
-    noise together the SNR is unchanged — it buys headroom, not clarity. Set to
-    None to leave whatever the sensor was flashed with."""
+    (``ctx_patch.process.diff_gain``), i.e. to the display stream only. The sensors
+    ship at 1.5, which is noisy and clips on this gel; 1.0 measures ~1.18 grey
+    levels of per-pixel temporal noise instead of ~1.77 and stops saturating.
+    Because it scales signal and noise together the SNR is unchanged — it buys
+    headroom, not clarity. Set to None to leave whatever the sensor was flashed
+    with."""
 
     # ---- Wrist camera (OpenCV UVC; auto-discovered by serial) ------------
     enable_wrist_camera: bool = True
@@ -168,4 +180,15 @@ class TaccapGripperConfig(RobotConfig):
                 f"gripper_open_rad must be positive, got {self.gripper_open_rad}. "
                 "Closed=0 is fixed by the SDK's Encoder.set_zero(); open_rad "
                 "is the mechanical-max angle (TC-GU-01 default 1.7)."
+            )
+
+        # One recorded stream per sensor: observation_features declares a single
+        # (H, W, 3) per tactile camera, so a second recorded type would silently
+        # hand build_dataset_frame a dict instead of an image. Extra live views
+        # belong in tactile_display_output_types.
+        if len(self.tactile_output_types) != 1:
+            raise ValueError(
+                "tactile_output_types must name exactly one recorded output type, "
+                f"got {self.tactile_output_types}. For an extra Rerun-only view use "
+                "--robot.tactile_display_output_types."
             )

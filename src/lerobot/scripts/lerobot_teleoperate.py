@@ -67,7 +67,11 @@ from lerobot.utils.robot_utils import (
     get_logger,
 )
 from lerobot.utils.utils import move_cursor_up
-from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
+from lerobot.utils.visualization_utils import (
+    init_rerun,
+    log_rerun_data,
+    select_display_observation,
+)
 from lerobot.robots.taccap_gripper.visualization import TaccapTrajectoryViz
 
 logger = get_logger("Teleoperate")
@@ -221,6 +225,7 @@ def self_driven_teleop_loop(
     display_compressed_images: bool = True,
     debug_timing: bool = False,
     traj_viz: TaccapTrajectoryViz | None = None,
+    display_features: dict | None = None,
 ):
     """Data-stream + Rerun visualisation loop for self-driven, sensor-only robots
     (``taccap_gripper`` / ``bi_taccap_gripper``).
@@ -228,6 +233,11 @@ def self_driven_teleop_loop(
     These robots have no teleoperator: we only read ``robot.get_observation()`` and
     stream it to Rerun with an empty action. ``send_action`` is a no-op, so nothing
     is ever commanded. Mirrors v0.4.4's ``bi_xense_flare_grippers_teleop_loop``.
+
+    ``display_features`` (the robot's viewer-facing schema, if it has one) narrows
+    what reaches Rerun: on the TacCap grippers it swaps each tactile sensor's
+    recorded ``rectify`` frame for the amplified ``difference`` one. The terminal
+    table below still prints the full observation.
     """
     display_len = max((len(key) for key in robot.observation_features), default=20)
     start = time.perf_counter()
@@ -246,13 +256,14 @@ def self_driven_teleop_loop(
             obs_time_ms = (time.perf_counter() - obs_t0) * 1e3
 
             if display_data:
+                display_obs = select_display_observation(obs, display_features)
                 log_rerun_data(
-                    observation=obs,
+                    observation=display_obs,
                     action={},
                     compress_images=display_compressed_images,
                 )
                 if traj_viz is not None:
-                    traj_viz.log(obs)
+                    traj_viz.log(display_obs)
                 if not debug_timing:
                     scalar_items = [
                         (k, v) for k, v in obs.items() if not isinstance(v, np.ndarray)
@@ -342,12 +353,16 @@ def teleoperate(cfg: TeleoperateConfig):
         # Viewer layout, plus the 3D pose trail when a tracker supplies poses.
         # Built whenever data is displayed: --show_trajectory=false suppresses the
         # trail, not the blueprint, since dropping the blueprint would leave Rerun
-        # auto-laying-out every camera and scalar into equal tiles.
+        # auto-laying-out every camera and scalar into equal tiles. Laid out from
+        # display_features when the robot has one — same schema as
+        # observation_features except each tactile sensor shows its display-only
+        # view (difference) in place of the recorded one (rectify).
+        display_features = getattr(robot, "display_features", None)
         traj_viz = None
         if cfg.display_data:
             # teleop signals panel: default to the gripper position channel(s).
             traj_viz = TaccapTrajectoryViz(
-                robot.observation_features,
+                display_features or robot.observation_features,
                 signals="gripper",
                 show_trajectory=cfg.show_trajectory,
             )
@@ -365,6 +380,7 @@ def teleoperate(cfg: TeleoperateConfig):
                 display_compressed_images=display_compressed_images,
                 debug_timing=cfg.debug_timing,
                 traj_viz=traj_viz,
+                display_features=display_features,
             )
         except KeyboardInterrupt:
             pass

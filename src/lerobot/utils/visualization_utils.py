@@ -46,6 +46,25 @@ def init_rerun(
         rr.spawn(memory_limit=memory_limit)
 
 
+def select_display_observation(
+    observation: RobotObservation | None, display_features: dict[str, Any] | None
+) -> RobotObservation | None:
+    """Narrow an observation to the keys a robot wants on screen.
+
+    A robot may emit keys meant for one consumer only: the TacCap grippers read
+    each tactile sensor twice per frame, recording the ``rectify`` image while
+    showing the amplified ``difference`` one, and expose the viewer's half of
+    that split as ``display_features``. Filtering here keeps the recorded stream
+    out of Rerun without touching what goes to ``dataset.add_frame``.
+
+    ``display_features`` of None (any robot that draws no such distinction)
+    passes the observation straight through.
+    """
+    if not display_features or observation is None:
+        return observation
+    return {k: v for k, v in observation.items() if k in display_features}
+
+
 def _is_scalar(x):
     return isinstance(x, (float | numbers.Real | np.integer | np.floating)) or (
         isinstance(x, np.ndarray) and x.ndim == 0

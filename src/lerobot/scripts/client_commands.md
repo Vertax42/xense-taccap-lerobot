@@ -166,3 +166,5 @@ lerobot-record \
 > `tactile_left/right` + `wrist_cam` + `tcp.*` (single), or
 > `left_/right_tactile_left/right` + `{side}_wrist` + `{side}_tcp.*` (bi). Tactile
 > rectify is landscape `(400,700,3)` — width/height auto-derive, don't hard-code.
+> Each tactile key records `rectify`; the matching `*_difference` key is display-only
+> (Rerun shows it instead of the recorded one, and it never enters the dataset).
