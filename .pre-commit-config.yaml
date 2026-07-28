@@ -15,7 +15,11 @@
 default_language_version:
     python: python3.12
 
-exclude: "tests/artifacts/.*\\.safetensors$"
+# NOTE: this fork tracks no committed .safetensors, so upstream's
+# `exclude: tests/artifacts/.*\.safetensors$` matched nothing and tripped the
+# check-useless-excludes meta hook. If binary test artifacts are ever committed
+# under tests/artifacts/, put that exclude back — end-of-file-fixer would
+# otherwise append a newline to them.
 
 repos:
   ##### Meta #####
@@ -91,7 +95,10 @@ repos:
     hooks:
       - id: mypy
         args: [--config-file=pyproject.toml]
-        exclude: ^(examples|benchmarks|tests)/
+        # The pybind build script is a second module named `setup`, which mypy
+        # refuses to resolve alongside the repo root's setup.py — it aborts
+        # before checking anything else. It is a CMake driver, not library code.
+        exclude: ^(examples|benchmarks|tests)/|xensevr-pc-service-pybind/setup\.py$
 
   ##### Docstring Checks #####
   # - repo: https://github.com/akaihola/darglint2
