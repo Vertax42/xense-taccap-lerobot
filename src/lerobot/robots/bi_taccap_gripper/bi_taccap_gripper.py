@@ -28,9 +28,16 @@ Observation features (per side ``{s}`` in left/right):
     {s}_gripper.pos                 -- normalised jaw [0=closed, 1=open]
     {s}_imu.accel/gyro/mag.{x,y,z}  -- optional
     {s}_wrist                       -- wrist UVC frame (if enable_wrist_camera)
-    {s}_tactile_left / {s}_tactile_right -- tactile frames (sensor on left/right finger)
+    {s}_tactile_left / {s}_tactile_right -- recorded tactile frames (sensor on
+                                       left/right finger), ``rectify`` by default
     head_rgb                        -- Insight RGB (if enable_head_camera)
     head_camera.x/y/z/r1..r6        -- Insight-frame raw VIO pose
+
+Display-only keys (in ``get_observation()`` and ``display_features``, absent from
+``observation_features``, so Rerun shows them but the dataset never sees them —
+see ``tactile_display_output_types``):
+    {s}_tactile_{left,right}_difference -- amplified deformation view of the same
+                                       sensor read
 """
 
 from __future__ import annotations
@@ -54,6 +61,9 @@ from ..taccap_gripper import serial_discovery as disco
 from ..taccap_gripper.taccap_gripper import (
     prewarm_tactile_config_cache,
     resolve_wrist_camera_path,
+    split_camera_read,
+    tactile_camera_output_types,
+    tactile_display_key,
 )
 from .config_bi_taccap_gripper import BiTaccapGripperConfig
 
@@ -161,7 +171,9 @@ class BiTaccapGripper(Robot):
         # good frame per camera so a hot-unplug degrades to a stale/black frame
         # instead of crashing the record loop, and remember which cameras died
         # so the caller can stop cleanly and save what was recorded.
-        self._last_cam_frame: dict[str, np.ndarray] = {}
+        # Value is a dict of frames for a multi-output tactile sensor (recorded +
+        # display-only views), a single array for every other camera.
+        self._last_cam_frame: dict[str, np.ndarray | dict[str, np.ndarray]] = {}
         self._lost_cameras: set[str] = set()
         # Monotonic time each camera last produced a genuinely new frame object,
         # used to detect a frozen (non-raising) stream — see _read_camera_or_fallback.
@@ -177,6 +189,10 @@ class BiTaccapGripper(Robot):
         digit); wrist cameras (``{side}_wrist``) come from ``/dev/v4l/by-id``.
         Counts are validated per side so a mis-installed sensor is caught here,
         not mid-episode.
+
+        Also fills ``self._tactile_display_keys`` (camera → {output type →
+        display-only observation key}), the map ``get_observation`` and
+        ``display_features`` use to route the extra, unrecorded views.
         """
         n_exp = self.config.expected_tactiles_per_side
         tactiles = disco.discover_tactiles_by_hub(self._role) if n_exp else {"left": {}, "right": {}}
@@ -184,6 +200,11 @@ class BiTaccapGripper(Robot):
         cameras = disco.discover_wrist_cameras(self._role) if want_wrist else {}
 
         configs: dict[str, Any] = {}
+        self._tactile_display_keys: dict[str, dict[str, str]] = {}
+        output_types = tactile_camera_output_types(
+            list(self.config.tactile_output_types),
+            list(self.config.tactile_display_output_types),
+        )
         for side in _SIDES:
             parity = "odd" if side == "left" else "even"
             if n_exp:
@@ -194,12 +215,24 @@ class BiTaccapGripper(Robot):
                         f"gripper's USB hub), found {len(got)}: {sorted(got.values())}."
                     )
                 for finger, sn in sorted(got.items()):
-                    configs[f"{side}_tactile_{finger}"] = XenseTactileCameraConfig(
+                    cam_name = f"{side}_tactile_{finger}"
+                    cfg = XenseTactileCameraConfig(
                         serial_number=sn,
                         fps=self.config.tactile_fps,
-                        output_types=list(self.config.tactile_output_types),
+                        output_types=output_types,
                         diff_gain=self.config.tactile_diff_gain,
                     )
+                    configs[cam_name] = cfg
+                    # Read the types back off the camera config: it normalises the
+                    # config strings ("DIFFERENCE", "XenseOutputType.DIFFERENCE", …)
+                    # into the same enum whose .value keys the read dict. Recorded
+                    # type came first, so everything after it is display-only.
+                    display_keys = {
+                        ot.value: tactile_display_key(cam_name, ot.value)
+                        for ot in cfg.output_types[1:]
+                    }
+                    if display_keys:
+                        self._tactile_display_keys[cam_name] = display_keys
             if getattr(self.config, f"{side}_enable_wrist_camera"):
                 sn = cameras.get(side)
                 if not sn:
@@ -253,6 +286,28 @@ class BiTaccapGripper(Robot):
         for cam_name, cam_cfg in self._camera_configs.items():
             features[cam_name] = (cam_cfg.height, cam_cfg.width, 3)
 
+        return features
+
+    @cached_property
+    def display_features(self) -> dict[str, type | tuple]:
+        """Rerun-facing schema: ``observation_features`` with each tactile camera's
+        recorded stream swapped for its display-only view(s), in place.
+
+        The dataset gets ``rectify`` (``observation_features``), the operator gets
+        the amplified ``difference`` (this). Swapping rather than adding keeps the
+        recorded stream out of the viewer entirely — four tactile tiles, not eight,
+        and no extra Rerun image bandwidth. Cameras with no display-only view are
+        passed through, so without ``tactile_display_output_types`` this is just
+        ``observation_features``.
+        """
+        features: dict[str, type | tuple] = {}
+        for key, spec in self.observation_features.items():
+            display_keys = self._tactile_display_keys.get(key)
+            if display_keys:
+                for display_key in display_keys.values():
+                    features[display_key] = spec
+            else:
+                features[key] = spec
         return features
 
     @cached_property
@@ -473,11 +528,17 @@ class BiTaccapGripper(Robot):
             # together); skip it here so it isn't read twice.
             if cam_name == "head_rgb":
                 continue
-            obs[cam_name] = self._read_camera_or_fallback(cam_name, cam)
+            obs.update(
+                split_camera_read(
+                    cam_name,
+                    self._read_camera_or_fallback(cam_name, cam),
+                    self._tactile_display_keys.get(cam_name),
+                )
+            )
 
         return obs
 
-    def _read_camera_or_fallback(self, cam_name: str, cam: Any) -> np.ndarray:
+    def _read_camera_or_fallback(self, cam_name: str, cam: Any) -> np.ndarray | dict[str, np.ndarray]:
         """Read one camera, degrading gracefully on physical loss.
 
         Two distinct loss modes are handled, because the camera classes behave
@@ -536,14 +597,22 @@ class BiTaccapGripper(Robot):
             self.logger.error(f"  [{cam_name}] {reason}")
             self._lost_cameras.add(cam_name)
 
-    def _fallback_frame(self, cam_name: str) -> np.ndarray:
+    def _fallback_frame(self, cam_name: str) -> np.ndarray | dict[str, np.ndarray]:
         """Last good frame for this camera, or a black frame of the declared
-        (H, W, 3) shape if none was ever captured."""
+        (H, W, 3) shape if none was ever captured.
+
+        A tactile sensor asked for several output types reads as a dict, so the
+        first-read fallback has to be shaped the same way — one black frame per
+        requested type — or the split below would drop the display keys."""
         cached = self._last_cam_frame.get(cam_name)
         if cached is not None:
             return cached
         cfg = self._camera_configs[cam_name]
-        frame = np.zeros((cfg.height, cfg.width, 3), dtype=np.uint8)
+        black = np.zeros((cfg.height, cfg.width, 3), dtype=np.uint8)
+        output_types = getattr(cfg, "output_types", None) or []
+        frame: np.ndarray | dict[str, np.ndarray] = (
+            {ot.value: black.copy() for ot in output_types} if len(output_types) > 1 else black
+        )
         self._last_cam_frame[cam_name] = frame
         return frame
 

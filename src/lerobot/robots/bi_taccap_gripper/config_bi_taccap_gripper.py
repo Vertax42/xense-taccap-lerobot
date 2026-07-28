@@ -126,20 +126,35 @@ class BiTaccapGripperConfig(RobotConfig):
     """Seconds to wait for the first valid tracker pose at connect time (both sides)."""
 
     tactile_fps: int = 30
-    tactile_output_types: list[str] = field(default_factory=lambda: ["difference"])
-    """Defaults applied to every discovered tactile sensor. Single output type →
-    one (H, W, 3) image. Default is ``difference`` (SDK
-    ``OutputType.AugDifference``), which amplifies deformation the raw
-    ``rectify`` image barely shows; both are inference-free and landscape
-    (400, 700, 3) uint8. Width/height auto-derive from the SDK rectify_size —
-    don't hard-code. The baseline is taken at sensor init, so keep all four
-    fingers unloaded at connect."""
+    tactile_output_types: list[str] = field(default_factory=lambda: ["rectify"])
+    """The **recorded** tactile stream, applied to every discovered sensor. Exactly
+    one output type → one (H, W, 3) image per sensor, i.e. one dataset video key.
+    Default ``rectify``, the unsubtracted image: the amplified ``difference`` view
+    is easier to read live but is taken against a baseline captured at sensor init,
+    so any pressure resting on a gel at connect would be subtracted out of the
+    whole recording. Width/height auto-derive from the SDK rectify_size — don't
+    hard-code."""
+
+    tactile_display_output_types: list[str] = field(default_factory=lambda: ["difference"])
+    """Extra tactile streams requested for **display only**. Default ``difference``
+    (SDK ``OutputType.AugDifference``), which amplifies deformation the raw
+    ``rectify`` image barely shows, so it is what the operator watches in Rerun.
+
+    Each type is published under ``{camera}_{type}`` (e.g.
+    ``left_tactile_right_difference``). Those keys are deliberately absent from
+    ``observation_features`` — they never reach the dataset — and ``display_features``
+    puts them in front of Rerun *instead of* the recorded stream. Both image types
+    are inference-free and come from one ``selectSensorInfo`` call, so the extra
+    stream is cheap; an empty list skips it (Rerun then shows the recorded stream).
+    The difference baseline is taken at sensor init, so keep all four fingers
+    unloaded at connect."""
 
     tactile_diff_gain: float | None = 1.0
     """Linear gain applied to the ``difference`` image
-    (``ctx_patch.process.diff_gain``, stock 1.5). 1.0 roughly a third less
-    per-pixel temporal noise and no clipping; it scales signal and noise alike,
-    so SNR is unchanged. None leaves the sensor's flashed value."""
+    (``ctx_patch.process.diff_gain``, stock 1.5), i.e. to the display stream only.
+    1.0 gives roughly a third less per-pixel temporal noise and no clipping; it
+    scales signal and noise alike, so SNR is unchanged. None leaves the sensor's
+    flashed value."""
 
     wrist_camera_width: int = 640
     wrist_camera_height: int = 480
@@ -188,6 +203,16 @@ class BiTaccapGripperConfig(RobotConfig):
                 raise ValueError("head_camera_stale_after_s must be positive.")
             if self.head_camera_stale_timeout_s <= 0:
                 raise ValueError("head_camera_stale_timeout_s must be positive.")
+        # One recorded stream per sensor: observation_features declares a single
+        # (H, W, 3) per tactile camera, so a second recorded type would silently
+        # hand build_dataset_frame a dict instead of an image. Extra live views
+        # belong in tactile_display_output_types.
+        if len(self.tactile_output_types) != 1:
+            raise ValueError(
+                "tactile_output_types must name exactly one recorded output type, "
+                f"got {self.tactile_output_types}. For an extra Rerun-only view use "
+                "--robot.tactile_display_output_types."
+            )
         for side in _SIDES:
             if getattr(self, f"{side}_enable_gripper") and getattr(
                 self, f"{side}_gripper_open_rad"
