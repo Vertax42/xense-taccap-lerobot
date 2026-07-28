@@ -348,7 +348,10 @@ class TaccapGripper(Robot):
                 # config strings ("DIFFERENCE", "XenseOutputType.DIFFERENCE", …)
                 # into the same enum whose .value keys the read dict. Recorded
                 # type came first, so everything after it is display-only.
-                display_keys = {ot.value: tactile_display_key(cam_name, ot.value) for ot in cfg.output_types[1:]}
+                display_keys = {
+                    output_type.value: tactile_display_key(cam_name, output_type.value)
+                    for output_type in cfg.output_types[1:]
+                }
                 if display_keys:
                     self._tactile_display_keys[cam_name] = display_keys
         if self.config.enable_wrist_camera:

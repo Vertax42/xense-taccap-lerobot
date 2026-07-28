@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 def _parse_v4l2_devices() -> dict[str, list[str]]:
     """Parse `v4l2-ctl --list-devices` and return a mapping of device name → list of /dev/videoX paths."""
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B607
             ["v4l2-ctl", "--list-devices"],
             capture_output=True,
             text=True,
@@ -289,7 +289,7 @@ class OpenCVCamera(Camera):
         if self.fps is None:
             raise ValueError(f"{self} FPS is not set")
 
-        success = self.videocapture.set(cv2.CAP_PROP_FPS, float(self.fps))
+        self.videocapture.set(cv2.CAP_PROP_FPS, float(self.fps))
         actual_fps = self.videocapture.get(cv2.CAP_PROP_FPS)
         # Note: V4L2 backend may return False from set() even when the value is correctly applied,
         # so we only validate the actual readback value, not the success flag.
@@ -394,7 +394,7 @@ class OpenCVCamera(Camera):
                         for p, name in list(path_to_device_name.items()):
                             if name == old_name:
                                 path_to_device_name[p] = serial
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
         for target in targets_to_scan:

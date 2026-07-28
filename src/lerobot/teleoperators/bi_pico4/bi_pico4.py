@@ -400,7 +400,7 @@ class BiPico4(Teleoperator):
         if self._is_connected:
             try:
                 self.disconnect()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             finally:
                 self._is_connected = False

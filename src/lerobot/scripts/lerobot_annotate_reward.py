@@ -256,7 +256,7 @@ class RewardAnnotator:
         idx = 0
         for r in range(rows):
             row_images = []
-            for c in range(cols):
+            for _c in range(cols):
                 if idx < n:
                     row_images.append(resized[idx])
                     idx += 1
@@ -887,9 +887,8 @@ def main():
 
     except KeyboardInterrupt:
         print("\nInterrupted by user")
-        if annotator.has_unsaved_changes:
-            if input("Save progress before exit? [y/N]: ").lower() == "y":
-                annotator.save_annotations(args.save_progress)
+        if annotator.has_unsaved_changes and input("Save progress before exit? [y/N]: ").lower() == "y":
+            annotator.save_annotations(args.save_progress)
 
 
 if __name__ == "__main__":

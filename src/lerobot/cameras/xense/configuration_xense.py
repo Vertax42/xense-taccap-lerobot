@@ -178,7 +178,7 @@ class XenseTactileCameraConfig(CameraConfig):
                 XenseOutputType.RECTIFY,
                 XenseOutputType.DEPTH,
             }
-            if any(ot in image_outputs for ot in self.output_types):
+            if any(output_type in image_outputs for output_type in self.output_types):
                 # Image outputs: use rectify_size (width, height)
                 if self.height is None:
                     self.height = self.rectify_size[0]
@@ -197,4 +197,4 @@ class XenseTactileCameraConfig(CameraConfig):
         # type (DEPTH/FORCE*/MARKER*/MESH*) requires inference -> keep it enabled.
         if self.disable_infer is None:
             infer_free_outputs = {XenseOutputType.RECTIFY, XenseOutputType.DIFFERENCE}
-            self.disable_infer = all(ot in infer_free_outputs for ot in self.output_types)
+            self.disable_infer = all(output_type in infer_free_outputs for output_type in self.output_types)

@@ -79,6 +79,7 @@ Matches the architecture of the SDK's
 from __future__ import annotations
 
 import atexit
+import contextlib
 import threading
 import time
 from typing import Any
@@ -179,10 +180,9 @@ class Pico4TrackerReader:
         """
         with cls._init_lock:
             if cls._xrt_initialized and cls._xrt is not None:
-                try:
+                # pragma: no cover — best-effort at teardown
+                with contextlib.suppress(Exception):
                     cls._xrt.close()
-                except Exception:  # pragma: no cover — best-effort at teardown
-                    pass
             cls._xrt_initialized = False
             cls._xrt = None
             cls._active_readers = 0

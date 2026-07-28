@@ -65,11 +65,7 @@ def has_quantile_stats(stats: dict[str, dict] | None, quantile_list_keys: list[s
     if stats is None:
         return False
 
-    for feature_stats in stats.values():
-        if any(q_key in feature_stats for q_key in quantile_list_keys):
-            return True
-
-    return False
+    return any(any(q_key in feature_stats for q_key in quantile_list_keys) for feature_stats in stats.values())
 
 
 def process_single_episode(dataset: LeRobotDataset, episode_idx: int) -> dict:

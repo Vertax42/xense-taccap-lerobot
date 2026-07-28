@@ -31,6 +31,10 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
+    # torch is imported inside each function that needs it (it is slow to load and
+    # not every caller of this module wants it), so the annotations below have
+    # nothing to resolve against at runtime. Declaring it here keeps them checkable.
+    import torch
     from accelerate import Accelerator
 
 
