@@ -90,7 +90,11 @@ from lerobot.utils.utils import (
     init_logging,
     log_say,
 )
-from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
+from lerobot.utils.visualization_utils import (
+    init_rerun,
+    log_rerun_data,
+    select_display_observation,
+)
 from lerobot.robots.taccap_gripper.visualization import TaccapTrajectoryViz
 
 logger = get_logger("lerobot_record")
@@ -291,6 +295,7 @@ def self_driven_record_loop(
     single_task: str | None = None,
     display_data: bool = False,
     traj_viz: TaccapTrajectoryViz | None = None,
+    display_features: dict | None = None,
 ):
     """Record loop for self-driven handheld devices (e.g. TacCap-Gripper).
 
@@ -311,6 +316,11 @@ def self_driven_record_loop(
     With ``dataset=None`` (the between-episode reset phase) the loop is a
     passive wait: it still honours the keyboard/stop events but reads no
     hardware and records nothing, so the operator can reposition the device.
+
+    ``display_features`` (the robot's viewer-facing schema, if it has one) only
+    narrows what reaches Rerun — the dataset always gets the full observation.
+    On the TacCap grippers that is what sends the amplified tactile difference
+    to the screen while the recorded ``rectify`` image goes to disk.
     """
     if dataset is not None and dataset.fps != fps:
         raise ValueError(
@@ -380,9 +390,10 @@ def self_driven_record_loop(
             prev_observation_frame = current_observation_frame
 
         if display_data and observation is not None:
-            log_rerun_data(observation=observation, action=action or {})
+            display_observation = select_display_observation(observation, display_features)
+            log_rerun_data(observation=display_observation, action=action or {})
             if traj_viz is not None:
-                traj_viz.log(observation)
+                traj_viz.log(display_observation)
 
         _record_loop_sleep(
             start_loop_t=start_loop_t,
@@ -456,10 +467,15 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             teleop.connect()
 
         # 3D pose + trajectory overlay (no-op if the device emits no tcp.* poses).
+        # The viewer is laid out from display_features when the robot has one —
+        # same schema as observation_features except each tactile sensor shows its
+        # display-only view (difference) in place of the recorded one (rectify).
+        display_features = getattr(robot, "display_features", None)
         traj_viz = None
         if cfg.display_data:
             traj_viz = TaccapTrajectoryViz(
-                robot.observation_features, show_trajectory=cfg.show_trajectory
+                display_features or robot.observation_features,
+                show_trajectory=cfg.show_trajectory,
             )
             if traj_viz.active:
                 traj_viz.setup()
@@ -496,6 +512,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     single_task=cfg.dataset.single_task,
                     display_data=cfg.display_data,
                     traj_viz=traj_viz,
+                    display_features=display_features,
                 )
 
                 # Execute a few seconds without recording to give time to manually reset the environment
@@ -514,6 +531,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         single_task=cfg.dataset.single_task,
                         display_data=cfg.display_data,
                         traj_viz=traj_viz,
+                        display_features=display_features,
                     )
 
                 if events["rerecord_episode"]:
