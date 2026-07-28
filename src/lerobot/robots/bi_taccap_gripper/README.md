@@ -23,7 +23,8 @@ Per side `{s}` ∈ {left, right}:
 | `{s}_gripper.pos` | `{s}_enable_gripper` | normalised jaw, 0=closed / 1=open |
 | `{s}_imu.{accel,gyro,mag}.{x,y,z}` | `{s}_enable_imu` | IMU |
 | `{s}_wrist` | `{s}_enable_wrist_camera` | wrist UVC frame |
-| `{s}_tactile_left` / `{s}_tactile_right` | auto-discovered | tactile frame from the left / right finger sensor |
+| `{s}_tactile_left` / `{s}_tactile_right` | auto-discovered | **recorded** tactile frame from the left / right finger sensor (`rectify`) |
+| `{s}_tactile_{left,right}_difference` | `tactile_display_output_types` | **display-only** amplified-deformation view of the same read — Rerun only, never recorded |
 | `head_rgb` | `enable_head_camera` | latest decoded Insight RGB frame |
 | `head_camera.x/y/z` | `enable_head_camera` | raw Insight VIO position in the camera's own coordinate frame |
 | `head_camera.r1..r6` | `enable_head_camera` | raw Insight VIO orientation as the first two rotation-matrix columns |
@@ -31,6 +32,16 @@ Per side `{s}` ∈ {left, right}:
 `action_features` = the per-side gripper pose + `{s}_gripper.pos` subset; the head
 camera pose and all images remain observation-only. With both Pico4 trackers, both
 grippers and the Insight head camera enabled, `observation.state` has 29 dimensions (20 + 9).
+
+**Two tactile streams, two destinations.** Each sensor is read once per frame for two
+views: `rectify` (recorded) and the amplified `difference` (displayed). Only the
+recorded one is in `observation_features`, so only it reaches the dataset; the
+`*_difference` keys live in `display_features`, which is what the Rerun layout and
+`log_rerun_data` are fed — the recorded stream is not sent to the viewer at all, so
+the tactile grid stays at four tiles. `difference` is the easier view to read contact
+from live, but its baseline is captured at sensor init, so a finger resting on
+something at connect would have that pressure subtracted out of the whole recording —
+which is exactly why the dataset gets `rectify`.
 
 For each fixed-rate robot sample, the adapter calls the Insight SDK's `latest()`
 exactly once and takes the newest cached RGB and VIO values. The source XYZW quaternion
@@ -69,6 +80,12 @@ missing/duplicate/malformed tracker raises a clear error. Set `--robot.enable_tr
 to record tactile + gripper only (no PC service needed). Other knobs: `--robot.role`,
 `--robot.gripper_open_rad`, `--robot.tactile_fps`, `--robot.wrist_camera_{width,height,fps}`,
 `--robot.expected_tactiles_per_side`.
+
+Tactile streams: `--robot.tactile_output_types` (recorded, default `rectify`, exactly
+one type) and `--robot.tactile_display_output_types` (Rerun-only, default `difference`;
+set to `'[]'` to drop the second read and show the recorded stream instead).
+`--robot.tactile_diff_gain` (default `1.0`, sensors ship at `1.5`) scales the difference
+image, i.e. the displayed one only.
 
 To bypass the tracker side rule, pin serials directly with `--robot.left_tracker_serial=<SN>`
 and/or `--robot.right_tracker_serial=<SN>`. A pinned side uses its serial **verbatim** (no
