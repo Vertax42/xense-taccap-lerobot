@@ -136,6 +136,17 @@ lerobot-record \
 
 ### Single (`taccap_gripper`)
 
+One gripper, its two tactile pads and its wrist camera, recorded through the same
+`self_driven_record_loop`. Keys are **unprefixed** (`tcp.*`, `gripper.pos`,
+`tactile_left` / `tactile_right`, `wrist_cam`), so a single-arm dataset is not a
+column subset of a bimanual one. There is no head camera here —
+`--robot.enable_head_camera` is a `bi_taccap_gripper` option.
+
+`--robot.side` is only needed when both grippers are plugged in; a lone unit
+auto-resolves, and so does its Pico4 tracker (side from the serial's 2nd-to-last
+digit). Add `--robot.enable_tracker=false` to record tactile + gripper only — the
+`tcp.*` columns then disappear from the dataset instead of recording zeros.
+
 ```bash
 lerobot-record \
     --robot.type=taccap_gripper \
