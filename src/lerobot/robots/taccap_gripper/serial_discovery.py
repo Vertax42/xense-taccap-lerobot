@@ -174,16 +174,29 @@ def assign_pico_trackers(serials, sides=SIDES) -> dict[str, str]:
     grouped: dict[str, list[str]] = {"left": [], "right": []}
     for sn in serials:
         grouped[pico_tracker_side(sn)].append(sn)
+
+    # Every requested side's duplicates first, then the missing ones. A side is
+    # usually empty *because* its tracker's serial puts it on the other side, and
+    # checking one side through to completion before looking at the next would
+    # blame the empty side — sending the operator to look for a tracker that is
+    # sitting right there under a mis-burned serial. Sides that were not requested
+    # are not policed: a single-arm rig may leave the other arm's trackers on.
+    for side in sides:
+        got = grouped.get(side, [])
+        if len(got) > 1:
+            parity = "odd" if side == "left" else "even"
+            raise ValueError(f"Multiple Pico4 trackers map to the {side} side (2nd-to-last digit {parity}): {got}.")
+
     result: dict[str, str] = {}
     for side in sides:
         parity = "odd" if side == "left" else "even"
         got = grouped.get(side, [])
-        if len(got) > 1:
-            raise ValueError(f"Multiple Pico4 trackers map to the {side} side (2nd-to-last digit {parity}): {got}.")
         if not got:
+            crowded = [f"{len(v)} map to {s}: {v}" for s, v in grouped.items() if s != side and len(v) > 1]
+            hint = f" ({'; '.join(crowded)} — check that serial's 2nd-to-last digit.)" if crowded else ""
             raise ValueError(
                 f"No Pico4 tracker found for the {side} side (need a serial whose "
-                f"2nd-to-last digit is {parity}). Discovered: {list(serials)}."
+                f"2nd-to-last digit is {parity}). Discovered: {list(serials)}.{hint}"
             )
         result[side] = got[0]
     return result
