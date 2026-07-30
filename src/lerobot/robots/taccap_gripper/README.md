@@ -9,6 +9,13 @@ observation (state being recorded) and the demonstration action.
 `lerobot-record` allows `teleop=None` for this self-driven device, so no
 `--teleop.*` flags are needed on the CLI.
 
+This is the **single-gripper** device: one unit, two tactile pads, one wrist camera, one
+Pico4 tracker, and **unprefixed** observation keys (`tcp.*`, `gripper.pos`,
+`tactile_left` / `tactile_right`, `wrist_cam`). For two units driven as one robot — with
+`left_` / `right_` prefixes and the optional Insight head camera — see
+[`bi_taccap_gripper`](../bi_taccap_gripper/README.md). Both sides of a two-gripper rig can
+also be run one at a time through this device by passing `--robot.side`.
+
 Components:
 
 - **Gripper:** TacCap-Gripper handheld unit (motor jaw, two embedded
@@ -152,7 +159,7 @@ and rises to ~1.7 rad (~97°) at the mechanical limit. There is **no
 ```bash
 python -m lerobot.robots.taccap_gripper.calibrate_tracker
 # or, pin to a specific tracker SN:
-python -m lerobot.robots.taccap_gripper.calibrate_tracker LHR-XXXXXXXX
+python -m lerobot.robots.taccap_gripper.calibrate_tracker PC2310MLL3200496G
 ```
 
 Watch the `raw xyz` move smoothly when you wave the gripper. The
@@ -160,24 +167,58 @@ Watch the `raw xyz` move smoothly when you wave the gripper. The
 identity by default. Measure your physical mount offset and put it in
 the config (`tracker_to_ee_pos`, `tracker_to_ee_quat`).
 
-## 3D trajectory visualization
+## Live visualization (`lerobot-teleoperate`)
 
-With `--display_data=true`, the Rerun viewer adds a `/world` 3D view: the gripper is drawn
-as a labelled ellipsoid + axis triad at its live Pico4 pose (`tcp.*`), trailing a breadcrumb
-of where it has been — mirroring the SDK's
+Before recording anything, stream the device to Rerun to confirm both tactile pads, the
+wrist camera and the pose are alive. The device is self-driven, so **no `--teleop.*`
+flags** — `lerobot-teleoperate` just pumps `get_observation()` into the viewer:
+
+```bash
+lerobot-teleoperate \
+    --robot.type=taccap_gripper \
+    --fps=30 \
+    --display_data=true
+```
+
+Add `--robot.side=left|right` only when both grippers are connected; a single unit
+auto-resolves. Add `--robot.enable_tracker=false` to skip the Pico4 / XenseVR PC service
+entirely and watch tactile + gripper only.
+
+### Viewer layout
+
+`--display_data=true` sends a blueprint rather than letting Rerun auto-lay-out, which would
+give each tactile pad the same screen area as everything else. For a single rig (no head
+camera) that resolves to:
+
+- **Left, largest**: the `/world` 3D trajectory view.
+- **Right**: the wrist camera, then the two tactile pads in their own grid.
+- **Bottom**: scalars in tabs by unit — `gripper.pos`, `tcp pose`, `imu` (when
+  `--robot.enable_imu=true`), plus a catch-all `all` tab. Metres, unit-length rotation
+  components and accelerations share no y-axis, so one merged plot would be unreadable.
+
+With `--robot.enable_tracker=false` there is no 3D view, and the wrist + tactile views take
+the whole top half.
+
+The tactile pads you see are the **display-only** `difference` view
+(`tactile_{left,right}_difference`), not the `rectify` stream being recorded: the viewer is
+laid out from the robot's `display_features` rather than `observation_features` — same
+schema, with each tactile sensor's recorded stream swapped in place for its display one —
+and `log_rerun_data` is fed the matching subset of the observation
+(`select_display_observation`), so the recorded stream never reaches Rerun. The tile count
+is unchanged; what is easiest to read live is simply not what lands in the dataset.
+
+### 3D trajectory
+
+In the `/world` view the gripper is drawn as a labelled ellipsoid + axis triad at its live
+Pico4 pose (`tcp.*`), trailing a breadcrumb of where it has been — mirroring the SDK's
 [`rerun_dual_with_tracker.py`](../../../third_party/taccap-gripper/python/examples/rerun_dual_with_tracker.py)
 example. Our pose is already in the gravity-aligned world frame, so the scene is
 `RIGHT_HAND_Z_UP` (the example shows the raw Pico `LEFT_HAND_Y_UP` frame).
 
-On by default; `--show_trajectory=false` suppresses it, and it auto-skips when
-`--robot.enable_tracker=false` (no pose to draw). Implemented in
-[`visualization.py`](visualization.py) and shared by both teleoperate and record.
-
-The viewer is laid out from the robot's `display_features` rather than
-`observation_features` — same schema, except each tactile sensor shows its display-only
-`difference` view in place of the recorded `rectify` one, and `log_rerun_data` is fed the
-matching subset of the observation (`select_display_observation`), so the recorded stream
-never reaches Rerun.
+On by default; `--show_trajectory=false` drops **that view only** (the rest of the layout
+still applies), and it auto-skips when `--robot.enable_tracker=false` (no pose to draw).
+Implemented in [`visualization.py`](visualization.py) and shared by both teleoperate and
+record — same flags on `lerobot-record`.
 
 ## Standalone smoke test
 
@@ -191,9 +232,14 @@ python -m lerobot.robots.taccap_gripper.taccap_gripper_example --side left
 # Cameras + gripper only (no wrist camera):
 python -m lerobot.robots.taccap_gripper.taccap_gripper_example --side left --no-wrist
 
-# + Pico4 tracker (pose); pin its PT- serial:
+# + Pico4 tracker (pose). --tracker-sn is optional — omit it to auto-discover
+# by the second-to-last-digit side rule:
 python -m lerobot.robots.taccap_gripper.taccap_gripper_example \
-    --side left --tracker --tracker-sn PT-XXXXXXXXXXXX
+    --side left --tracker --tracker-sn PC2310MLL3200496G
+
+# + IMU channels, and a different jaw-open calibration:
+python -m lerobot.robots.taccap_gripper.taccap_gripper_example \
+    --side left --imu --open-rad 1.7 --frames 30
 ```
 
 ## End-to-end recording
@@ -284,20 +330,32 @@ defensive fallback for callers that don't pre-warm.
 
 ## What gets recorded per frame
 
-| Key                        | Source                     | Shape / type    |
-| -------------------------- | -------------------------- | --------------- |
-| `tcp.x`, `tcp.y`, `tcp.z`  | Pico4 tracker → EE         | float (m)       |
-| `tcp.r1`..`tcp.r6`         | 6-D rotation of EE         | float           |
-| `gripper.pos`              | TacCap encoder, normalised | float ∈ [0, 1]  |
-| `imu.accel.{x,y,z}` (opt)  | TacCap IMU                 | float (m/s²)    |
-| `imu.gyro.{x,y,z}` (opt)   | TacCap IMU                 | float (rad/s)   |
-| `imu.mag.{x,y,z}` (opt)    | TacCap IMU                 | float (µT)      |
-| `<camera_name>` per camera | `cameras/` framework       | uint8 (H, W, 3) |
+Keys are **unprefixed** — unlike [`bi_taccap_gripper`](../bi_taccap_gripper/README.md),
+which prefixes everything `left_` / `right_`. A single-arm dataset is therefore not a
+column subset of a bimanual one.
+
+| Key                             | When                  | Source                                                 | Shape / type                                         |
+| ------------------------------- | --------------------- | ------------------------------------------------------ | ---------------------------------------------------- |
+| `tcp.x`, `tcp.y`, `tcp.z`       | `enable_tracker`      | Pico4 tracker → EE                                     | float (m)                                            |
+| `tcp.r1`..`tcp.r6`              | `enable_tracker`      | 6-D rotation of EE                                     | float                                                |
+| `gripper.pos`                   | `enable_gripper`      | TacCap encoder, normalised                             | float ∈ [0, 1]                                       |
+| `imu.accel.{x,y,z}`             | `enable_imu`          | TacCap IMU                                             | float (m/s²)                                         |
+| `imu.gyro.{x,y,z}`              | `enable_imu`          | TacCap IMU                                             | float (rad/s)                                        |
+| `imu.mag.{x,y,z}`               | `enable_imu`          | TacCap IMU                                             | float (µT)                                           |
+| `tactile_left`, `tactile_right` | auto-discovered       | Xense sensor on that finger, recorded view (`rectify`) | uint8 (H, W, 3), landscape — currently (400, 700, 3) |
+| `wrist_cam`                     | `enable_wrist_camera` | wrist UVC via `cameras/`                               | uint8 (H, W, 3)                                      |
+
+The flags are all `--robot.*` (e.g. `--robot.enable_imu=true`); the tracker and gripper
+ones are on by default, `enable_imu` is off. Disabling one **removes** its keys from the
+schema rather than zero-filling them, so `observation.state` is 10-D by default
+(9 pose + 1 jaw) and 19-D with the IMU on.
 
 Tactile cameras contribute their **recorded** view only (`rectify` by default). The
 `tactile_{left,right}_difference` keys `get_observation()` also returns are display-only:
 they are absent from `observation_features`, so `build_dataset_frame` never sees them and
 nothing is written for them.
+
+`action_features` is the `tcp.*` + `gripper.pos` subset — images are observation-only.
 
 The 6-D rotation convention matches `vive_tracker`:
 `r1..r3` is the first column of the rotation matrix, `r4..r6` is the
