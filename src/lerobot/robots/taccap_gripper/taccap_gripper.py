@@ -194,7 +194,11 @@ def tactile_camera_output_types(record_types: list[str], display_types: list[str
     display-only ones (deduplicated, order preserved).
 
     A display type that is also the recorded type collapses to a single request —
-    the recorded key then simply doubles as the displayed one.
+    the recorded key then simply doubles as the displayed one. This only catches
+    identical spellings; the authoritative de-duplication happens in
+    ``XenseTactileCameraConfig.__post_init__``, which resolves "DIFFERENCE" and
+    "difference" to the same enum. Read the types back off the config (not from
+    here) when deciding which of them are display-only.
     """
     types = list(record_types)
     types += [t for t in display_types if t not in types]

@@ -153,7 +153,14 @@ class XenseTactileCameraConfig(CameraConfig):
                 continue
 
             raise ValueError(f"Invalid output_type: {output_type}. Must be a XenseOutputType (or str).")
-        self.output_types = normalized
+
+        # De-duplicate, keeping first-seen order. Normalisation is spelling-insensitive
+        # ("difference" / "DIFFERENCE" / "XenseOutputType.DIFFERENCE" all collapse to
+        # one enum), so callers that de-duplicate raw strings can still hand us the
+        # same output type twice. Asking the sensor for it twice is meaningless, and
+        # ``read()`` keys its result dict by output type, so the duplicate would take
+        # a key away from a caller expecting one entry per requested type.
+        self.output_types = list(dict.fromkeys(normalized))
 
         # Set default FPS if not provided
         if self.fps is None:
