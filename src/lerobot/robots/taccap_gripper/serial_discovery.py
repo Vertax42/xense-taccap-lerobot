@@ -340,7 +340,8 @@ def discover_tactiles_by_hub(role: str) -> dict[str, dict[str, str]]:
     # Join hub → side. Every tactile hub must carry a matching gripper.
     discovered = ", ".join(f"{sn!r} ({side}) on hub {hub!r}" for hub, (side, sn) in sorted(hub_side.items())) or "none"
     result: dict[str, dict[str, str]] = {"left": {}, "right": {}}
-    for hub, fingers in hub_fingers.items():
+    claimed_by: dict[str, str] = {}  # side -> the hub that already claimed it
+    for hub, fingers in sorted(hub_fingers.items()):
         if hub not in hub_side:
             raise ValueError(
                 f"Tactile sensors {sorted(fingers.values())} sit on USB hub {hub!r}, "
@@ -348,7 +349,19 @@ def discover_tactiles_by_hub(role: str) -> dict[str, dict[str, str]]:
                 f"Discovered {role} grippers: {discovered}. "
                 "Is the gripper on that hub powered and enumerated?"
             )
-        result[hub_side[hub][0]] = fingers
+        side = hub_side[hub][0]
+        if side in claimed_by:
+            # Two grippers on different hubs reporting the same firmware side.
+            # Assigning both would silently drop one pair from the schema, so the
+            # rig would record half its tactile data with no sign anything is off.
+            raise ValueError(
+                f"Two {role} grippers claim the {side} side: hub {claimed_by[side]!r} "
+                f"({hub_side[claimed_by[side]][1]!r}) and hub {hub!r} ({hub_side[hub][1]!r}), "
+                f"carrying tactiles {sorted(result[side].values())} and {sorted(fingers.values())}. "
+                "Side comes from the gripper's firmware SN — one of these is mis-burned."
+            )
+        claimed_by[side] = hub
+        result[side] = fingers
     return result
 
 
