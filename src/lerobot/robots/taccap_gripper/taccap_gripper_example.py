@@ -22,9 +22,10 @@ Usage:
     # Cameras + gripper only, no wrist camera:
     python -m lerobot.robots.taccap_gripper.taccap_gripper_example --side left --no-wrist
 
-    # Add the Pico4 tracker (pose); pin its PT- serial to enable pose.
+    # Add the Pico4 tracker (pose). The serial is optional — omit it to
+    # auto-discover by the second-to-last-digit side rule.
     python -m lerobot.robots.taccap_gripper.taccap_gripper_example \\
-        --side left --tracker --tracker-sn PT-XXXXXXXXXXXX
+        --side left --tracker --tracker-sn PC2310MLL3200496G
 
     # Bind the Slave/Follower units instead of the Master/Leader ones:
     python -m lerobot.robots.taccap_gripper.taccap_gripper_example --role follower
@@ -57,7 +58,9 @@ def main() -> None:
         "--role", default="leader", choices=["leader", "follower"], help="Device role to bind (default leader/Master)."
     )
     parser.add_argument("--tracker", action="store_true", help="Enable the Pico4 motion tracker.")
-    parser.add_argument("--tracker-sn", default=None, help="Pico4 tracker serial (required to record pose).")
+    parser.add_argument(
+        "--tracker-sn", default=None, help="Pin the Pico4 tracker serial; omit to auto-discover by the side rule."
+    )
     parser.add_argument("--no-wrist", action="store_true", help="Disable the wrist UVC camera.")
     parser.add_argument("--imu", action="store_true", help="Enable IMU readings.")
     parser.add_argument(
@@ -73,7 +76,7 @@ def main() -> None:
         enable_imu=args.imu,
         gripper_open_rad=args.open_rad,
         enable_tracker=args.tracker,
-        tracker_sn=args.tracker_sn,
+        tracker_serial=args.tracker_sn,
         enable_wrist_camera=not args.no_wrist,
     )
 
