@@ -94,8 +94,11 @@ class BiTaccapGripperConfig(RobotConfig):
     """Manually pin the left Pico4 tracker serial, bypassing the
     second-to-last-digit side rule. ``None`` = auto-discover by rule; when set, the
     serial is used verbatim (no enumeration, no rule check). Only when ``enable_tracker``."""
-    left_tracker_to_ee_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    left_tracker_to_ee_quat: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+    left_tracker_to_ee_pos: tuple[float, float, float] | None = None
+    left_tracker_to_ee_quat: tuple[float, float, float, float] | None = None
+    """Tracker → EE rigid mount transform for this side. ``None`` (default) =
+    the built-in value from ``ee_transform.tracker_to_tcp("left")``, which is the
+    right side's CAD geometry mirrored about the XZ plane. Set to override."""
     left_enable_init_pose_alignment: bool = False
     left_init_tcp_pose: tuple[float, float, float, float, float, float, float] = _DEFAULT_INIT_TCP_POSE
 
@@ -110,8 +113,11 @@ class BiTaccapGripperConfig(RobotConfig):
     """Manually pin the right Pico4 tracker serial, bypassing the
     second-to-last-digit side rule. ``None`` = auto-discover by rule; when set, the
     serial is used verbatim (no enumeration, no rule check). Only when ``enable_tracker``."""
-    right_tracker_to_ee_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    right_tracker_to_ee_quat: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+    right_tracker_to_ee_pos: tuple[float, float, float] | None = None
+    right_tracker_to_ee_quat: tuple[float, float, float, float] | None = None
+    """Tracker → EE rigid mount transform for this side. ``None`` (default) =
+    the built-in value from ``ee_transform.tracker_to_tcp("right")``, measured
+    off the CAD assembly. Set to override."""
     right_enable_init_pose_alignment: bool = False
     right_init_tcp_pose: tuple[float, float, float, float, float, float, float] = _DEFAULT_INIT_TCP_POSE
 

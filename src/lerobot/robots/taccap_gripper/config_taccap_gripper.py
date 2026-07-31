@@ -91,13 +91,17 @@ class TaccapGripperConfig(RobotConfig):
     rule check — the escape hatch for a tracker whose serial does not follow the
     rule (or when enumeration is flaky). Only consulted when ``enable_tracker``."""
 
-    tracker_to_ee_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    tracker_to_ee_pos: tuple[float, float, float] | None = None
     """Translation from the tracker frame to the gripper end-effector frame
-    (meters). Defaults to zero (i.e. EE coincides with tracker)."""
+    (meters). ``None`` (default) = this side's built-in value from
+    ``ee_transform.tracker_to_tcp``, derived from the CAD mount geometry. Set it
+    to override — e.g. a re-machined mount. The two components are independent,
+    so the translation can be pinned while the rotation stays built-in."""
 
-    tracker_to_ee_quat: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+    tracker_to_ee_quat: tuple[float, float, float, float] | None = None
     """Rotation from the tracker frame to the gripper end-effector frame,
-    [qw, qx, qy, qz]. Defaults to identity."""
+    [qw, qx, qy, qz]. ``None`` (default) = this side's built-in value (see
+    ``tracker_to_ee_pos``)."""
 
     tracker_wait_timeout: float = 10.0
     """Seconds to wait for the first valid tracker pose at connect time."""
