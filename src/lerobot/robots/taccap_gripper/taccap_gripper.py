@@ -59,6 +59,7 @@ from lerobot.utils.robot_utils import get_logger
 from ..robot import Robot
 from . import serial_discovery as disco
 from .config_taccap_gripper import TaccapGripperConfig
+from .ee_transform import resolve_tracker_to_ee
 
 # ---- TacCap-Gripper SDK -----------------------------------------------------
 try:
@@ -505,10 +506,16 @@ class TaccapGripper(Robot):
 
         # 2. Pico4 tracker.
         if self._tracker_sn is not None:
+            # None means "use this side's built-in mount transform"; anything
+            # else is an explicit override (see ee_transform).
+            ee_pos, ee_quat = resolve_tracker_to_ee(
+                self._side, self.config.tracker_to_ee_pos, self.config.tracker_to_ee_quat
+            )
+            self.logger.info(f"tracker→TCP ({self._side}): pos={ee_pos.tolist()} quat={ee_quat.tolist()}")
             self._tracker = Pico4TrackerReader(
                 tracker_sn=self._tracker_sn,
-                tracker_to_ee_pos=self.config.tracker_to_ee_pos,
-                tracker_to_ee_quat=self.config.tracker_to_ee_quat,
+                tracker_to_ee_pos=ee_pos,
+                tracker_to_ee_quat=ee_quat,
                 device_wait_timeout=self.config.tracker_wait_timeout,
                 logger_name=self.config.id or "robot",
             )

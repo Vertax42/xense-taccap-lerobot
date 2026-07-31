@@ -58,6 +58,7 @@ from lerobot.utils.robot_utils import get_logger
 
 from ..robot import Robot
 from ..taccap_gripper import serial_discovery as disco
+from ..taccap_gripper.ee_transform import resolve_tracker_to_ee
 from ..taccap_gripper.taccap_gripper import (
     prewarm_tactile_config_cache,
     resolve_wrist_camera_path,
@@ -403,10 +404,18 @@ class BiTaccapGripper(Robot):
 
             # 2. Pico4 tracker (auto-discovered SN per side, pinned here).
             if side in self._tracker_sn_by_side:
+                # None means "use this side's built-in mount transform"; the
+                # left value is the right one mirrored (see ee_transform).
+                ee_pos, ee_quat = resolve_tracker_to_ee(
+                    side,
+                    getattr(self.config, f"{side}_tracker_to_ee_pos"),
+                    getattr(self.config, f"{side}_tracker_to_ee_quat"),
+                )
+                self.logger.info(f"  [{side}] tracker→TCP: pos={ee_pos.tolist()} quat={ee_quat.tolist()}")
                 tracker = Pico4TrackerReader(
                     tracker_sn=self._tracker_sn_by_side[side],
-                    tracker_to_ee_pos=getattr(self.config, f"{side}_tracker_to_ee_pos"),
-                    tracker_to_ee_quat=getattr(self.config, f"{side}_tracker_to_ee_quat"),
+                    tracker_to_ee_pos=ee_pos,
+                    tracker_to_ee_quat=ee_quat,
                     device_wait_timeout=self.config.tracker_wait_timeout,
                     logger_name=f"{self.config.id or 'bi'}-{side}",
                 )
