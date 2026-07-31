@@ -52,6 +52,53 @@ verification on real hardware.**
 **Do not restart the Unity client between episodes** or all subsequent
 recordings will be in a different origin.
 
+### Tracker → EEF TCP mount transform
+
+The Pico4 tracker is bolted to the gripper, so the pose it reports is the
+**tracker's**, not the TCP's — on this unit the two are ~195 mm apart. The
+constant rigid offset lives in [`ee_transform.py`](ee_transform.py) and is applied
+body-fixed by `Pico4TrackerReader`:
+
+```
+T_world_tcp = T_world_tracker @ X
+```
+
+Because `X` is body-fixed it rides along with the gripper, so it holds at any
+orientation — starting a UMI session with the gripper pointing anywhere is fine.
+
+- **TCP** is the two-finger midpoint. Symmetric jaws keep that point still as the
+  jaw opens, so the transform is a constant and does not depend on `gripper.pos`.
+- **Sides are mirror images about the XZ plane** (`y → −y`). Only the right side
+  carries measured numbers; the left is derived (`t' = M·t`, `R' = M·R·M` with
+  `M = diag(1,-1,1)`, which keeps `det = +1`, so it stays a proper rotation).
+- `--robot.tracker_to_ee_pos` / `_quat` default to `None` = use this side's
+  built-in value. Set either one to override; they are independent, so a
+  re-machined mount can pin just the translation.
+
+> **The CAD numbers cannot be pasted in raw.** `tracker.py` builds the world pose
+> by conjugation (`G · T · Gᵀ`), which re-expresses the reference frame **and
+> re-labels the tracker's own body axes** — `+X` of the frame the offset lives in
+> is the tracker's physical `−Z_pico`. A CAD value measured in world/Pico axes has
+> to be re-based first; `cad_to_code_frame()` does it, given the tracker frame's
+> 3×3 in world coordinates. Skipping this yields a transform that looks right in
+> the measurement pose and drifts as soon as the gripper rotates.
+
+> **Datasets recorded before this landed hold the tracker pose in `tcp.*`, not the
+> TCP.** They are off by the handle offset and must not be mixed with newer
+> episodes without re-transforming.
+
+Verify a mount with the pivot check — no extra hardware needed:
+
+```bash
+python -m lerobot.robots.taccap_gripper.calibrate_tracker --side right
+```
+
+Rest the two-finger midpoint on a fixed point and sweep the handle through as
+many orientations as it allows. `ee xyz` should stay put while `raw xyz` swings;
+whatever drift remains is the transform's error. Run it for **both** sides — a
+left value mirrored the wrong way shows up as `ee` moving about twice as much as
+it should.
+
 ### Opt-in: UMI-style init-pose alignment (reserved for deployment)
 
 Mirrors the `vive_tracker` UMI flow. When enabled,
