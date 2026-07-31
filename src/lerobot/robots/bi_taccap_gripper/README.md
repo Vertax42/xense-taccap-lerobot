@@ -81,6 +81,18 @@ to record tactile + gripper only (no PC service needed). Other knobs: `--robot.r
 `--robot.gripper_open_rad`, `--robot.tactile_fps`, `--robot.wrist_camera_{width,height,fps}`,
 `--robot.expected_tactiles_per_side`.
 
+**Tracker → EEF TCP.** Each side's tracker is bolted to its gripper, so the raw pose is
+the tracker's, not the TCP's (~195 mm apart). The constant body-fixed offset comes from
+[`../taccap_gripper/ee_transform.py`](../taccap_gripper/ee_transform.py): the right side
+carries the CAD numbers, the left is that mirrored about the XZ plane (`y → −y`), so both
+sides come from one measurement. `--robot.{left,right}_tracker_to_ee_pos` / `_quat` default
+to `None` = built-in value; set either to override. TCP is the two-finger midpoint, which
+symmetric jaws keep still, so the transform does not vary with `{side}_gripper.pos`. The
+frame subtleties (why CAD numbers need re-basing first) and the pivot verification are
+documented in the [single-gripper README](../taccap_gripper/README.md#tracker--eef-tcp-mount-transform).
+**Episodes recorded before this landed hold the tracker pose in `{side}_tcp.*`** and must
+not be mixed with newer ones without re-transforming.
+
 Tactile streams: `--robot.tactile_output_types` (recorded, default `rectify`, exactly
 one type) and `--robot.tactile_display_output_types` (Rerun-only, default `difference`;
 set to `'[]'` to drop the second read and show the recorded stream instead).
