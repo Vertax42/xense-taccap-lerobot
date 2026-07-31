@@ -115,7 +115,12 @@ MISSING_SN_WARN_INTERVAL_S = 5.0
 #   World:  X forward, Y left, Z up   (gravity-aligned)
 # Position [x, y, z] → [-z, -x, y]; orientation conjugated by the same rotation
 # (applied below as the 4x4 conjugation G · T · Gᵀ).
-_PICO_TO_WORLD_R = np.array(
+#
+# Public because the conjugation also re-labels the tracker's body axes, so
+# anything expressing a body-fixed offset for ``tracker_to_ee_*`` has to re-base
+# through this same matrix (see robots/taccap_gripper/ee_transform.py). Keep one
+# copy — a second, drifting definition of G would be silently wrong.
+PICO_TO_WORLD_R = np.array(
     [
         [0.0, 0.0, -1.0],
         [-1.0, 0.0, 0.0],
@@ -218,9 +223,9 @@ class Pico4TrackerReader:
         # Pre-build the 4x4 Pico→world frame remap (pure rotation; inverse =
         # transpose). Applied to every raw tracker pose when pico_to_world.
         self._pico_to_world = np.eye(4, dtype=np.float64)
-        self._pico_to_world[:3, :3] = _PICO_TO_WORLD_R
+        self._pico_to_world[:3, :3] = PICO_TO_WORLD_R
         self._pico_to_world_inv = np.eye(4, dtype=np.float64)
-        self._pico_to_world_inv[:3, :3] = _PICO_TO_WORLD_R.T
+        self._pico_to_world_inv[:3, :3] = PICO_TO_WORLD_R.T
 
         suffix = logger_name or (tracker_sn if tracker_sn else "auto")
         with Pico4TrackerReader._counter_lock:
