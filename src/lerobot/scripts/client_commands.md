@@ -54,7 +54,7 @@ lerobot-teleoperate \
     --robot.type=bi_taccap_gripper \
     --fps=30 \
     --display_data=true \
-    --robot.enable_tracker=false
+    --robot.enable_tracker=true
 ```
 
 ['PC2310MLL4150713G', 'PC2310MLL4150387G']
