@@ -562,7 +562,7 @@ class BiTaccapGripper(Robot):
         try:
             frame = cam.async_read()
         except TimeoutError as e:
-            self.logger.warning(f"  [{cam_name}] frame timeout, reusing last frame: {e}")
+            self.logger.warn(f"  [{cam_name}] frame timeout, reusing last frame: {e}")
             return self._fallback_frame(cam_name)
         except Exception as e:
             self._flag_lost(cam_name, f"camera lost mid-episode: {e}")
