@@ -19,7 +19,8 @@ its live Pico4 pose, leaving a fading breadcrumb trail behind it — the same
 
 Unlike that example (which renders the raw Pico ``LEFT_HAND_Y_UP`` frame), our
 recorded pose is already remapped into our world frame (X forward, Y left, Z up,
-gravity-aligned), so the scene uses ``RIGHT_HAND_Z_UP``.
+gravity-aligned), so the scene declares ``FLU`` — the preset that names all three
+axes, which is what lets the viewer point its initial camera down +X.
 
 The pose comes from the observation/action dict the robot already emits:
 ``tcp.x/y/z`` + ``tcp.r1..r6`` for the single unit, ``{side}_tcp.*`` per side for
@@ -151,7 +152,12 @@ class TaccapTrajectoryViz:
             trail.clear()
 
     def _log_world_static(self) -> None:
-        rr.log("world", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
+        # FLU == X forward, Y left, Z up, which is exactly our world convention.
+        # RIGHT_HAND_Z_UP (used before) only declares handedness and the up axis,
+        # leaving X/Y unlabelled — so the viewer had nothing to tell it which way
+        # "forward" was and picked a default azimuth. Declaring the forward axis
+        # is both more accurate and what orients the initial camera down +X.
+        rr.log("world", rr.ViewCoordinates.FLU, static=True)
         axis_len, axis_rad = 0.3, 0.008
         rr.log(
             "world/origin/axes",
@@ -160,6 +166,7 @@ class TaccapTrajectoryViz:
                 vectors=[[axis_len, 0, 0], [0, axis_len, 0], [0, 0, axis_len]],
                 colors=[[255, 50, 50], [50, 255, 50], [50, 50, 255]],
                 radii=axis_rad,
+                labels=["+X forward", "+Y left", "+Z up"],
             ),
             static=True,
         )
@@ -250,6 +257,7 @@ class TaccapTrajectoryViz:
             [k for k in scalars if k.startswith("head_camera.") and k.split(".")[-1].startswith("r")],
         )
         series("tcp pose", [k for k in scalars if "_tcp." in k or k.startswith("tcp.")])
+        series("tracker pose", [k for k in scalars if "_tracker." in k or k.startswith("tracker.")])
         series("imu", [k for k in scalars if "_imu." in k or k.startswith("imu.")])
 
         if not tabs:
@@ -268,47 +276,103 @@ class TaccapTrajectoryViz:
         if not self.active or not data:
             return
         for prefix, name in self._sides:
-            pose = self._extract_pose(data, prefix)
+            pose = self._extract_pose(data, prefix, "tcp")
             if pose is None:
                 continue
             self._log_static_once(name)
             self._log_pose(name, pose)
             self._log_trail(name, pose)
 
-    def _extract_pose(self, data: dict, prefix: str) -> tuple | None:
-        keys = [f"{prefix}tcp.{k}" for k in _POSE_KEYS]
+            # The tracker's own frame, when the robot publishes it (display-only).
+            # Drawing both is how the mount transform gets checked on hardware:
+            # the two frames should stay a fixed distance apart, with the EE at
+            # the two-finger midpoint.
+            tracker_pose = self._extract_pose(data, prefix, "tracker")
+            if tracker_pose is not None:
+                self._log_static_once(f"{name}_tracker", is_tracker=True)
+                self._log_pose(f"{name}_tracker", tracker_pose)
+                self._log_mount_link(name, tracker_pose, pose)
+
+    def _extract_pose(self, data: dict, prefix: str, frame: str) -> tuple | None:
+        keys = [f"{prefix}{frame}.{k}" for k in _POSE_KEYS]
         if not all(k in data and data[k] is not None for k in keys):
             return None
         vals = [float(data[k]) for k in keys]
         return (vals[0], vals[1], vals[2], vals[3:9])  # (x, y, z, r6d)
 
-    def _log_static_once(self, name: str) -> None:
+    def _log_mount_link(self, name: str, tracker_pose: tuple, ee_pose: tuple) -> None:
+        """Dashed segment from tracker origin to EE origin, labelled with its length.
+
+        The label is the quickest read on whether the mount transform is right:
+        it should sit at the CAD distance (~195 mm) and stay constant no matter
+        how the gripper is waved around.
+
+        Dashed because this is a construction line, not something the hardware
+        has — a solid bar reads like a physical link between the two frames.
+        Rerun has no dash style, so it is drawn as several short strips.
+        """
+        a = np.array(tracker_pose[:3], dtype=np.float64)
+        b = np.array(ee_pose[:3], dtype=np.float64)
+        length = float(np.linalg.norm(b - a))
+
+        # Fixed dash count rather than fixed dash length: the gap stays visible
+        # whatever the offset turns out to be, and the strip count never grows.
+        n_dashes = 9
+        strips = []
+        for i in range(n_dashes):
+            t0 = i / n_dashes
+            t1 = t0 + 0.55 / n_dashes  # 55% mark, 45% gap
+            strips.append([(a + (b - a) * t0).tolist(), (a + (b - a) * t1).tolist()])
+
+        rr.log(
+            f"world/mount/{name}",
+            rr.LineStrips3D(strips, colors=[[255, 200, 40]] * n_dashes, radii=0.0008),
+        )
+        # The length goes on its own entity at the midpoint. Putting it in the
+        # strips' `labels` gave every dash a label, and Rerun draws each one as a
+        # text plaque with a dark background — eight of them in a row read as a
+        # second, thicker, dark dashed line on top of the yellow one.
+        rr.log(
+            f"world/mount/{name}/length",
+            rr.Points3D(
+                [((a + b) / 2).tolist()],
+                labels=[f"{length * 1000:.1f} mm"],
+                colors=[[255, 200, 40]],
+                radii=0.0015,
+            ),
+        )
+
+    def _log_static_once(self, name: str, is_tracker: bool = False) -> None:
         if name in self._static_logged:
             return
         ent = f"world/{name}"
-        color = _SIDE_COLOR.get(name, _SIDE_COLOR[""])
+        color = _SIDE_COLOR.get(name.removesuffix("_tracker"), _SIDE_COLOR[""])
+        # The tracker gets a smaller, dimmer body and shorter axes so the EE
+        # frame stays the one your eye goes to.
+        if is_tracker:
+            half_sizes, axes_len, alpha = [[0.018, 0.018, 0.012]], 0.06, 120
+        else:
+            half_sizes, axes_len, alpha = [[0.035, 0.035, 0.02]], 0.10, 220
         rr.log(
             f"{ent}/mesh",
-            rr.Ellipsoids3D(
-                centers=[[0.0, 0.0, 0.0]],
-                half_sizes=[[0.035, 0.035, 0.02]],
-                colors=[(*color, 220)],
-            ),
+            rr.Ellipsoids3D(centers=[[0.0, 0.0, 0.0]], half_sizes=half_sizes, colors=[(*color, alpha)]),
         )
-        axes_len = 0.10
         rr.log(
             f"{ent}/axes",
             rr.Arrows3D(
                 origins=[[0, 0, 0]] * 3,
                 vectors=[[axes_len, 0, 0], [0, axes_len, 0], [0, 0, axes_len]],
                 colors=[[255, 80, 80], [80, 255, 80], [80, 80, 255]],
-                radii=0.004,
+                radii=0.004 if not is_tracker else 0.0025,
             ),
         )
-        label = name.upper() if name != "gripper" else "GRIPPER"
+        if is_tracker:
+            label = "TRACKER" if name == "gripper_tracker" else f"{name.removesuffix('_tracker').upper()} TRACKER"
+        else:
+            label = "EE" if name == "gripper" else f"{name.upper()} EE"
         rr.log(
             f"{ent}/label",
-            rr.Points3D([[0, 0, 0.10]], labels=[label], colors=[color], radii=0.004),
+            rr.Points3D([[0, 0, axes_len]], labels=[label], colors=[color], radii=0.004),
         )
         self._static_logged.add(name)
 
