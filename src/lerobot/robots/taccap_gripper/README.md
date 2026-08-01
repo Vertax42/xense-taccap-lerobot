@@ -40,9 +40,10 @@ Y left, Z up, gravity-aligned): `Pico4TrackerReader` applies the same Pico→wor
 remap the `teleop_pico4` controller flow uses (`pico_to_world=True`). The world
 origin is the headset position the moment the Unity VR Client app started.
 
-This world frame is **not** any specific robot's base frame — for cross-robot
-transfer, use the opt-in init-pose alignment below to rebase recorded poses into
-a deployment robot's frame.
+This world frame is **not** any specific robot's base frame, and deliberately so
+— recorded poses stay robot-agnostic, and the base difference is cancelled at
+training/deployment time by the relative pose representation rather than baked in
+here. See "Why there is no init-pose alignment" below.
 
 The axis convention (handedness, Z direction) is documented
 inconsistently upstream — Pico docs claim right-handed, the SDK's
@@ -132,37 +133,40 @@ whatever drift remains is the transform's error. Run it for **both** sides — a
 left value mirrored the wrong way shows up as `ee` moving about twice as much as
 it should.
 
-### Opt-in: UMI-style init-pose alignment (reserved for deployment)
+### Why there is no init-pose alignment
 
-Mirrors the `vive_tracker` UMI flow. When enabled,
-`Pico4TrackerReader.connect()` snapshots the first valid tracker pose
-and computes a rigid transform so all subsequent recorded poses are
-in the **same frame as `init_tcp_pose`** (typically the deployment
-robot's base frame at its home configuration).
+`Pico4TrackerReader` can latch a rigid transform at connect time so every later
+pose comes out in the frame of a supplied robot TCP pose:
 
-Config fields (default OFF — needs live deployment-hardware verification first):
-
-```python
-enable_init_pose_alignment: bool = False
-init_tcp_pose: tuple[float, ...] = (
-    0.693307, -0.114902, 0.14589,
-    0.004567, 0.003238, 0.999984, 0.001246,
-)  # example deployment-robot home pose
+```
+T_align  = T_ee_init · (T_world_tracker(0) · T_tracker_ee)⁻¹
+T_out(t) = T_align · T_world_tracker(t) · T_tracker_ee
 ```
 
-Workflow when ready to enable:
+That is a **live-teleoperation** formula, and this device does not use it. Two
+reasons:
 
-1. Place the gripper in its "init" stance — physically matching the
-   robot's home configuration on a workbench (same orientation +
-   roughly the height the robot's EE would reach).
-2. Set `--robot.enable_init_pose_alignment=true`.
-3. Run `lerobot-record`. The first valid tracker pose is latched and
-   alignment is computed automatically. From frame 0 the recorded
-   `tcp.x/y/z/r1-r6` are in the robot's base frame and can train
-   directly without post-processing.
+- `T_ee_init` is in a robot's base frame, so it needs that robot **present and
+  localised at connect time** — which a handheld capture rig does not have.
+- Even with a value, it would bake one arm's base into the dataset; a second arm
+  would mean re-recording.
 
-When alignment is off (default), records stay in the raw xrt frame
-and downstream tooling must reframe.
+Base-frame differences are handled downstream instead: with the poses expressed
+relative to the current EE frame, any global transform `M` between capture and
+deployment cancels exactly —
+
+```
+inv(M·T(t)) · M·T(t+k) = inv(T(t)) · T(t+k)
+```
+
+— so the deployment arm's base, and the initial EE orientation it happens to sit
+at, drop out on their own. The robot end only has to calibrate its TCP to the
+gripper's EEF.
+
+The reader keeps the mechanism (it is generic, and a live teleoperator would want
+it); it is simply not wired to the capture path, and the config fields that used
+to expose it are gone. Stacking it with a relative representation would re-base
+twice.
 
 ## Hardware bring-up sequence
 

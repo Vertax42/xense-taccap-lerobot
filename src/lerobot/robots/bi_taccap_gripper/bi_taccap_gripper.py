@@ -427,17 +427,10 @@ class BiTaccapGripper(Robot):
                     device_wait_timeout=self.config.tracker_wait_timeout,
                     logger_name=f"{self.config.id or 'bi'}-{side}",
                 )
-                init_pose = (
-                    np.asarray(getattr(self.config, f"{side}_init_tcp_pose"), dtype=np.float64)
-                    if getattr(self.config, f"{side}_enable_init_pose_alignment")
-                    else None
-                )
-                tracker.connect(current_tcp_pose_quat=init_pose)
+                # No init-pose alignment — see the note in the config module.
+                tracker.connect()
                 self._tracker[side] = tracker
-                if init_pose is not None:
-                    self.logger.info(f"  [{side}] ✅ Pico4 tracker connected with UMI alignment")
-                else:
-                    self.logger.info(f"  [{side}] ✅ Pico4 tracker connected (world frame)")
+                self.logger.info(f"  [{side}] ✅ Pico4 tracker connected (world frame)")
 
         # 3. Cameras (tactile + wrist, auto-discovered in __init__).
         #    Pre-warm the config cache sequentially first so the parallel connect

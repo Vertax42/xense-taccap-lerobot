@@ -42,15 +42,12 @@ from ..config import RobotConfig
 
 _SIDES = ("left", "right")
 
-_DEFAULT_INIT_TCP_POSE = (
-    0.693307,
-    -0.114902,
-    0.14589,
-    0.004567,
-    0.003238,
-    0.999984,
-    0.001246,
-)
+# NOTE: no init-pose alignment fields here. Re-basing recorded poses onto a
+# robot's home pose needs that robot present and localised at connect time, which
+# a handheld capture rig does not have — and it would tie the dataset to one arm.
+# Base-frame differences are cancelled downstream by the relative-to-current pose
+# representation instead. ``Pico4TrackerReader`` still implements the alignment
+# for live teleoperation; it is simply not wired up on the capture path.
 
 
 @RobotConfig.register_subclass("bi_taccap_gripper")
@@ -97,10 +94,9 @@ class BiTaccapGripperConfig(RobotConfig):
     left_tracker_to_ee_pos: tuple[float, float, float] | None = None
     left_tracker_to_ee_quat: tuple[float, float, float, float] | None = None
     """Tracker → EE rigid mount transform for this side. ``None`` (default) =
-    the built-in value from ``ee_transform.tracker_to_tcp("left")``, which is the
-    right side's CAD geometry mirrored about the XZ plane. Set to override."""
-    left_enable_init_pose_alignment: bool = False
-    left_init_tcp_pose: tuple[float, float, float, float, float, float, float] = _DEFAULT_INIT_TCP_POSE
+    the built-in value from ``ee_transform.tracker_to_tcp("left")``, measured off
+    the CAD assembly (both sides are measured; neither is mirrored from the
+    other). Set to override."""
 
     left_enable_wrist_camera: bool = True
 
@@ -118,8 +114,6 @@ class BiTaccapGripperConfig(RobotConfig):
     """Tracker → EE rigid mount transform for this side. ``None`` (default) =
     the built-in value from ``ee_transform.tracker_to_tcp("right")``, measured
     off the CAD assembly. Set to override."""
-    right_enable_init_pose_alignment: bool = False
-    right_init_tcp_pose: tuple[float, float, float, float, float, float, float] = _DEFAULT_INIT_TCP_POSE
 
     right_enable_wrist_camera: bool = True
 
