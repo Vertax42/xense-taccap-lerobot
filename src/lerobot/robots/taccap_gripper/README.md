@@ -114,12 +114,12 @@ What to look for, with the gripper lying flat:
 | EE marker position | at the **two-finger midpoint**                                                     |
 | EE axes when flat  | X forward, Y left, Z up — i.e. **level**                                           |
 
-The last row is the open `APPLY_G_REBASE` question in
-[`ee_transform.py`](ee_transform.py): the CAD numbers are applied as-is, which
-assumes the CAD `Tracker frame` is drawn in the same re-labelled convention
-`tracker.py` conjugates into. If the EE frame instead lands ~195 mm away in a
-direction unrelated to the fingers, flip `APPLY_G_REBASE` to `True` — the two
-options differ by a ~120° rotation, so it is unmistakable on screen.
+**Checked on 2026-08-02 and correct**, so this is a regression check now rather
+than an open question. The middle row is the one that matters: it is the only one
+that distinguishes `APPLY_G_REBASE` — both settings put the EE the right 195 mm
+from the tracker, just 51° apart, so the segment length looks fine either way.
+If the EE ever lands somewhere unrelated to the fingers, flip
+`APPLY_G_REBASE` in [`ee_transform.py`](ee_transform.py).
 
 Verify a mount with the pivot check — no extra hardware needed:
 

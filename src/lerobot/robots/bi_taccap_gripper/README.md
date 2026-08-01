@@ -89,8 +89,9 @@ translations differ by 1.27 mm, so neither is derived from the other).
 `--robot.{left,right}_tracker_to_ee_pos` / `_quat` default to `None` = built-in value; set
 either to override. TCP is the two-finger midpoint, which symmetric jaws keep still, so the
 transform does not vary with `{side}_gripper.pos`. Both trackers are drawn next to their EE
-frames in the Rerun `/world` view — the check, and the remaining `APPLY_G_REBASE` question,
-are in the [single-gripper README](../taccap_gripper/README.md#checking-the-mount-transform-in-rerun).
+frames in the Rerun `/world` view — that check, which also confirmed the mount
+convention on hardware, is in the
+[single-gripper README](../taccap_gripper/README.md#checking-the-mount-transform-in-rerun).
 **Episodes recorded before this landed hold the tracker pose in `{side}_tcp.*`** and must
 not be mixed with newer ones without re-transforming.
 

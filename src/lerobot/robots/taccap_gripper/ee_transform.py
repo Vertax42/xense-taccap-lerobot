@@ -56,17 +56,20 @@ So both sides carry their own measured values and :func:`mirror_xz` is kept only
 as a consistency check. Deriving one side from the other would bake in that
 1.27 mm.
 
-Open question — the ``G`` re-basing
------------------------------------
+The ``G`` re-basing — settled, no re-base needed
+-----------------------------------------------
 ``tracker.py`` builds the world pose by conjugation, ``T = G · T · Gᵀ`` with
 ``G = PICO_TO_WORLD_R``, which re-expresses the reference frame **and re-labels
-the tracker's own body axes**. The values below are applied to that conjugated
-pose **as-is**, i.e. assuming the CAD ``Tracker frame`` was drawn in the same
-re-labelled convention. If it was drawn on the device's physical datum instead,
-a further ``G`` is needed and the mount would be off by a ~120° rotation.
+the tracker's own body axes**. So the CAD ``Tracker frame`` either matches that
+re-labelled convention (use the values as-is) or the device's physical datum (a
+further ``G`` first). The two land the EE 168 mm apart, 51° off each other, and
+both at the right 195 mm from the tracker — so the numbers alone cannot tell
+them apart, only looking at the drawn frames can.
 
-This cannot be settled from the numbers alone — see ``APPLY_G_REBASE`` and the
-one-off hardware check in the single-gripper README.
+**Checked on hardware (2026-08-02): as-is is correct.** The EE frame sits at the
+two-finger midpoint in the Rerun ``/world`` view, so ``APPLY_G_REBASE`` stays
+``False``. This is a property of the CAD file, not of a session — it does not
+need re-checking unless the assembly's coordinate systems are redrawn.
 """
 
 from __future__ import annotations
@@ -101,15 +104,14 @@ TRACKER_TO_EE_QUAT_WXYZ: dict[str, tuple[float, float, float, float]] = {
     "right": (0.136839046, 0.378463784, 0.913688271, 0.056692009),
 }
 
-# Whether to re-base the values above through G before use — the open question in
-# the module docstring. False matches how the SolidWorks macro's output is used
-# elsewhere in the project (applied directly to the conjugated world pose).
+# Whether to re-base the values above through G before use — see the module
+# docstring. Verified False on hardware (2026-08-02): the EE frame lands on the
+# two-finger midpoint in Rerun, so the CAD `Tracker frame` is already in the
+# re-labelled convention and the values apply directly.
 #
-# To settle it: run `lerobot-teleoperate --display_data=true`, lay the gripper
-# flat, and look at the two frames drawn in the Rerun `/world` view. The EE frame
-# must sit at the two-finger midpoint with its axes level (X forward, Y left,
-# Z up). If instead it lands ~195 mm away in a direction that has nothing to do
-# with the fingers, flip this to True.
+# Kept as a flag rather than deleted because it is the one thing that would have
+# to change if the assembly's coordinate systems are ever redrawn, and because
+# flipping it is how you would re-test that.
 APPLY_G_REBASE = False
 
 _warned_follower = False
