@@ -418,6 +418,13 @@ class TaccapGripper(Robot):
                     features[display_key] = spec
             else:
                 features[key] = spec
+
+        # Display-only: the tracker's own pose, so the viewer can draw it next to
+        # the EE frame and show the mount transform. Absent from
+        # observation_features, so it never reaches a dataset.
+        if self._tracker_sn is not None:
+            for k in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"):
+                features[f"tracker.{k}"] = float
         return features
 
     @cached_property
@@ -591,6 +598,9 @@ class TaccapGripper(Robot):
 
         if self._tracker is not None:
             obs.update(self._tracker.get_action())
+            # Display-only (see display_features): dropped by
+            # select_display_observation's counterpart on the recording path.
+            obs.update(self._tracker.get_tracker_display())
 
         if self.config.enable_gripper and self._gripper is not None:
             obs["gripper.pos"] = self._read_gripper_normalized()

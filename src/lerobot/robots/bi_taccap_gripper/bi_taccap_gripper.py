@@ -307,6 +307,14 @@ class BiTaccapGripper(Robot):
                     features[display_key] = spec
             else:
                 features[key] = spec
+
+        # Display-only: each tracker's own pose, so the viewer can draw it next
+        # to that side's EE frame and show the mount transform. Absent from
+        # observation_features, so it never reaches a dataset.
+        for side in _SIDES:
+            if side in self._tracker_sn_by_side:
+                for k in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"):
+                    features[f"{side}_tracker.{k}"] = float
         return features
 
     @cached_property
@@ -493,6 +501,8 @@ class BiTaccapGripper(Robot):
             if side in self._tracker_sn_by_side and self._tracker[side] is not None:
                 for k, v in self._tracker[side].get_action().items():
                     obs[f"{side}_{k}"] = v
+                # Display-only (see display_features).
+                obs.update(self._tracker[side].get_tracker_display(prefix=f"{side}_"))
 
             if getattr(self.config, f"{side}_enable_gripper") and self._gripper[side] is not None:
                 obs[f"{side}_gripper.pos"] = self._read_gripper_normalized(side)

@@ -245,6 +245,10 @@ class Pico4TrackerReader:
         # Cached state, guarded by _pose_lock and produced by _poller_thread.
         self._pose_lock = threading.Lock()
         self._latest_raw_wxyz: np.ndarray | None = None  # [x,y,z,qw,qx,qy,qz]
+        # World-frame pose of the tracker itself, i.e. the EE pose without the
+        # mount transform. Display-only: it is what lets a viewer draw both
+        # frames and see the mount offset.
+        self._latest_world_tracker_wxyz: np.ndarray | None = None
         self._latest_ee_wxyz: np.ndarray | None = (
             None  # [x,y,z,qw,qx,qy,qz] after rigid + (optional align) + hemisphere
         )
@@ -483,6 +487,7 @@ class Pico4TrackerReader:
         with self._pose_lock:
             self._latest_raw_wxyz = None
             self._latest_ee_wxyz = None
+            self._latest_world_tracker_wxyz = None
             self._latest_ts = None
             self._align_matrix = None
         self._ee_init_matrix = None
@@ -570,8 +575,12 @@ class Pico4TrackerReader:
                 self.logger.info("UMI alignment latched: subsequent poses are in the caller-supplied frame.")
             if self._align_matrix is not None:
                 t_world_ee = self._align_matrix @ t_world_ee
+                # Same rebase on the tracker pose, so the two frames a viewer
+                # draws stay a rigid pair rather than drifting apart.
+                t_world_tracker = self._align_matrix @ t_world_tracker
 
             ee_pose = matrix_to_pose7d(t_world_ee, output_format="wxyz")
+            tracker_pose = matrix_to_pose7d(t_world_tracker, output_format="wxyz")
 
             # Hemisphere continuity — applied here (sequential), so even
             # slow consumers see no sign flips. Runs AFTER alignment so
@@ -585,6 +594,7 @@ class Pico4TrackerReader:
             with self._pose_lock:
                 self._latest_raw_wxyz = raw_wxyz
                 self._latest_ee_wxyz = ee_pose
+                self._latest_world_tracker_wxyz = tracker_pose
                 self._latest_ts = time.monotonic()
                 self._stale_warned = False
 
@@ -649,6 +659,36 @@ class Pico4TrackerReader:
                 self._stale_warned = True
                 self.logger.warn(f"Pose stale by {age:.2f}s — tracker may have dropped out. Returning last-known pose.")
             return self._latest_ee_wxyz.copy()
+
+    def get_pose_tracker_world(self) -> np.ndarray | None:
+        """Latest pose of the **tracker itself** in the world frame, as
+        ``[x, y, z, qw, qx, qy, qz]``.
+
+        Same frame and same alignment as :meth:`get_pose_ee`, just without the
+        ``tracker_to_ee`` mount transform. Display-only: drawing this next to the
+        EE pose is how you check the mount transform on real hardware — the two
+        frames should sit a fixed distance apart with the EE at the two-finger
+        midpoint."""
+        if not self._is_connected:
+            raise DeviceNotConnectedError("Pico4TrackerReader is not connected")
+        with self._pose_lock:
+            if self._latest_world_tracker_wxyz is None:
+                return None
+            return self._latest_world_tracker_wxyz.copy()
+
+    def get_tracker_display(self, prefix: str = "") -> dict[str, Any]:
+        """``{prefix}tracker.x/y/z`` + ``.r1``..``.r6`` for the tracker frame.
+
+        Mirrors :meth:`get_action`'s layout so a viewer can treat the two frames
+        identically. Display-only — robots keep these out of
+        ``observation_features`` so they never reach a dataset."""
+        pose = self.get_pose_tracker_world()
+        if pose is None:
+            return {}
+        r6d = quaternion_to_rotation_6d(*pose[3:7])
+        out = {f"{prefix}tracker.{axis}": float(pose[i]) for i, axis in enumerate("xyz")}
+        out.update({f"{prefix}tracker.r{i + 1}": float(v) for i, v in enumerate(r6d)})
+        return out
 
     def get_action(self) -> dict[str, Any]:
         """Return the same 9-field dict that ``ViveTrackerTeleop.get_action()``
