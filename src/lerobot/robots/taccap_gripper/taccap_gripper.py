@@ -119,7 +119,7 @@ def _wait_nodes_settle(serials, logger, timeout_s: float = 15.0) -> None:
                     pass
             time.sleep(0.2)
         if not settled:
-            logger.warning(f"  Sensor {sn} V4L2 node did not settle within {timeout_s:.0f}s after pre-warm")
+            logger.warn(f"  Sensor {sn} V4L2 node did not settle within {timeout_s:.0f}s after pre-warm")
 
 
 def prewarm_tactile_config_cache(camera_configs: dict[str, Any], logger) -> None:
@@ -170,7 +170,7 @@ def prewarm_tactile_config_cache(camera_configs: dict[str, Any], logger) -> None
             sensor = Sensor.create(sn, disable_infer=True)
             sensor.release()
         except Exception as e:
-            logger.warning(f"  Config pre-warm failed for {sn}: {e}")
+            logger.warn(f"  Config pre-warm failed for {sn}: {e}")
 
     _wait_nodes_settle(uncached, logger)
 

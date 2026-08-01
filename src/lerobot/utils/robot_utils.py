@@ -64,6 +64,24 @@ def _get_file_sink() -> spdlog.Sink | None:
         return None
 
 
+class _SinkLogger(spdlog.SinkLogger):
+    """``spdlog.SinkLogger`` that also answers to the stdlib method names.
+
+    spdlog spells them ``warn`` and (for exceptions) ``error``; the stdlib spells
+    them ``warning`` and ``exception``. Both spellings appear across this tree
+    because loggers were migrated from ``logging`` piecemeal, and the mismatch is
+    invisible until the branch that logs actually runs — an AttributeError raised
+    from inside a teleoperation loop, at the exact moment something else already
+    went wrong. Aliasing costs nothing and removes the failure mode.
+
+    The instances are C-extension objects with no ``__dict__``, so this has to be
+    a subclass rather than an attribute patched on after construction.
+    """
+
+    warning = spdlog.SinkLogger.warn
+    exception = spdlog.SinkLogger.error
+
+
 def get_logger(name: str, loglevel: str = "INFO") -> spdlog.Logger:
     """Create a spdlog logger with console + file output.
 
@@ -90,7 +108,7 @@ def get_logger(name: str, loglevel: str = "INFO") -> spdlog.Logger:
     if file_sink is not None:
         sinks.append(file_sink)
 
-    logger = spdlog.SinkLogger(name, sinks)
+    logger = _SinkLogger(name, sinks)
     logger.set_pattern(SPDLOG_PATTERN)
     # Logger-level DEBUG so the file sink sees everything; each sink filters
     # to its own configured level.

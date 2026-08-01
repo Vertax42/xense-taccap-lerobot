@@ -131,7 +131,7 @@ def _cleanup(robot, teleop, display_data: bool) -> None:
         try:
             rr.rerun_shutdown()
         except Exception as e:
-            logger.warning(f"Error shutting down rerun: {e}")
+            logger.warn(f"Error shutting down rerun: {e}")
     _safe_disconnect(teleop, teleop.__class__.__name__ if teleop else "teleop")
     _safe_disconnect(robot, robot.__class__.__name__ if robot else "robot")
 
