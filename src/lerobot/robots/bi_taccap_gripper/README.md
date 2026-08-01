@@ -83,13 +83,14 @@ to record tactile + gripper only (no PC service needed). Other knobs: `--robot.r
 
 **Tracker → EEF TCP.** Each side's tracker is bolted to its gripper, so the raw pose is
 the tracker's, not the TCP's (~195 mm apart). The constant body-fixed offset comes from
-[`../taccap_gripper/ee_transform.py`](../taccap_gripper/ee_transform.py): the right side
-carries the CAD numbers, the left is that mirrored about the XZ plane (`y → −y`), so both
-sides come from one measurement. `--robot.{left,right}_tracker_to_ee_pos` / `_quat` default
-to `None` = built-in value; set either to override. TCP is the two-finger midpoint, which
-symmetric jaws keep still, so the transform does not vary with `{side}_gripper.pos`. The
-frame subtleties (why CAD numbers need re-basing first) and the pivot verification are
-documented in the [single-gripper README](../taccap_gripper/README.md#tracker--eef-tcp-mount-transform).
+[`../taccap_gripper/ee_transform.py`](../taccap_gripper/ee_transform.py): **both sides
+are measured** off the CAD assembly (they are near-mirrors about the XZ plane, but the
+translations differ by 1.27 mm, so neither is derived from the other).
+`--robot.{left,right}_tracker_to_ee_pos` / `_quat` default to `None` = built-in value; set
+either to override. TCP is the two-finger midpoint, which symmetric jaws keep still, so the
+transform does not vary with `{side}_gripper.pos`. Both trackers are drawn next to their EE
+frames in the Rerun `/world` view — the check, and the remaining `APPLY_G_REBASE` question,
+are in the [single-gripper README](../taccap_gripper/README.md#checking-the-mount-transform-in-rerun).
 **Episodes recorded before this landed hold the tracker pose in `{side}_tcp.*`** and must
 not be mixed with newer ones without re-transforming.
 
@@ -167,7 +168,8 @@ readable and writable by the recording user.
 With `--display_data=true`, the Rerun viewer adds a `/world` 3D view: each gripper is a
 labelled marker (red = left, blue = right) at its live Pico4 pose (`{side}_tcp.*`), trailing a
 breadcrumb of its swept path — the same effect as the SDK's `rerun_dual_with_tracker.py`
-example, but in our gravity-aligned `RIGHT_HAND_Z_UP` world frame. On by default;
+example, but in our gravity-aligned `FLU` world frame (X forward, Y left, Z up).
+On by default;
 `--show_trajectory=false` suppresses it, and it auto-skips when `--robot.enable_tracker=false`.
 Shared implementation in [`../taccap_gripper/visualization.py`](../taccap_gripper/visualization.py).
 

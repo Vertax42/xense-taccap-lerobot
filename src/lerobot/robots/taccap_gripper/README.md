@@ -68,24 +68,57 @@ orientation — starting a UMI session with the gripper pointing anywhere is fin
 
 - **TCP** is the two-finger midpoint. Symmetric jaws keep that point still as the
   jaw opens, so the transform is a constant and does not depend on `gripper.pos`.
-- **Sides are mirror images about the XZ plane** (`y → −y`). Only the right side
-  carries measured numbers; the left is derived (`t' = M·t`, `R' = M·R·M` with
-  `M = diag(1,-1,1)`, which keeps `det = +1`, so it stays a proper rotation).
+- **Both sides are measured**, straight out of the SolidWorks macro as
+  `^Tracker T_EE`. They are near-mirrors about the XZ plane but not exactly —
+  rotation agrees with the mirror to 0.03°, translation differs by 1.27 mm — so
+  neither side is derived from the other. `mirror_xz()` is kept only as a
+  consistency check.
+- **Leader bodies only.** The follower gripper is a different design (URDF shows
+  different joint origins, a flipped jaw axis, fingertips 21 mm further out), so
+  `--robot.role=follower` warns and falls back to the leader value.
 - `--robot.tracker_to_ee_pos` / `_quat` default to `None` = use this side's
   built-in value. Set either one to override; they are independent, so a
   re-machined mount can pin just the translation.
 
-> **The CAD numbers cannot be pasted in raw.** `tracker.py` builds the world pose
-> by conjugation (`G · T · Gᵀ`), which re-expresses the reference frame **and
-> re-labels the tracker's own body axes** — `+X` of the frame the offset lives in
-> is the tracker's physical `−Z_pico`. A CAD value measured in world/Pico axes has
-> to be re-based first; `cad_to_code_frame()` does it, given the tracker frame's
-> 3×3 in world coordinates. Skipping this yields a transform that looks right in
-> the measurement pose and drifts as soon as the gripper rotates.
+> **Cross-check on the numbers.** At the CAD reference pose the EE frame is
+> aligned to world, so `delta_world == R_tracker_eeᵀ · t_tracker_ee`. The macro's
+> right-side values reproduce the independent measurement in
+> `media/right_eef_tcp.jpg` to **0.000 mm**, which also settles that screenshot's
+> sign question — its Y and Z really are negative.
 
 > **Datasets recorded before this landed hold the tracker pose in `tcp.*`, not the
 > TCP.** They are off by the handle offset and must not be mixed with newer
 > episodes without re-transforming.
+
+### Checking the mount transform in Rerun
+
+`lerobot-teleoperate --display_data=true` draws **both frames** in the `/world` view:
+the EE frame (large marker, 10 cm axes, labelled `EE`) and the tracker's own frame
+(small dim marker, 6 cm axes, labelled `TRACKER`), joined by a thin dashed yellow
+construction line labelled with its length in mm. The tracker pose is published as
+display-only `tracker.*` keys — absent from `observation_features`, so it never
+reaches a dataset — and a `tracker pose` tab appears in the scalar panel next to
+`tcp pose`.
+
+The scene declares `rr.ViewCoordinates.FLU` (X forward, Y left, Z up) rather than
+the weaker `RIGHT_HAND_Z_UP`, so the viewer knows which axis is _forward_ and aims
+its initial camera down +X. The origin triad is labelled `+X forward` / `+Y left` /
+`+Z up` so the orientation stays readable after you orbit.
+
+What to look for, with the gripper lying flat:
+
+| Check              | Expected                                                                           |
+| ------------------ | ---------------------------------------------------------------------------------- |
+| Segment length     | **≈195 mm** (right) / **≈194 mm** (left), and **constant** as you wave the gripper |
+| EE marker position | at the **two-finger midpoint**                                                     |
+| EE axes when flat  | X forward, Y left, Z up — i.e. **level**                                           |
+
+The last row is the open `APPLY_G_REBASE` question in
+[`ee_transform.py`](ee_transform.py): the CAD numbers are applied as-is, which
+assumes the CAD `Tracker frame` is drawn in the same re-labelled convention
+`tracker.py` conjugates into. If the EE frame instead lands ~195 mm away in a
+direction unrelated to the fingers, flip `APPLY_G_REBASE` to `True` — the two
+options differ by a ~120° rotation, so it is unmistakable on screen.
 
 Verify a mount with the pivot check — no extra hardware needed:
 
@@ -260,7 +293,7 @@ In the `/world` view the gripper is drawn as a labelled ellipsoid + axis triad a
 Pico4 pose (`tcp.*`), trailing a breadcrumb of where it has been — mirroring the SDK's
 [`rerun_dual_with_tracker.py`](../../../third_party/taccap-gripper/python/examples/rerun_dual_with_tracker.py)
 example. Our pose is already in the gravity-aligned world frame, so the scene is
-`RIGHT_HAND_Z_UP` (the example shows the raw Pico `LEFT_HAND_Y_UP` frame).
+`FLU` — X forward, Y left, Z up (the example shows the raw Pico `LEFT_HAND_Y_UP` frame).
 
 On by default; `--show_trajectory=false` drops **that view only** (the rest of the layout
 still applies), and it auto-skips when `--robot.enable_tracker=false` (no pose to draw).
