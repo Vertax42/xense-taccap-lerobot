@@ -526,18 +526,11 @@ class TaccapGripper(Robot):
                 device_wait_timeout=self.config.tracker_wait_timeout,
                 logger_name=self.config.id or "robot",
             )
-            init_pose = (
-                np.asarray(self.config.init_tcp_pose, dtype=np.float64)
-                if self.config.enable_init_pose_alignment
-                else None
-            )
-            self._tracker.connect(current_tcp_pose_quat=init_pose)
-            if init_pose is not None:
-                self.logger.info(
-                    f"  ✅ Pico4 tracker connected with UMI alignment (init_tcp_pose={init_pose.tolist()})"
-                )
-            else:
-                self.logger.info("  ✅ Pico4 tracker connected (world frame)")
+            # No init-pose alignment: poses stay in the world frame and the
+            # deployment robot's base is cancelled downstream by the
+            # relative-to-current representation, not baked in here.
+            self._tracker.connect()
+            self.logger.info("  ✅ Pico4 tracker connected (world frame)")
 
         # 3. Cameras (tactile + wrist, auto-discovered in __init__).
         #    Pre-warm the config cache sequentially first so the parallel connect
