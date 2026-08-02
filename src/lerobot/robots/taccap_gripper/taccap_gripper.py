@@ -295,6 +295,9 @@ class TaccapGripper(Robot):
             self.logger.info(f"Pico4 tracker ({self._side}): {self._tracker_sn} ({source})")
 
         self._is_connected = False
+        # Where gripper.pos comes from once connected: "firmware" (the device's
+        # own encoder-max calibration) or "config" (gripper_open_rad).
+        self._gripper_norm_source = "config"
 
     # ------------------------------------------------------------------ discovery
 
@@ -508,7 +511,7 @@ class TaccapGripper(Robot):
                 f"  TacCap-Gripper: side={self._endpoints.side} role={self._endpoints.role} "
                 f"fw_sn={self._endpoints.firmware_sn!r} mcu={self._endpoints.mcu_serial!r}"
             )
-            self._gripper = gripper_cls(self._endpoints.mcu_device)
+            self._gripper = self._open_gripper(gripper_cls, self._endpoints.mcu_device)
             self.logger.info(f"  ✅ {gripper_cls.__name__} attached (MCU-only, read-only — motor stays disabled)")
 
         # 2. Pico4 tracker.
@@ -640,19 +643,69 @@ class TaccapGripper(Robot):
 
     # ------------------------------------------------------------------ helpers
 
+    def _open_gripper(self, gripper_cls, mcu_device: str):
+        """Open the gripper, asking the firmware to normalise the jaw position.
+
+        ``LeaderGripper(normalize_position=True)`` reads the encoder-max
+        calibration off the device (``Cmd::EncoderMaxCal``, firmware >= V2.1) and
+        installs a converter, so every sample's ``position`` is the true opening
+        of *this* unit in [0, 1]. That beats dividing by a config constant, which
+        is one number for every gripper ever built: a unit whose real travel is
+        1.30 rad would only ever read 0.76 at fully open.
+
+        Two things fall back to ``gripper_open_rad`` instead:
+
+        * **Followers** — ``EncoderMaxCal`` is leader-only, and the follower
+          class does not take the flag at all.
+        * **Uncalibrated or pre-V2.1 leaders** — the constructor raises. Rather
+          than fail the session we re-open with ``encoder_max_rad`` supplied from
+          the host, which is the same arithmetic as before, and say so once. Run
+          ``fisheye_cal.py measure-encoder-max`` to move a unit onto the firmware
+          value.
+        """
+        if gripper_cls is not LeaderGripper:
+            self.logger.info(f"  Jaw normalised by config gripper_open_rad={self.config.gripper_open_rad} (follower)")
+            return gripper_cls(mcu_device)
+
+        try:
+            gripper = gripper_cls(mcu_device, normalize_position=True)
+        except Exception as e:
+            self._gripper_norm_source = "config"
+            self.logger.warn(
+                f"Firmware encoder-max calibration unavailable ({e}); falling back to "
+                f"gripper_open_rad={self.config.gripper_open_rad}. gripper.pos will not reach 1.0 "
+                "if this unit's real travel differs. Fix with: python "
+                "third_party/taccap-gripper/python/examples/fisheye_cal.py measure-encoder-max"
+            )
+            return gripper_cls(mcu_device, normalize_position=True, encoder_max_rad=self.config.gripper_open_rad)
+
+        self._gripper_norm_source = "firmware"
+        self.logger.info("  Jaw normalised by the firmware's encoder-max calibration")
+        return gripper
+
     def _read_gripper_normalized(self) -> float:
-        """Read cooked encoder position (rad ≥ 0 post-``set_zero``) and
-        normalise to [0, 1] via ``clip(rad / open_rad, 0, 1)``."""
+        """Jaw opening in [0, 1] — 0 closed (the encoder zero), 1 fully open.
+
+        Prefers the SDK's ``position``, which the firmware's own encoder-max
+        calibration produces (see :meth:`_open_gripper`). It is ``nan`` when no
+        converter is installed — a follower, or a leader that fell back — so the
+        radians path stays as the backstop rather than letting a nan reach the
+        dataset.
+        """
         try:
             sample = self._gripper.encoder.read_once()
-            rad = float(sample.position_rad)
         except Exception as e:
             self.logger.warn(f"Encoder read failed: {e}")
             return 0.0
+
+        normalised = float(getattr(sample, "position", float("nan")))
+        if np.isfinite(normalised):
+            return float(np.clip(normalised, 0.0, 1.0))
+
         opened = self.config.gripper_open_rad
         if opened <= 0.0:  # guarded in config.__post_init__ but be defensive
             return 0.0
-        return float(np.clip(rad / opened, 0.0, 1.0))
+        return float(np.clip(float(sample.position_rad) / opened, 0.0, 1.0))
 
     def get_endpoints(self):
         """Hardware discovery info populated on connect (None otherwise)."""

@@ -153,6 +153,9 @@ class BiTaccapGripper(Robot):
         # Auto-discover the Pico4 motion tracker(s): enumerate from the XenseVR PC
         # service and assign one per side by serial (second-to-last digit, strict).
         # Drives the pose schema, so it runs here (pre-connect) like the cameras.
+        # Where each side's gripper.pos comes from once connected: "firmware"
+        # (that unit's own encoder-max calibration) or "config" (gripper_open_rad).
+        self._gripper_norm_source: dict[str, str] = dict.fromkeys(_SIDES, "config")
         self._tracker_sn_by_side: dict[str, str] = {}
         if config.enable_tracker:
             self._tracker_sn_by_side = disco.resolve_pico_trackers(
@@ -407,7 +410,7 @@ class BiTaccapGripper(Robot):
                     f"  [{side}] TacCap-Gripper: side={endpoints.side} role={endpoints.role} "
                     f"fw_sn={endpoints.firmware_sn!r} mcu={endpoints.mcu_serial!r}"
                 )
-                self._gripper[side] = gripper_cls(endpoints.mcu_device)
+                self._gripper[side] = self._open_gripper(side, gripper_cls, endpoints.mcu_device)
                 self.logger.info(f"  [{side}] ✅ {gripper_cls.__name__} attached (MCU-only, read-only)")
 
             # 2. Pico4 tracker (auto-discovered SN per side, pinned here).
@@ -633,19 +636,56 @@ class BiTaccapGripper(Robot):
 
     # ------------------------------------------------------------------ helpers
 
+    def _open_gripper(self, side: str, gripper_cls, mcu_device: str):
+        """Open one side's gripper with firmware-normalised jaw position.
+
+        Same reasoning as the single-gripper device: the leader's own encoder-max
+        calibration gives the true opening of *that* unit, where a shared config
+        constant cannot. Followers and uncalibrated/pre-V2.1 leaders fall back to
+        ``{side}_gripper_open_rad`` — see ``taccap_gripper._open_gripper``.
+        """
+        open_rad = getattr(self.config, f"{side}_gripper_open_rad")
+        if gripper_cls is not LeaderGripper:
+            self.logger.info(f"  [{side}] Jaw normalised by config gripper_open_rad={open_rad} (follower)")
+            return gripper_cls(mcu_device)
+
+        try:
+            gripper = gripper_cls(mcu_device, normalize_position=True)
+        except Exception as e:
+            self._gripper_norm_source[side] = "config"
+            self.logger.warn(
+                f"  [{side}] Firmware encoder-max calibration unavailable ({e}); falling back to "
+                f"gripper_open_rad={open_rad}. Fix with: python "
+                "third_party/taccap-gripper/python/examples/fisheye_cal.py measure-encoder-max"
+            )
+            return gripper_cls(mcu_device, normalize_position=True, encoder_max_rad=open_rad)
+
+        self._gripper_norm_source[side] = "firmware"
+        self.logger.info(f"  [{side}] Jaw normalised by the firmware's encoder-max calibration")
+        return gripper
+
     def _read_gripper_normalized(self, side: str) -> float:
-        """Read cooked encoder position (rad ≥ 0 post-``set_zero``) and normalise
-        to [0, 1] via ``clip(rad / {side}_gripper_open_rad, 0, 1)``."""
+        """Jaw opening in [0, 1] — 0 closed, 1 fully open.
+
+        Prefers the SDK's firmware-calibrated ``position``; falls back to the
+        radians / ``{side}_gripper_open_rad`` division when no converter is
+        installed (``position`` is ``nan`` then, and a nan must not reach the
+        dataset).
+        """
         try:
             sample = self._gripper[side].encoder.read_once()
-            rad = float(sample.position_rad)
         except Exception as e:
             self.logger.warn(f"  [{side}] Encoder read failed: {e}")
             return 0.0
+
+        normalised = float(getattr(sample, "position", float("nan")))
+        if np.isfinite(normalised):
+            return float(np.clip(normalised, 0.0, 1.0))
+
         opened = getattr(self.config, f"{side}_gripper_open_rad")
         if opened <= 0.0:  # guarded in config.__post_init__ but be defensive
             return 0.0
-        return float(np.clip(rad / opened, 0.0, 1.0))
+        return float(np.clip(float(sample.position_rad) / opened, 0.0, 1.0))
 
     def get_endpoints(self):
         """Per-side hardware discovery info populated on connect."""
