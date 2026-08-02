@@ -216,15 +216,19 @@ twice.
 
 ## Calibration workflow (do once per device)
 
-### 1. Latch the encoder zero
+### 1. Encoder zero + travel span
 
-The SDK ships a complete calibration CLI. Use it directly — it pins by
-firmware SN, latches the zero via `Encoder.set_zero()`, verifies the
-post-zero raw residual, and optionally sanity-checks the open angle:
+The SDK ships the calibration CLI. It pins by firmware SN — so with both sides
+plugged in you cannot zero the wrong one — and does **both** ends in one pass:
 
 ```bash
-python third_party/taccap-gripper/python/examples/calibrate.py SN000003
+python third_party/taccap-gripper/python/examples/calibrate.py TCGU01A28Z0024m
 ```
+
+1. Hold the gripper **fully closed** → latched as the encoder zero
+   (`Encoder.set_zero()`), then re-read to confirm the post-zero residual.
+2. Open to the **mechanical limit** → written to MCU flash as that unit's
+   encoder-max (`Cmd::EncoderMaxCal`, firmware ≥ V2.1).
 
 List available firmware SNs:
 
@@ -233,10 +237,22 @@ python -c "from xense.taccap import scan_grippers, Side; \
   [print(f'{\"L\" if g.side==Side.Left else \"R\"} fw={g.firmware_sn} mcu={g.mcu_serial}') for g in scan_grippers()]"
 ```
 
-After zero is latched, the SDK's `position_rad` reads 0 when closed
-and rises to ~1.7 rad (~97°) at the mechanical limit. There is **no
-`gripper_closed_rad` config** — closed is always 0. Only the
-`gripper_open_rad` config field (default 1.7) is configurable per unit.
+**Do this on every unit.** Step 2 is what `gripper.pos` is normalised against:
+with it, the SDK reports the true opening of _that_ gripper in [0, 1]; without
+it the robot falls back to dividing by `gripper_open_rad`, a single config
+constant (default 1.7) standing in for every gripper ever built. Real travel
+varies — a measured unit came out at **1.1486 rad (65.8°)**, which under the
+fallback tops out at `1.1486 / 1.7 = 0.676` and never reaches 1.0.
+
+In a bimanual rig, calibrating only one side is the worst case: the two
+`{side}_gripper.pos` channels end up on different scales, so the same physical
+grip reads differently left and right. The connect log says which path each side
+took — `Jaw normalised by the firmware's encoder-max calibration` versus
+`Firmware encoder-max calibration unavailable …`.
+
+Closed is always 0 — there is no `gripper_closed_rad` config, the zero lives in
+firmware. `gripper_open_rad` is now only the fallback for uncalibrated or
+pre-V2.1 units, and for followers (`Cmd::EncoderMaxCal` is leader-only).
 
 ### 2. Sanity-check the Pico4 tracker
 

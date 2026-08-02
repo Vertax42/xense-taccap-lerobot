@@ -78,8 +78,18 @@ to left/right by its serial's **second-to-last digit** (odd → left, even → r
 `PC2310MLL3200496G` → `6` → right). A bimanual rig needs one tracker per side; a
 missing/duplicate/malformed tracker raises a clear error. Set `--robot.enable_tracker=false`
 to record tactile + gripper only (no PC service needed). Other knobs: `--robot.role`,
-`--robot.gripper_open_rad`, `--robot.tactile_fps`, `--robot.wrist_camera_{width,height,fps}`,
+`--robot.{side}_gripper_open_rad` (fallback only — see below), `--robot.tactile_fps`,
+`--robot.wrist_camera_{width,height,fps}`,
 `--robot.expected_tactiles_per_side`.
+
+**Jaw normalisation.** `{side}_gripper.pos` comes from each leader's own encoder-max
+calibration in MCU flash (firmware ≥ V2.1), so 1.0 is _that_ unit's real full-open rather
+than a shared constant. Calibrate every unit with
+`python third_party/taccap-gripper/python/examples/calibrate.py <SN>` — it sets the zero and
+the travel span in one pass. Uncalibrated units, and followers (`Cmd::EncoderMaxCal` is
+leader-only), fall back to dividing by `{side}_gripper_open_rad`. Calibrating only one side
+is the case to avoid: the two channels then sit on different scales and the same grip reads
+differently left and right. The connect log names the path each side took.
 
 **Tracker → EEF TCP.** Each side's tracker is bolted to its gripper, so the raw pose is
 the tracker's, not the TCP's (~195 mm apart). The constant body-fixed offset comes from
