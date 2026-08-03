@@ -268,9 +268,12 @@ python -c "from xense.taccap import scan_grippers
 for g in scan_grippers(): print(g.firmware_sn, '->', 'master' if g.firmware_sn.endswith('m') else 'slave')"
 
 python third_party/taccap-gripper/python/examples/ota_update.py \
-    third_party/taccap-gripper/firmware/tc-gu-01-master.bin \
-    --side left --target-version 1.2.0.0
+    tc-gu-01-master.bin --side left --target-version 1.2.0.0
 ```
+
+Naming the image is enough — `ota_update.py` finds it in the SDK's own
+`firmware/`, so the command is the same from here and from inside the
+submodule.
 
 Two things that bite here:
 
@@ -278,13 +281,9 @@ Two things that bite here:
   read a firmware-side error on the echoed-command path as a 1-byte success,
   so a failed update reported success. The current SDK talks to old firmware
   unchanged, so this ordering is always safe.
-- **The image path is relative to your cwd, the manifest is not.** From this
-  repo's root the image lives under `third_party/taccap-gripper/firmware/`; the
-  SDK's own README writes it as `firmware/…` because it assumes you are in the
-  SDK root. `ota_update.py` refuses a role mismatch on its own (identified by
-  CRC32 against `firmware/manifest.json`), so a wrong-role flash is blocked
-  rather than merely warned about — `--force` overrides, and flashing the wrong
-  role bricks the MCU into needing an SWD probe.
+- **The wrong role bricks the MCU** into needing an SWD probe. `ota_update.py`
+  identifies the image by CRC32 against `firmware/manifest.json` and refuses a
+  mismatch outright rather than warning — `--force` overrides.
 
 Re-run `calibrate.py` once the unit comes back up (~1–3 s for USB
 re-enumeration).
