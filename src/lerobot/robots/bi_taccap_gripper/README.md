@@ -85,7 +85,7 @@ to record tactile + gripper only (no PC service needed). Other knobs: `--robot.r
 **Jaw normalisation.** `{side}_gripper.pos` comes from each leader's own encoder-max
 calibration in MCU flash (firmware ≥ V2.1), so 1.0 is _that_ unit's real full-open rather
 than a shared constant. Calibrate every unit with
-`python third_party/taccap-gripper/python/examples/calibrate.py <SN>` — it sets the zero and
+`python third_party/taccap-gripper/python/examples/calibrate.py <left|right>` — it sets the zero and
 the travel span in one pass. Uncalibrated units, and followers (`Cmd::EncoderMaxCal` is
 leader-only), fall back to dividing by `{side}_gripper_open_rad`. Calibrating only one side
 is the case to avoid: the two channels then sit on different scales and the same grip reads

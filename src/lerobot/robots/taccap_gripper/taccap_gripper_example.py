@@ -34,7 +34,7 @@ The jaw closed position is fixed at 0 rad by the SDK's ``Encoder.set_zero()``;
 only the open angle (``--open-rad``, default 1.7 for TC-GU-01) is configurable.
 
 Run the SDK's calibration once per device before using this script:
-    python third_party/taccap-gripper/python/examples/calibrate.py <SN>
+    python third_party/taccap-gripper/python/examples/calibrate.py <left|right>
 
 The script prints 10 observation frames (scalar fields + image shapes)
 then disconnects.

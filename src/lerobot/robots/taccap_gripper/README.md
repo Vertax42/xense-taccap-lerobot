@@ -218,12 +218,19 @@ twice.
 
 ### 1. Encoder zero + travel span
 
-The SDK ships the calibration CLI. It pins by firmware SN — so with both sides
-plugged in you cannot zero the wrong one — and does **both** ends in one pass:
+The SDK ships the calibration CLI. Select the gripper by side — it resolves the
+firmware SN itself and prints it, so with both sides plugged in you cannot zero
+the wrong one — and it does **both** ends in one pass:
 
 ```bash
-python third_party/taccap-gripper/python/examples/calibrate.py TCGU01A28Z0024m
+python third_party/taccap-gripper/python/examples/calibrate.py left
+python third_party/taccap-gripper/python/examples/calibrate.py right
 ```
+
+Side is read from the firmware-burned SN over the wire (`Cmd::GetSn`), the same
+rule the robot uses, so `left` here is the same gripper as `left_gripper.pos`.
+An explicit SN still works if you want to pin it:
+`calibrate.py TCGU01A28Z0024m`.
 
 1. Hold the gripper **fully closed** → latched as the encoder zero
    (`Encoder.set_zero()`), then re-read to confirm the post-zero residual.
