@@ -254,6 +254,41 @@ Closed is always 0 — there is no `gripper_closed_rad` config, the zero lives i
 firmware. `gripper_open_rad` is now only the fallback for uncalibrated or
 pre-V2.1 units, and for followers (`Cmd::EncoderMaxCal` is leader-only).
 
+#### If the gripper reports pre-V2.1 firmware
+
+`calibrate.py` exits without changing anything when the unit is older than V2.1
+(leader 1.2.0) — the encoder-max command does not exist there. Since 0.1.7 the
+SDK ships the released images, so flashing no longer needs the firmware source:
+
+```bash
+# Which role is this unit?  The LAST character of the firmware SN decides —
+# 'm' = master image, 's' = slave.  NOT which hand it is on: two grippers on
+# opposite sides of a rig are routinely both masters.
+python -c "from xense.taccap import scan_grippers
+for g in scan_grippers(): print(g.firmware_sn, '->', 'master' if g.firmware_sn.endswith('m') else 'slave')"
+
+python third_party/taccap-gripper/python/examples/ota_update.py \
+    third_party/taccap-gripper/firmware/tc-gu-01-master.bin \
+    --side left --target-version 1.2.0.0
+```
+
+Two things that bite here:
+
+- **Update the SDK before the firmware, not after.** Pre-0.1.7 `OtaSession`
+  read a firmware-side error on the echoed-command path as a 1-byte success,
+  so a failed update reported success. The current SDK talks to old firmware
+  unchanged, so this ordering is always safe.
+- **The image path is relative to your cwd, the manifest is not.** From this
+  repo's root the image lives under `third_party/taccap-gripper/firmware/`; the
+  SDK's own README writes it as `firmware/…` because it assumes you are in the
+  SDK root. `ota_update.py` refuses a role mismatch on its own (identified by
+  CRC32 against `firmware/manifest.json`), so a wrong-role flash is blocked
+  rather than merely warned about — `--force` overrides, and flashing the wrong
+  role bricks the MCU into needing an SWD probe.
+
+Re-run `calibrate.py` once the unit comes back up (~1–3 s for USB
+re-enumeration).
+
 ### 2. Sanity-check the Pico4 tracker
 
 ```bash
