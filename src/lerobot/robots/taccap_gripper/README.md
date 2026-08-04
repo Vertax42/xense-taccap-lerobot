@@ -96,6 +96,13 @@ orientation — starting a UMI session with the gripper pointing anywhere is fin
 `lerobot-teleoperate --display_data=true` draws the EE frame in the `/world` view —
 a marker with 10 cm axes, labelled `EE` — trailing a breadcrumb of where it has been.
 
+With the head camera on, the headset is drawn too — a smaller amber marker
+labelled `HEAD`, no trail. It shares the gripper's world frame (the same
+Pico→world remap is applied to `head_camera.*` as to `tcp.*`), so the two can be
+read against each other: where the operator was looking versus what their hands
+were doing. A trail is deliberately omitted — the head wanders continuously and
+its breadcrumb would bury the gripper trails.
+
 The scene declares `rr.ViewCoordinates.FLU` (X forward, Y left, Z up) rather than
 the weaker `RIGHT_HAND_Z_UP`, so the viewer knows which axis is _forward_ and aims
 its initial camera down +X. The origin triad is labelled `+X forward` / `+Y left` /

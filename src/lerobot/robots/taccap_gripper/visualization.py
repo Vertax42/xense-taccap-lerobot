@@ -48,6 +48,8 @@ _SIDE_COLOR = {
     "left": (255, 80, 80),
     "right": (80, 160, 255),
     "": (120, 220, 120),
+    # The headset, distinct from either gripper so the three read apart.
+    "head": (230, 190, 60),
 }
 
 _ROT_KEYS = ("r1", "r2", "r3", "r4", "r5", "r6")
@@ -300,8 +302,21 @@ class TaccapTrajectoryViz:
             self._log_pose(name, pose)
             self._log_trail(name, pose)
 
+        # The headset, when the head camera is on. It shares the gripper's
+        # world frame — the same Pico→world remap is applied to both — so
+        # drawing them together shows where the operator was looking relative
+        # to what their hands were doing. No trail: the head wanders
+        # continuously and its breadcrumb would bury the gripper trails.
+        head = self._extract_pose(data, "head_camera.", "")
+        if head is not None:
+            self._log_static_once("head")
+            self._log_pose("head", head)
+
     def _extract_pose(self, data: dict, prefix: str, frame: str) -> tuple | None:
-        keys = [f"{prefix}{frame}.{k}" for k in _POSE_KEYS]
+        # ``frame`` is the middle segment ("tcp"); an empty one lets a caller
+        # pass a fully-formed prefix such as "head_camera.".
+        stem = f"{prefix}{frame}." if frame else prefix
+        keys = [f"{stem}{k}" for k in _POSE_KEYS]
         if not all(k in data and data[k] is not None for k in keys):
             return None
         vals = [float(data[k]) for k in keys]
@@ -312,7 +327,12 @@ class TaccapTrajectoryViz:
             return
         ent = f"world/{name}"
         color = _SIDE_COLOR.get(name, _SIDE_COLOR[""])
-        half_sizes, axes_len, alpha = [[0.035, 0.035, 0.02]], 0.10, 220
+        if name == "head":
+            # Smaller and shorter-axed than a gripper: it is context for what
+            # the hands are doing, not the thing being watched.
+            half_sizes, axes_len, alpha = [[0.045, 0.030, 0.030]], 0.07, 160
+        else:
+            half_sizes, axes_len, alpha = [[0.035, 0.035, 0.02]], 0.10, 220
         rr.log(
             f"{ent}/mesh",
             rr.Ellipsoids3D(centers=[[0.0, 0.0, 0.0]], half_sizes=half_sizes, colors=[(*color, alpha)]),
@@ -326,7 +346,7 @@ class TaccapTrajectoryViz:
                 radii=0.004,
             ),
         )
-        label = "EE" if name == "gripper" else f"{name.upper()} EE"
+        label = "HEAD" if name == "head" else ("EE" if name == "gripper" else f"{name.upper()} EE")
         rr.log(
             f"{ent}/label",
             rr.Points3D([[0, 0, axes_len]], labels=[label], colors=[color], radii=0.004),
