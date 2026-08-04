@@ -4,9 +4,9 @@ Bimanual TacCap-Gripper handheld data-collection rig — two `taccap_gripper` un
 (left + right) driven as one robot. Passive/self-driven: `send_action()` is a no-op
 (jaw motors stay disabled, encoders read-only); pose comes from a per-side Pico4
 Ultra tracker, tactile + wrist cameras go through the standard `cameras` framework.
-An optional Insight head camera uses the same robot observation path and contributes
-RGB plus a raw-frame VIO pose; no head-to-gripper extrinsic calibration is required
-at capture time.
+An optional Pico headset camera uses the same robot observation path and contributes
+a stereo RGB frame plus the headset pose; no head-to-gripper extrinsic calibration is
+required at capture time.
 
 Implemented with the **reimplement-with-prefixes** pattern (cf. `bi_elite_cs66_rt`):
 one `Robot` class, per-side handles in dicts keyed `"left"`/`"right"`, and every
@@ -25,13 +25,13 @@ Per side `{s}` ∈ {left, right}:
 | `{s}_wrist`                              | `{s}_enable_wrist_camera`      | wrist UVC frame                                                                           |
 | `{s}_tactile_left` / `{s}_tactile_right` | auto-discovered                | **recorded** tactile frame from the left / right finger sensor (`rectify`)                |
 | `{s}_tactile_{left,right}_difference`    | `tactile_display_output_types` | **display-only** amplified-deformation view of the same read — Rerun only, never recorded |
-| `head_rgb`                               | `enable_head_camera`           | latest decoded Insight RGB frame                                                          |
-| `head_camera.x/y/z`                      | `enable_head_camera`           | raw Insight VIO position in the camera's own coordinate frame                             |
-| `head_camera.r1..r6`                     | `enable_head_camera`           | raw Insight VIO orientation as the first two rotation-matrix columns                      |
+| `head_rgb`                               | `enable_head_camera`           | headset camera frame, both eyes side by side unless `head_camera_eyes` selects one        |
+| `head_camera.x/y/z`                      | `enable_head_camera`           | headset position, same world frame as `{s}_tcp.*`                                         |
+| `head_camera.r1..r6`                     | `enable_head_camera`           | headset orientation as the first two rotation-matrix columns                               |
 
 `action_features` = the per-side gripper pose + `{s}_gripper.pos` subset; the head
 camera pose and all images remain observation-only. With both Pico4 trackers, both
-grippers and the Insight head camera enabled, `observation.state` has 29 dimensions (20 + 9).
+grippers and the head camera enabled, `observation.state` has 29 dimensions (20 + 9).
 
 **Two tactile streams, two destinations.** Each sensor is read once per frame for two
 views: `rectify` (recorded) and the amplified `difference` (displayed). Only the
@@ -43,11 +43,11 @@ from live, but its baseline is captured at sensor init, so a finger resting on
 something at connect would have that pressure subtracted out of the whole recording —
 which is exactly why the dataset gets `rectify`.
 
-For each fixed-rate robot sample, the adapter calls the Insight SDK's `latest()`
-exactly once and takes the newest cached RGB and VIO values. The source XYZW quaternion
-is converted inside the camera adapter with the shared 6D conversion used by the Pico4
-trackers. A corrupt new JPEG holds the previous good RGB frame, and stale RGB/VIO caches
-produce a rate-limited runtime warning; no timing, age, status or IMU fields are stored
+For each fixed-rate robot sample, the adapter takes the newest cached frame for each
+eye and the current headset pose. The source XYZW quaternion is converted with the shared
+6D conversion used by the Pico4 trackers. A corrupt JPEG holds the previous good frame,
+as does a left/right pair that did not come from the same capture; both are counted and
+surfaced in a rate-limited warning. No timing, age, status or IMU fields are stored
 in the dataset.
 
 ## Config — auto-discovered by serial rule
@@ -117,27 +117,28 @@ enumeration, no rule check); un-pinned sides still auto-discover by the second-t
 rule. Use this for a tracker whose serial does not follow the rule, or when enumeration is flaky.
 
 Enable the head camera with `--robot.enable_head_camera=true`. It records `width=1024`,
-`height=768` at dataset FPS 30 — a landscape crop, not the raw sensor frame. The RGB
-stream has exactly one mode, 1088x1920 portrait, and no setting changes that, so a
-landscape frame has to be cut out of the tall one. 1024x768 is 4:3 at 0.94x of the
-largest 4:3 region available, keeping 72.0 x 57.2 of the 72.0 x 104.1 degrees the camera
-actually delivers.
+`height=768` **per eye** at dataset FPS 30, so the stored frame is 768x2048 with the two
+eyes side by side. `--robot.head_camera_eyes=left` (or `right`) records a single eye at
+768x1024 instead, halving both the JPEG decoding and the encoder load.
 
-`--robot.head_camera_crop_bias` slides that window along the tall axis (0.0 top, 0.5
-centre, 1.0 bottom). Set it to suit how the camera is mounted; over a 104-degree vertical
-field the centre is rarely where the subject sits. Changing the size or the bias changes
-the recorded field of view, so episodes either side of such a change are not comparable.
+Only `1024x768` and `1280x960` are accepted, via `--robot.head_camera_width/_height`.
+Both are 4:3, matching the sensor: PICO's camera-access API caps a frame at 2328x1748,
+which is 4:3, so a 16:9 request would crop or stretch rather than widen the field of
+view. An unlisted size is an error rather than a silent fallback. Changing the size or
+the eye selection changes the recorded frame, so episodes either side of such a change
+are not comparable.
 
-Override the native library lookup with
-`--robot.head_camera_library_path=/path/to/libinsight9.so` when needed. During recording,
-RGB or VIO staleness first warns after 0.2 s; if either stream remains unchanged for more
-than 3 s, recording aborts with a timeout instead of silently repeating old head data.
+The two eyes arrive as separate messages and are paired here — by frame sequence when
+the headset stamps both alike, otherwise by timestamp within
+`--robot.head_camera_pair_max_skew_ms` (default 20 ms, against a ~33 ms frame period at
+30 fps). An unpaired read reuses the previous frame rather than stitching two different
+instants together.
 
 Raw acquisition is isolated in
-[`../../cameras/insight/camera_insight.py`](../../cameras/insight/camera_insight.py).
-The camera adapter keeps the original Insight VIO coordinate frame and converts only
-the quaternion representation to `r1..r6`; the robot adapter applies no
-head-to-gripper extrinsic.
+[`../../cameras/pico/camera_pico.py`](../../cameras/pico/camera_pico.py). The headset
+pose is remapped into the same gravity-aligned world frame as `{s}_tcp.*` — unlike the
+Insight VIO pose it replaces, which lived in its own frame — so head and gripper poses
+are directly comparable. The robot adapter applies no head-to-gripper extrinsic.
 
 ## Usage
 
@@ -171,8 +172,9 @@ lerobot-record \
     --display_data=true
 ```
 
-Before enabling it, run `pyinsight-check-env --hidraw`; the Insight HID nodes must be
-readable and writable by the recording user.
+The head camera shares the XenseVR SDK connection with the Pico4 trackers, so the
+headset app must be running and streaming before enabling it. Turning the camera off
+does not drop the trackers' connection, and vice versa.
 
 ## 3D trajectory visualization
 

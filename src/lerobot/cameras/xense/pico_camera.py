@@ -1,9 +1,20 @@
-#xensevr_pc_service_sdk as xrt
-# xrt.has_pico_camera_frame(eye_index)
-# xrt.get_pico_camera_frame_metadata(eye_index)
-# xrt.get_pico_camera_frame_jpeg(eye_index)
-# xrt.get_left_pico_camera_frame()
-# xrt.get_right_pico_camera_frame()
+"""Standalone tkinter viewer for the Pico headset camera. Debug tool only.
+
+This is **not** the recording path and not a lerobot ``Camera`` — it is a
+script with its own ``__main__``, it is not registered in the camera factory,
+and it shows each eye in its own panel without pairing them. For recording,
+see ``lerobot.cameras.pico.PicoCamera``, which pairs the eyes, merges them and
+plugs into ``--robot.enable_head_camera``.
+
+Useful for answering "is the headset streaming at all, and at what size?"
+without starting a whole recording session.
+
+SDK surface used here:
+    xrt.has_pico_camera_frame(eye_index)
+    xrt.get_pico_camera_frame_metadata(eye_index)
+    xrt.get_pico_camera_frame_jpeg(eye_index)
+    xrt.get_left_pico_camera_frame() / get_right_pico_camera_frame()
+"""
 
 import argparse
 import gc

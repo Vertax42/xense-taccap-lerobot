@@ -30,8 +30,10 @@ Observation features (per side ``{s}`` in left/right):
     {s}_wrist                       -- wrist UVC frame (if enable_wrist_camera)
     {s}_tactile_left / {s}_tactile_right -- recorded tactile frames (sensor on
                                        left/right finger), ``rectify`` by default
-    head_rgb                        -- Insight RGB (if enable_head_camera)
-    head_camera.x/y/z/r1..r6        -- Insight-frame raw VIO pose
+    head_rgb                        -- Pico headset camera (if enable_head_camera);
+                                       both eyes side by side unless head_camera_eyes
+                                       selects one
+    head_camera.x/y/z/r1..r6        -- headset pose, same world frame as *_tcp.*
 
 Display-only keys (in ``get_observation()`` and ``display_features``, absent from
 ``observation_features``, so Rerun shows them but the dataset never sees them —
@@ -49,12 +51,19 @@ from typing import Any
 
 import numpy as np
 
-from lerobot.cameras.insight import InsightCamera, InsightCameraConfig
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
+from lerobot.cameras.pico import PicoCamera, PicoCameraConfig
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.cameras.xense.configuration_xense import XenseTactileCameraConfig
+from lerobot.teleoperators.pico4 import xrt_session
+from lerobot.teleoperators.pico4.tracker import PICO_TO_WORLD_R
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
-from lerobot.utils.robot_utils import get_logger
+from lerobot.utils.robot_utils import (
+    get_logger,
+    matrix_to_pose7d,
+    quaternion_to_matrix,
+    quaternion_to_rotation_6d,
+)
 
 from ..robot import Robot
 from ..taccap_gripper import serial_discovery as disco
@@ -148,7 +157,8 @@ class BiTaccapGripper(Robot):
         self._camera_configs = self._discover_camera_configs()
         self.cameras = make_cameras_from_configs(self._camera_configs)
         head_camera = self.cameras.get("head_rgb")
-        self._head_camera = head_camera if isinstance(head_camera, InsightCamera) else None
+        self._head_camera = head_camera if isinstance(head_camera, PicoCamera) else None
+        self._head_pose_warned = False
 
         # Auto-discover the Pico4 motion tracker(s): enumerate from the XenseVR PC
         # service and assign one per side by serial (second-to-last digit, strict).
@@ -250,15 +260,14 @@ class BiTaccapGripper(Robot):
                 )
 
         if self.config.enable_head_camera:
-            configs["head_rgb"] = InsightCameraConfig(
-                library_path=self.config.head_camera_library_path,
+            configs["head_rgb"] = PicoCameraConfig(
                 width=self.config.head_camera_width,
                 height=self.config.head_camera_height,
-                crop_bias=self.config.head_camera_crop_bias,
                 fps=self.config.head_camera_fps,
+                eyes=self.config.head_camera_eyes,
                 startup_timeout_s=self.config.head_camera_startup_timeout_s,
                 stale_after_s=self.config.head_camera_stale_after_s,
-                stale_timeout_s=self.config.head_camera_stale_timeout_s,
+                pair_max_skew_ms=self.config.head_camera_pair_max_skew_ms,
             )
         return configs
 
@@ -285,8 +294,11 @@ class BiTaccapGripper(Robot):
                 features[f"head_camera.{key}"] = float
 
         # Tactile + wrist cameras (keys already left_/right_ prefixed).
+        # ``frame_width`` differs from ``width`` only for the stereo head
+        # camera, where ``width`` is one eye and a merged frame is twice that.
         for cam_name, cam_cfg in self._camera_configs.items():
-            features[cam_name] = (cam_cfg.height, cam_cfg.width, 3)
+            width = getattr(cam_cfg, "frame_width", cam_cfg.width)
+            features[cam_name] = (cam_cfg.height, width, 3)
 
         return features
 
@@ -447,6 +459,45 @@ class BiTaccapGripper(Robot):
         self._is_connected = True
         self.logger.info(f"✅ {self} connected.")
 
+    def _read_head_pose(self) -> dict[str, float]:
+        """Headset pose as ``head_camera.{x,y,z,r1..r6}``, in the world frame.
+
+        Sourced from the Pico SDK rather than the camera, and remapped with
+        the same Pico→world rotation the trackers use — so unlike the Insight
+        VIO pose this replaces, it shares a frame with ``*_tcp.*`` and the two
+        can be compared directly.
+
+        Never raises: the head pose is supplementary, and losing it should not
+        take an episode down. Returns the keys with zeros if the SDK has
+        nothing yet, warning once.
+        """
+        keys = ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6")
+        try:
+            xrt = xrt_session.module()
+            pose = None if xrt is None else xrt.get_headset_pose()
+            if pose is None or len(pose) < 7:
+                raise ValueError(f"headset pose unavailable (got {pose!r})")
+
+            # SDK order is xyzw; everything downstream is wxyz.
+            raw = np.asarray(pose, dtype=np.float64)
+            wxyz = np.array([raw[0], raw[1], raw[2], raw[6], raw[3], raw[4], raw[5]])
+
+            t_world_head = quaternion_to_matrix(wxyz, input_format="wxyz")
+            g = np.eye(4)
+            g[:3, :3] = PICO_TO_WORLD_R
+            t_world_head = g @ t_world_head @ g.T
+
+            out = matrix_to_pose7d(t_world_head, output_format="wxyz")
+            r6d = quaternion_to_rotation_6d(*out[3:7])
+            values = (*out[:3], *r6d)
+        except Exception as e:
+            if not self._head_pose_warned:
+                self._head_pose_warned = True
+                self.logger.warn(f"Head pose unavailable, recording zeros: {e}")
+            values = (0.0,) * 9
+
+        return {f"head_camera.{k}": float(v) for k, v in zip(keys, values, strict=True)}
+
     def disconnect(self) -> None:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected")
@@ -515,16 +566,12 @@ class BiTaccapGripper(Robot):
                     self.logger.warn(f"  [{side}] IMU read failed: {e}")
 
         if self._head_camera is not None:
-            head = self._head_camera.read_snapshot_latest()
-            obs["head_rgb"] = head.rgb
-            for axis, value in zip(("x", "y", "z"), head.vio_position, strict=True):
-                obs[f"head_camera.{axis}"] = value
-            for key, value in zip(("r1", "r2", "r3", "r4", "r5", "r6"), head.vio_rotation_6d, strict=True):
-                obs[f"head_camera.{key}"] = float(value)
+            obs["head_rgb"] = self._read_camera_or_fallback("head_rgb", self._head_camera)
+            obs.update(self._read_head_pose())
 
         for cam_name, cam in self.cameras.items():
-            # The head camera is read above via read_snapshot_latest (RGB + VIO
-            # together); skip it here so it isn't read twice.
+            # Read above together with the headset pose; skip so it isn't read
+            # twice.
             if cam_name == "head_rgb":
                 continue
             obs.update(

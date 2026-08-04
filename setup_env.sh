@@ -428,32 +428,6 @@ install_taccap() {
     echo "[taccap] Done. Verify with: python -c 'import xense.taccap; print(xense.taccap.__file__)'"
 }
 
-# ── Hardware module: Insight head camera --------------------------------------
-
-install_insight() {
-    echo ""
-    echo "══════════════════════════════════════════"
-    echo " pyinsight (Insight camera interface)"
-    echo "══════════════════════════════════════════"
-
-    local SDK_DIR="$PROJECT_ROOT/third_party/pyinsight"
-    if [[ ! -f "$SDK_DIR/pyproject.toml" ]]; then
-        echo "ERROR: $SDK_DIR not found (submodule not initialized)."
-        echo "  Run: git submodule update --init third_party/pyinsight"
-        return 1
-    fi
-
-    uv pip install -e "$SDK_DIR" --no-deps
-
-    python - <<'PY'
-from pyinsight import Insight, find_library
-
-print("Insight ->", Insight)
-print("libinsight9.so ->", find_library())
-PY
-    echo "[insight] Done. Device/HID readiness: pyinsight-check-env --hidraw"
-}
-
 # ── Argument parsing ──────────────────────────────────────────────────────────
 
 # Check if an environment name is provided
@@ -604,7 +578,6 @@ elif [[ "$1" == "--install" ]]; then
     ( install_pico4 ) || echo "[WARN] pico4 installation skipped or failed (see above)"
     install_xense     || echo "[WARN] xense installation skipped or failed (see above)"
     install_taccap    || echo "[WARN] taccap installation skipped or failed (see above)"
-    install_insight  || echo "[WARN] pyinsight installation skipped or failed (see above)"
 
 
     # ── Post-install verification ────────────────────────────────────────────
@@ -623,7 +596,6 @@ xensevr_pc_service_sdk|import importlib.metadata as M, xensevr_pc_service_sdk; p
 xensesdk|import importlib.metadata as M, xensesdk; print("v"+M.version("xensesdk"), "->", xensesdk.__file__)
 xensesdk flash|from xensesdk.flash.linux_backend import LinuxFlashBackend; print("available" if LinuxFlashBackend().available else "NOT available")
 taccap-gripper|import importlib.metadata as M, xense.taccap; print("v"+M.version("taccap-gripper"), "->", xense.taccap.__file__)
-pyinsight|import importlib.metadata as M; from pyinsight import find_library; print("v"+M.version("pyinsight"), "->", find_library())
 VERIFY
 
     echo ""

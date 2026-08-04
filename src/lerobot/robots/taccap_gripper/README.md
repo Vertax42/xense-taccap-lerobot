@@ -12,7 +12,7 @@ observation (state being recorded) and the demonstration action.
 This is the **single-gripper** device: one unit, two tactile pads, one wrist camera, one
 Pico4 tracker, and **unprefixed** observation keys (`tcp.*`, `gripper.pos`,
 `tactile_left` / `tactile_right`, `wrist_cam`). For two units driven as one robot — with
-`left_` / `right_` prefixes and the optional Insight head camera — see
+`left_` / `right_` prefixes and the optional Pico headset camera — see
 [`bi_taccap_gripper`](../bi_taccap_gripper/README.md). Both sides of a two-gripper rig can
 also be run one at a time through this device by passing `--robot.side`.
 

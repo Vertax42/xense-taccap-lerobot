@@ -20,9 +20,8 @@ Paste your HuggingFace access token (write permission) when prompted; it is stor
 `~/.cache/huggingface/token` and persists across sessions.
 
 Also ensure `xense.taccap` is importable (`bash ./setup_env.sh --install`) and, for
-6-DoF pose, the XenseVR PC service + Pico4 trackers are running. For the optional
-Insight head camera, run `pyinsight-check-env --hidraw` and make sure its HID node is
-readable/writable.
+6-DoF pose, the XenseVR PC service + Pico4 trackers are running. The optional head
+camera shares that same connection, so it needs the headset app streaming too.
 
 ## Teleoperate (live Rerun visualization)
 
@@ -83,11 +82,11 @@ A pinned side is used verbatim (no enumeration, no rule check); un-pinned sides 
 auto-discover. Other knobs: `--robot.role=follower` (bind Slave units), `--robot.gripper_open_rad`,
 `--robot.tactile_fps`, `--robot.wrist_camera_width/height/fps`.
 
-The bimanual rig can add the Insight RGB/VIO stream with:
+The bimanual rig can add the Pico headset camera with:
 
 ```bash
     --robot.enable_head_camera=true \
-    --robot.head_camera_crop_bias=0.5 \
+    --robot.head_camera_eyes=both \
 ```
 
 `head_camera_width`/`height` default to 1024x768 and rarely need overriding — the sensor

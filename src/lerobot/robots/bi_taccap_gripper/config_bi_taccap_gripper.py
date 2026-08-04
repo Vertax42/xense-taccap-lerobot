@@ -156,23 +156,27 @@ class BiTaccapGripperConfig(RobotConfig):
     wrist_camera_height: int = 480
     wrist_camera_fps: int = 30
 
-    # ---- Insight head camera ----------------------------------------------
+    # ---- Pico head camera ---------------------------------------------------
     enable_head_camera: bool = False
-    """Enable one process-global Insight RGB/VIO head camera."""
-    head_camera_library_path: str | None = None
+    """Stream the headset's stereo camera as ``head_rgb``, plus the headset
+    pose as ``head_camera.*``. Shares the Pico SDK connection with the
+    trackers, so it needs the headset app streaming either way."""
+    head_camera_eyes: str = "both"
+    """``"both"`` records the eyes side by side, ``"left"``/``"right"`` one of
+    them. Merged frames are ``head_camera_height x (2 * head_camera_width)``."""
     head_camera_width: int = 1024
     head_camera_height: int = 768
-    """Landscape crop taken from the sensor's fixed 1088x1920 portrait frame.
-
-    1024x768 is 4:3 at 0.94x of the largest 4:3 region available, keeping
-    72.0 x 57.2 of the 72.0 x 104.1 degrees the camera actually delivers.
-    """
-    head_camera_crop_bias: float = 0.5
-    """Where that crop sits on the tall axis: 0.0 top, 0.5 centre, 1.0 bottom."""
+    """Per-eye size, following the stereo convention that width is one eye and
+    a merge doubles it. Only 1024x768 and 1280x960 are supported — both 4:3,
+    matching the sensor (PICO's camera-access API caps a frame at 2328x1748,
+    which is 4:3, so a 16:9 request would crop or stretch rather than widen
+    the field of view)."""
     head_camera_fps: int = 30
     head_camera_startup_timeout_s: float = 5.0
     head_camera_stale_after_s: float = 0.2
-    head_camera_stale_timeout_s: float = 3.0
+    head_camera_pair_max_skew_ms: float = 20.0
+    """How far apart the two eyes' timestamps may be and still count as one
+    stereo capture, when their sequence numbers differ."""
 
     def __post_init__(self):
         super().__post_init__()
@@ -184,19 +188,19 @@ class BiTaccapGripperConfig(RobotConfig):
         ):
             raise ValueError(f"role must be leader/master or follower/slave, got {self.role!r}.")
         if self.enable_head_camera:
-            if self.head_camera_width <= 0 or self.head_camera_height <= 0:
-                raise ValueError(
-                    "head_camera_width/head_camera_height must be positive, got "
-                    f"{self.head_camera_width}x{self.head_camera_height}."
-                )
-            if self.head_camera_fps <= 0:
-                raise ValueError("head_camera_fps must be positive.")
-            if self.head_camera_startup_timeout_s <= 0:
-                raise ValueError("head_camera_startup_timeout_s must be positive.")
-            if self.head_camera_stale_after_s <= 0:
-                raise ValueError("head_camera_stale_after_s must be positive.")
-            if self.head_camera_stale_timeout_s <= 0:
-                raise ValueError("head_camera_stale_timeout_s must be positive.")
+            # Delegate to the camera config so there is one definition of what
+            # a valid mode is, rather than a copy here that can drift from it.
+            from lerobot.cameras.pico import PicoCameraConfig
+
+            PicoCameraConfig(
+                width=self.head_camera_width,
+                height=self.head_camera_height,
+                fps=self.head_camera_fps,
+                eyes=self.head_camera_eyes,
+                startup_timeout_s=self.head_camera_startup_timeout_s,
+                stale_after_s=self.head_camera_stale_after_s,
+                pair_max_skew_ms=self.head_camera_pair_max_skew_ms,
+            )
         # One recorded stream per sensor: observation_features declares a single
         # (H, W, 3) per tactile camera, so a second recorded type would silently
         # hand build_dataset_frame a dict instead of an image. Extra live views
