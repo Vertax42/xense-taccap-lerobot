@@ -31,9 +31,9 @@ Observation features:
     tactile_left / tactile_right     -- recorded tactile frames (sensor on
                                         left/right finger), ``rectify`` by default
     wrist_cam                        -- wrist UVC frame (if enable_wrist_camera)
-    head_rgb                         -- Pico headset camera (if enable_head_camera);
-                                        both eyes side by side unless
-                                        head_camera_eyes selects one
+    left_headcam / right_headcam     -- Pico headset camera, one key per eye
+                                        (if enable_head_camera; head_camera_eyes
+                                        can select a single eye)
     head_camera.x/y/z/r1..r6         -- headset pose, same world frame as tcp.*
 
 Display-only keys (present in ``get_observation()`` and in ``display_features``,
@@ -213,24 +213,65 @@ def tactile_camera_output_types(record_types: list[str], display_types: list[str
 HEAD_POSE_KEYS = ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6")
 
 
-def build_head_camera_config(config: Any) -> Any:
-    """``PicoCameraConfig`` from a robot config's ``head_camera_*`` fields.
+HEAD_CAMERA_KEYS = {"left": "left_headcam", "right": "right_headcam"}
+
+
+def build_head_camera_configs(config: Any) -> dict[str, Any]:
+    """One ``PicoCameraConfig`` per recorded eye, keyed by observation name.
+
+    Each eye becomes its own camera and its own video key —
+    ``left_headcam`` / ``right_headcam`` — rather than one merged
+    double-width frame. Two independent streams are what the headset
+    actually sends, so this is the shape with the least translation, and it
+    lets a consumer take one eye without decoding both.
+
+    The cost is that nothing downstream can see whether a given frame's two
+    eyes came from the same capture; ``read_head_camera_skew`` exists to
+    keep that visible.
 
     Shared so the single and bimanual robots cannot drift apart on which
-    fields feed the camera; both expose the same ``--robot.head_camera_*``
+    fields feed the cameras; both expose the same ``--robot.head_camera_*``
     surface.
     """
     from lerobot.cameras.pico import PicoCameraConfig
 
-    return PicoCameraConfig(
-        width=config.head_camera_width,
-        height=config.head_camera_height,
-        fps=config.head_camera_fps,
-        eyes=config.head_camera_eyes,
-        startup_timeout_s=config.head_camera_startup_timeout_s,
-        stale_after_s=config.head_camera_stale_after_s,
-        pair_max_skew_ms=config.head_camera_pair_max_skew_ms,
-    )
+    eyes = ("left", "right") if config.head_camera_eyes == "both" else (config.head_camera_eyes,)
+    return {
+        HEAD_CAMERA_KEYS[eye]: PicoCameraConfig(
+            width=config.head_camera_width,
+            height=config.head_camera_height,
+            fps=config.head_camera_fps,
+            eyes=eye,
+            startup_timeout_s=config.head_camera_startup_timeout_s,
+            stale_after_s=config.head_camera_stale_after_s,
+            pair_max_skew_ms=config.head_camera_pair_max_skew_ms,
+        )
+        for eye in eyes
+    }
+
+
+def read_head_camera_skew(cameras: dict[str, Any], max_skew_ms: float) -> float | None:
+    """How far apart the two head-camera eyes' last frames are, in ms.
+
+    Returns None when both eyes are not being recorded, or when either has
+    not produced a frame yet. Returns a negative value to mean "same
+    sequence number", which is a definitive match and makes the timestamp
+    comparison moot.
+
+    Recording the eyes as separate keys drops the pairing guarantee the
+    merged frame had, so this is the only thing standing between a
+    mis-synchronised stereo pair and a dataset that looks fine.
+    """
+    left, right = cameras.get("left_headcam"), cameras.get("right_headcam")
+    if left is None or right is None:
+        return None
+    lm, rm = left.last_frame_meta(), right.last_frame_meta()
+    if lm is None or rm is None:
+        return None
+    if int(lm["frame_sequence"]) == int(rm["frame_sequence"]):
+        return -1.0
+    skew = abs(int(lm["timestamp_ns"]) - int(rm["timestamp_ns"])) / 1e6
+    return skew if skew > max_skew_ms else 0.0
 
 
 def read_head_pose(logger: Any, warned: bool) -> tuple[dict[str, float], bool]:
@@ -358,6 +399,8 @@ class TaccapGripper(Robot):
         self._camera_configs = self._build_camera_configs(self._side)
         self.cameras = make_cameras_from_configs(self._camera_configs)
         self._head_pose_warned = False
+        self._headcam_skew_count = 0
+        self._headcam_warn_at = 0.0
 
         # Auto-discover the Pico4 motion tracker for this unit's side: enumerate
         # from the XenseVR PC service and pick the one whose serial's second-to-last
@@ -457,7 +500,7 @@ class TaccapGripper(Robot):
             )
 
         if self.config.enable_head_camera:
-            configs["head_rgb"] = build_head_camera_config(self.config)
+            configs.update(build_head_camera_configs(self.config))
         return configs
 
     # ------------------------------------------------------------------ schema
@@ -713,8 +756,23 @@ class TaccapGripper(Robot):
             head, self._head_pose_warned = read_head_pose(self.logger, self._head_pose_warned)
             obs.update(head)
 
-        # ``head_rgb`` needs no special case here — it is an ordinary camera,
-        # and its pose comes from the SDK above rather than from the frame.
+        if self.config.enable_head_camera:
+            skew = read_head_camera_skew(self.cameras, self.config.head_camera_pair_max_skew_ms)
+            if skew is not None and skew > 0.0:
+                self._headcam_skew_count += 1
+                now = time.monotonic()
+                if now - self._headcam_warn_at > 5.0:
+                    self._headcam_warn_at = now
+                    self.logger.warn(
+                        f"Head camera eyes are {skew:.1f}ms apart (limit "
+                        f"{self.config.head_camera_pair_max_skew_ms:.0f}ms); "
+                        f"{self._headcam_skew_count} frames so far. left_headcam and "
+                        "right_headcam are recorded as separate keys, so a mismatched "
+                        "pair is not otherwise visible in the dataset."
+                    )
+
+        # The head cameras need no special case here — they are ordinary
+        # cameras, and the pose comes from the SDK above, not from a frame.
         for cam_name, cam in self.cameras.items():
             obs.update(split_camera_read(cam_name, cam.async_read(), self._tactile_display_keys.get(cam_name)))
 

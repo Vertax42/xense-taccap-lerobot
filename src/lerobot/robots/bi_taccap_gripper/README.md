@@ -25,7 +25,7 @@ Per side `{s}` ∈ {left, right}:
 | `{s}_wrist`                              | `{s}_enable_wrist_camera`      | wrist UVC frame                                                                           |
 | `{s}_tactile_left` / `{s}_tactile_right` | auto-discovered                | **recorded** tactile frame from the left / right finger sensor (`rectify`)                |
 | `{s}_tactile_{left,right}_difference`    | `tactile_display_output_types` | **display-only** amplified-deformation view of the same read — Rerun only, never recorded |
-| `head_rgb`                               | `enable_head_camera`           | headset camera frame, both eyes side by side unless `head_camera_eyes` selects one        |
+| `left_headcam` / `right_headcam`         | `enable_head_camera`           | headset camera, one key per **eye** (not per arm) — `head_camera_eyes` can select one     |
 | `head_camera.x/y/z`                      | `enable_head_camera`           | headset position, same world frame as `{s}_tcp.*`                                         |
 | `head_camera.r1..r6`                     | `enable_head_camera`           | headset orientation as the first two rotation-matrix columns                               |
 
@@ -117,9 +117,12 @@ enumeration, no rule check); un-pinned sides still auto-discover by the second-t
 rule. Use this for a tracker whose serial does not follow the rule, or when enumeration is flaky.
 
 Enable the head camera with `--robot.enable_head_camera=true`. It records `width=1024`,
-`height=768` **per eye** at dataset FPS 30, so the stored frame is 768x2048 with the two
-eyes side by side. `--robot.head_camera_eyes=left` (or `right`) records a single eye at
-768x1024 instead, halving both the JPEG decoding and the encoder load.
+`height=768` at dataset FPS 30 as **two keys, one per eye** — `left_headcam` and
+`right_headcam`, each 768x1024. `--robot.head_camera_eyes=left` (or `right`) records a
+single eye, halving both the JPEG decoding and the encoder load.
+
+> These names refer to the headset's **eyes**, not to the left/right arm. There is one
+> headset on a bimanual rig, so they are not per-arm the way `{s}_wrist` is.
 
 Only `1024x768` and `1280x960` are accepted, via `--robot.head_camera_width/_height`.
 Both are 4:3, matching the sensor: PICO's camera-access API caps a frame at 2328x1748,
@@ -128,11 +131,13 @@ view. An unlisted size is an error rather than a silent fallback. Changing the s
 the eye selection changes the recorded frame, so episodes either side of such a change
 are not comparable.
 
-The two eyes arrive as separate messages and are paired here — by frame sequence when
-the headset stamps both alike, otherwise by timestamp within
+The two eyes arrive as separate messages, each with its own sequence number and
+timestamp, and recording them under separate keys means a mismatched pair leaves no
+trace in the data. So each frame the two cameras' newest frames are compared: identical
+sequence numbers are a definitive match, otherwise their timestamps must agree within
 `--robot.head_camera_pair_max_skew_ms` (default 20 ms, against a ~33 ms frame period at
-30 fps). An unpaired read reuses the previous frame rather than stitching two different
-instants together.
+30 fps). Exceeding it does not stop recording — it raises a rate-limited warning naming
+the measured skew, so the condition is visible rather than silent.
 
 Raw acquisition is isolated in
 [`../../cameras/pico/camera_pico.py`](../../cameras/pico/camera_pico.py). The headset

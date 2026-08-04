@@ -66,6 +66,11 @@ class PicoCamera(Camera):
         self._last_rgb: NDArray[np.uint8] | None = None
         self._last_host_ns: int | None = None
         self._last_seq: dict[str, int | None] = dict.fromkeys(self._eyes)
+        # Metadata of the frame behind the last successful read, per eye. Two
+        # single-eye cameras recording separate keys have no pairing check of
+        # their own — whoever owns both can compare these to catch left and
+        # right drifting apart, which is otherwise invisible in the dataset.
+        self._last_meta: dict[str, dict[str, Any]] = {}
         # Reusing the previous frame is normal on a stereo mismatch, but it is
         # also how a genuinely broken stream looks, so it is counted and
         # surfaced periodically rather than passed over in silence.
@@ -74,7 +79,7 @@ class PicoCamera(Camera):
         self._last_warn_ns = 0
 
     def __str__(self) -> str:
-        return f"PicoCamera(head_rgb, eyes={self.config.eyes})"
+        return f"PicoCamera(eyes={self.config.eyes})"
 
     @property
     def is_connected(self) -> bool:
@@ -88,7 +93,7 @@ class PicoCamera(Camera):
         node, so there is nothing to scan; whether frames are flowing only
         becomes knowable after ``connect()``.
         """
-        return [{"name": "Pico head camera", "type": "pico", "id": "head_rgb"}]
+        return [{"name": "Pico head camera", "type": "pico", "id": "pico_headcam"}]
 
     def connect(self, warmup: bool = True) -> None:
         if self.is_connected:
@@ -197,6 +202,7 @@ class PicoCamera(Camera):
                 return self._reuse_or_fail(f"{eye} eye JPEG failed to decode")
             planes.append(rgb)
             self._last_seq[eye] = int(meta["frame_sequence"])
+            self._last_meta[eye] = meta
 
         self._last_rgb = planes[0] if len(planes) == 1 else np.hstack(planes)
         self._last_host_ns = time.time_ns()
@@ -216,6 +222,18 @@ class PicoCamera(Camera):
             return True
         skew_ms = abs(int(left["timestamp_ns"]) - int(right["timestamp_ns"])) / 1e6
         return skew_ms <= self.config.pair_max_skew_ms
+
+    def last_frame_meta(self, eye: str | None = None) -> dict[str, Any] | None:
+        """Metadata behind this camera's last successful read.
+
+        ``eye`` defaults to the only eye when this camera reads one. Returns
+        None before the first successful read.
+        """
+        if eye is None:
+            if len(self._eyes) != 1:
+                raise ValueError(f"{self} reads {len(self._eyes)} eyes; name which one.")
+            eye = self._eyes[0]
+        return self._last_meta.get(eye)
 
     def _reuse_or_fail(self, why: str) -> NDArray[np.uint8]:
         if self._last_rgb is None:

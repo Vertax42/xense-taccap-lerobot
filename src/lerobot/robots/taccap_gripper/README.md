@@ -448,10 +448,10 @@ at connect). Leave it unset (default) to keep auto-discovery.
 
 - **Wrist** → obs key `wrist_cam`; `--robot.enable_wrist_camera=false` skips. Tune
   `--robot.wrist_camera_width/_height/_fps`.
-- **Head** → obs key `head_rgb`, off by default; `--robot.enable_head_camera=true` streams
-  the Pico headset's stereo camera. `--robot.head_camera_width/_height` accept `1024x768`
-  (default) or `1280x960` **per eye**, so a merged frame is 768x2048 or 960x2560;
-  `--robot.head_camera_eyes=left` (or `right`) records one eye instead. It shares the
+- **Head** → obs keys `left_headcam` / `right_headcam`, off by default;
+  `--robot.enable_head_camera=true` streams the Pico headset's stereo camera as **one key
+  per eye**. `--robot.head_camera_width/_height` accept `1024x768` (default) or `1280x960`;
+  `--robot.head_camera_eyes=left` (or `right`) records a single eye. It shares the
   XenseVR SDK connection with the tracker, so the headset app must be streaming. There is
   **one headset**, so this is the same view the bimanual robot records — running two
   single-arm processes does not give two independent head views. Details:
@@ -493,7 +493,7 @@ column subset of a bimanual one.
 | `imu.mag.{x,y,z}`               | `enable_imu`          | TacCap IMU                                             | float (µT)                                           |
 | `tactile_left`, `tactile_right` | auto-discovered       | Xense sensor on that finger, recorded view (`rectify`) | uint8 (H, W, 3), landscape — currently (400, 700, 3) |
 | `wrist_cam`                     | `enable_wrist_camera` | wrist UVC via `cameras/`                               | uint8 (H, W, 3)                                      |
-| `head_rgb`                      | `enable_head_camera`  | Pico headset camera, eyes side by side by default      | uint8 (H, 2W, 3) — default (768, 2048, 3)            |
+| `left_headcam`, `right_headcam` | `enable_head_camera`  | Pico headset camera, one key per eye                   | uint8 (H, W, 3) — default (768, 1024, 3)             |
 | `head_camera.x/y/z/r1..r6`      | `enable_head_camera`  | headset pose, same world frame as `tcp.*`              | float                                                |
 
 The flags are all `--robot.*` (e.g. `--robot.enable_imu=true`); the tracker and gripper

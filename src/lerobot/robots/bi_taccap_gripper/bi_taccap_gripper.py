@@ -30,9 +30,9 @@ Observation features (per side ``{s}`` in left/right):
     {s}_wrist                       -- wrist UVC frame (if enable_wrist_camera)
     {s}_tactile_left / {s}_tactile_right -- recorded tactile frames (sensor on
                                        left/right finger), ``rectify`` by default
-    head_rgb                        -- Pico headset camera (if enable_head_camera);
-                                       both eyes side by side unless head_camera_eyes
-                                       selects one
+    left_headcam / right_headcam    -- Pico headset camera, one key per eye (if
+                                       enable_head_camera). NOTE these name the
+                                       headset's EYES, not the left/right arm.
     head_camera.x/y/z/r1..r6        -- headset pose, same world frame as *_tcp.*
 
 Display-only keys (in ``get_observation()`` and ``display_features``, absent from
@@ -52,7 +52,6 @@ from typing import Any
 import numpy as np
 
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
-from lerobot.cameras.pico import PicoCamera
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.cameras.xense.configuration_xense import XenseTactileCameraConfig
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
@@ -63,8 +62,9 @@ from ..taccap_gripper import serial_discovery as disco
 from ..taccap_gripper.ee_transform import resolve_tracker_to_ee
 from ..taccap_gripper.taccap_gripper import (
     HEAD_POSE_KEYS,
-    build_head_camera_config,
+    build_head_camera_configs,
     prewarm_tactile_config_cache,
+    read_head_camera_skew,
     read_head_pose,
     resolve_wrist_camera_path,
     split_camera_read,
@@ -152,9 +152,9 @@ class BiTaccapGripper(Robot):
         # powered at construction); wrist cameras are filesystem-only.
         self._camera_configs = self._discover_camera_configs()
         self.cameras = make_cameras_from_configs(self._camera_configs)
-        head_camera = self.cameras.get("head_rgb")
-        self._head_camera = head_camera if isinstance(head_camera, PicoCamera) else None
         self._head_pose_warned = False
+        self._headcam_skew_count = 0
+        self._headcam_warn_at = 0.0
 
         # Auto-discover the Pico4 motion tracker(s): enumerate from the XenseVR PC
         # service and assign one per side by serial (second-to-last digit, strict).
@@ -256,7 +256,7 @@ class BiTaccapGripper(Robot):
                 )
 
         if self.config.enable_head_camera:
-            configs["head_rgb"] = build_head_camera_config(self.config)
+            configs.update(build_head_camera_configs(self.config))
         return configs
 
     # ------------------------------------------------------------------ schema
@@ -514,12 +514,27 @@ class BiTaccapGripper(Robot):
                 except Exception as e:
                     self.logger.warn(f"  [{side}] IMU read failed: {e}")
 
-        if self._head_camera is not None:
+        if self.config.enable_head_camera:
             head, self._head_pose_warned = read_head_pose(self.logger, self._head_pose_warned)
             obs.update(head)
 
-        # ``head_rgb`` needs no special case here — it is an ordinary camera,
-        # and its pose comes from the SDK above rather than from the frame.
+        if self.config.enable_head_camera:
+            skew = read_head_camera_skew(self.cameras, self.config.head_camera_pair_max_skew_ms)
+            if skew is not None and skew > 0.0:
+                self._headcam_skew_count += 1
+                now = time.monotonic()
+                if now - self._headcam_warn_at > 5.0:
+                    self._headcam_warn_at = now
+                    self.logger.warn(
+                        f"Head camera eyes are {skew:.1f}ms apart (limit "
+                        f"{self.config.head_camera_pair_max_skew_ms:.0f}ms); "
+                        f"{self._headcam_skew_count} frames so far. left_headcam and "
+                        "right_headcam are recorded as separate keys, so a mismatched "
+                        "pair is not otherwise visible in the dataset."
+                    )
+
+        # The head cameras need no special case here — they are ordinary
+        # cameras, and the pose comes from the SDK above, not from a frame.
         # Insight bundled the two, which is why this used to be read apart.
         for cam_name, cam in self.cameras.items():
             obs.update(

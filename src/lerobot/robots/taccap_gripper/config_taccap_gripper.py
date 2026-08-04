@@ -162,7 +162,8 @@ class TaccapGripperConfig(RobotConfig):
 
     # ---- Pico head camera ---------------------------------------------------
     enable_head_camera: bool = False
-    """Stream the headset's stereo camera as ``head_rgb``, plus the headset
+    """Stream the headset's stereo camera as ``left_headcam`` /
+    ``right_headcam`` (one key per eye), plus the headset
     pose as ``head_camera.*``. There is one headset regardless of how many
     grippers are in use, so this is the same stream the bimanual robot records
     — do not enable it on two single-arm processes at once and expect two
@@ -190,9 +191,9 @@ class TaccapGripperConfig(RobotConfig):
         if self.enable_head_camera:
             # Delegate to the camera config so there is one definition of what
             # a valid mode is, rather than a copy here that can drift from it.
-            from .taccap_gripper import build_head_camera_config
+            from .taccap_gripper import build_head_camera_configs
 
-            build_head_camera_config(self)
+            build_head_camera_configs(self)
 
         if self.role.strip().lower() not in ("leader", "master", "follower", "slave"):
             raise ValueError(f"role must be leader/master or follower/slave, got {self.role!r}.")

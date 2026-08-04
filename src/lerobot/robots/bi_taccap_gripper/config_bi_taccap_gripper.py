@@ -158,7 +158,8 @@ class BiTaccapGripperConfig(RobotConfig):
 
     # ---- Pico head camera ---------------------------------------------------
     enable_head_camera: bool = False
-    """Stream the headset's stereo camera as ``head_rgb``, plus the headset
+    """Stream the headset's stereo camera as ``left_headcam`` /
+    ``right_headcam`` (one key per eye), plus the headset
     pose as ``head_camera.*``. Shares the Pico SDK connection with the
     trackers, so it needs the headset app streaming either way."""
     head_camera_eyes: str = "both"
@@ -190,9 +191,9 @@ class BiTaccapGripperConfig(RobotConfig):
         if self.enable_head_camera:
             # Delegate to the camera config so there is one definition of what
             # a valid mode is, rather than a copy here that can drift from it.
-            from ..taccap_gripper.taccap_gripper import build_head_camera_config
+            from ..taccap_gripper.taccap_gripper import build_head_camera_configs
 
-            build_head_camera_config(self)
+            build_head_camera_configs(self)
         # One recorded stream per sensor: observation_features declares a single
         # (H, W, 3) per tactile camera, so a second recorded type would silently
         # hand build_dataset_frame a dict instead of an image. Extra live views
