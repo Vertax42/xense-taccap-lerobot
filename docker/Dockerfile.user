@@ -1,79 +1,99 @@
-# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
+# syntax=docker/dockerfile:1.7
+
+# LeRobot-Xense runtime/development image.
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# The project relies on conda C++/CUDA libraries and several native hardware
+# SDKs, so the regular python:slim LeRobot image is not sufficient here.
+ARG UBUNTU_VERSION=22.04
+FROM ubuntu:${UBUNTU_VERSION}
 
-# This Dockerfile is designed for a lerobot user who wants to
-# experiment with the project. It starts from an Python Slim base image.
+ARG TARGETARCH
+ARG MINIFORGE_VERSION=25.3.1-0
 
-# docker build -f docker/Dockerfile.user -t lerobot-user .
-# docker run -it --rm lerobot-user
+# Check the build context before downloading the large Conda/CUDA stack.
+RUN --mount=type=bind,source=.,target=/context,ro \
+    test -f /context/third_party/XenseVR-PC-Service/RoboticsService/PXREARobotSDK/build.sh \
+    && test -f /context/third_party/taccap-gripper/pyproject.toml \
+    && test -f /context/third_party/pyinsight/pyproject.toml \
+    || (echo "Missing git submodules. Run: git submodule update --init --recursive" >&2; exit 1)
 
-# Configure the base image
-ARG PYTHON_VERSION=3.12
-FROM python:${PYTHON_VERSION}-slim
-
-# Configure environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
-    MUJOCO_GL=egl \
-    PATH=/lerobot/.venv/bin:$PATH
+    TZ=Etc/UTC
 
-# Install system dependencies and uv (as root)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential git curl libglib2.0-0 libegl1-mesa-dev ffmpeg \
-    libusb-1.0-0-dev speech-dispatcher libgeos-dev portaudio19-dev \
-    cmake pkg-config ninja-build \
-    && curl -LsSf https://astral.sh/uv/install.sh | sh \
-    && mv /root/.local/bin/uv /usr/local/bin/uv \
-    && useradd --create-home --shell /bin/bash user_lerobot \
-    && usermod -aG sudo user_lerobot \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+# Runtime libraries cover USB/HID/video/X11 access. Build tools are retained on
+# purpose: taccap-gripper and the Pico4 Python extension are editable installs,
+# making the image useful for both end users and hardware SDK development.
+RUN test "${TARGETARCH}" = "amd64" || \
+        (echo "LeRobot-Xense Docker currently supports linux/amd64 only" >&2; exit 1) \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        build-essential \
+        ca-certificates \
+        cmake \
+        curl \
+        ffmpeg \
+        git \
+        git-lfs \
+        libegl1 \
+        libgl1 \
+        libglib2.0-0 \
+        libhidapi-hidraw0 \
+        libsm6 \
+        libudev-dev \
+        libusb-1.0-0-dev \
+        libx11-6 \
+        libxext6 \
+        libxrender1 \
+        ninja-build \
+        pkg-config \
+        sudo \
+        tini \
+        udev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Create application directory and set permissions
-WORKDIR /lerobot
-RUN chown -R user_lerobot:user_lerobot /lerobot
+# Miniforge supplies mamba, which is the project's supported solver. Pinning the
+# installer avoids silently changing the base environment between image builds.
+RUN curl -fsSL \
+        "https://github.com/conda-forge/miniforge/releases/download/${MINIFORGE_VERSION}/Miniforge3-${MINIFORGE_VERSION}-Linux-x86_64.sh" \
+        -o /tmp/miniforge.sh \
+    && bash /tmp/miniforge.sh -b -p /opt/conda \
+    && rm /tmp/miniforge.sh \
+    && /opt/conda/bin/conda config --system --set channel_priority strict \
+    && /opt/conda/bin/conda clean -afy
 
-# Switch to the non-root user
-USER user_lerobot
+ENV PATH=/opt/conda/envs/xense-taccap/bin:/opt/conda/bin:${PATH} \
+    CONDA_DEFAULT_ENV=xense-taccap \
+    CONDA_PREFIX=/opt/conda/envs/xense-taccap \
+    HF_HOME=/root/.cache/huggingface \
+    HF_LEROBOT_HOME=/data/lerobot \
+    TORCH_HOME=/root/.cache/torch \
+    TRITON_CACHE_DIR=/root/.cache/triton \
+    UV_HTTP_TIMEOUT=300 \
+    PYTHONUNBUFFERED=1 \
+    QT_X11_NO_MITSHM=1 \
+    NVIDIA_DRIVER_CAPABILITIES=all
 
-# Environment variables for the testing
-ENV HOME=/home/user_lerobot \
-    HF_HOME=/home/user_lerobot/.cache/huggingface \
-    HF_LEROBOT_HOME=/home/user_lerobot/.cache/huggingface/lerobot \
-    TORCH_HOME=/home/user_lerobot/.cache/torch \
-    TRITON_CACHE_DIR=/home/user_lerobot/.cache/triton
+WORKDIR /opt/lerobot
 
-# Create the virtual environment
-# We use a virtual environment inside the container—even though the container itself \
-# provides isolation—to closely resemble local development and allow users to \
-# run other Python projects in the same container without dependency conflicts.
-RUN uv venv
+# Resolve the expensive conda layer before copying frequently changing source.
+COPY conda_environment.yaml /tmp/conda_environment.yaml
+RUN mamba env create -f /tmp/conda_environment.yaml \
+    && mamba clean -afy \
+    && rm /tmp/conda_environment.yaml
 
-# Install Python dependencies for caching
-COPY --chown=user_lerobot:user_lerobot setup.py pyproject.toml README.md MANIFEST.in ./
-COPY --chown=user_lerobot:user_lerobot src/ src/
+COPY . /opt/lerobot
 
-ARG UNBOUND_DEPS=false
+# Reuse the canonical installer so Docker and bare-metal environments receive
+# exactly the same version checks, native bindings and vendor runtime fixes.
+RUN bash ./setup_env.sh --install \
+    && mamba clean -afy \
+    && rm -rf /root/.cache/pip /root/.cache/uv
 
-RUN if [ "$UNBOUND_DEPS" = "true" ]; then \
-    sed -i 's/,[[:space:]]*<[0-9\.]*//g' pyproject.toml; \
-    echo "Dependencies unbound:" && cat pyproject.toml; \
-    fi
+RUN install -m 0755 docker/entrypoint.sh /usr/local/bin/lerobot-entrypoint \
+    && mkdir -p /data "${HF_HOME}" "${TORCH_HOME}" "${TRITON_CACHE_DIR}"
 
-RUN uv pip install --no-cache ".[all]"
+VOLUME ["/data", "/root/.cache/huggingface", "/root/.cache/torch"]
 
-# Copy the rest of the application code
-# Make sure to have the git-LFS files for testing
-COPY --chown=user_lerobot:user_lerobot . .
-
-# Set the default command
-CMD ["/bin/bash"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/lerobot-entrypoint"]
+CMD ["bash"]
