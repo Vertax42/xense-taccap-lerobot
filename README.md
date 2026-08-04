@@ -6,9 +6,10 @@ It is scoped to a single device: the **TacCap-Gripper** (**TacCap** = _Tactile
 Capture_ Gripper) — a handheld **UMI** leader gripper for tactile data
 collection. This branch tracks **upstream lerobot v5.1**, slimmed to the
 TacCap-Gripper (single + bimanual) and its **Pico4** teleoperator/tracker, with
-Xense tactile cameras layered on top. The bimanual rig can optionally record the
-**Pico headset camera** as a stereo RGB frame plus the headset pose, in the same
-position + 6D rotation format and the same world frame as the gripper trackers. See
+Xense tactile cameras layered on top. Either rig can optionally record the
+**Pico headset camera** — one key per eye, `left_head` and `right_head` — plus
+the headset pose, in the same position + 6D rotation format and the same world
+frame as the gripper trackers, so head and hands can be read against each other. See
 [`src/lerobot/robots/taccap_gripper/README.md`](src/lerobot/robots/taccap_gripper/README.md)
 for device-specific usage. For generic lerobot usage (datasets, policies,
 training scripts) refer to the
@@ -191,6 +192,41 @@ mmcli -L                                                               # gripper
 
 Revert by deleting the rule file and reloading. (Alternatively, on a dedicated
 robot PC with no cellular modem: `sudo systemctl disable --now ModemManager`.)
+
+## 🥽 Pico headset camera (optional)
+
+Off by default. `--robot.enable_head_camera=true` records the headset's stereo
+camera as **one key per eye** — `left_head` and `right_head` — plus the headset
+pose under `head_camera.*`. Works on both `taccap_gripper` and
+`bi_taccap_gripper`.
+
+```bash
+lerobot-record --robot.type=bi_taccap_gripper \
+    --robot.enable_head_camera=true \
+    --dataset.repo_id=<org>/<name> --dataset.single_task='...'
+```
+
+- **The names are the headset's eyes, not the arms.** On a bimanual rig
+  `{side}_wrist` is per-arm, but there is one headset, so the prefix means
+  something different here.
+- **`--robot.head_camera_eyes=left`** (or `right`) records a single eye, halving
+  the JPEG decoding and the encoder load.
+- **`--robot.head_camera_width/_height`** accept `1024x768` (default) or
+  `1280x960`. Both are 4:3, matching the sensor. An unlisted size is an error
+  rather than a silent downgrade, and so is a first frame whose size disagrees
+  with the config — rescaling would quietly change the recorded field of view.
+- **`head_camera.*` shares the world frame with `tcp.*`**, remapped through the
+  same Pico→world rotation the tracker uses, so the headset and the grippers can
+  be compared directly and are drawn in one 3D scene.
+- **It shares the XenseVR SDK connection with the trackers**, so the headset app
+  must be running and streaming. Turning the camera off does not drop the
+  trackers' connection, and vice versa.
+
+The two eyes arrive as separate messages, so a background thread collects them
+and holds a pair back until both halves of one capture are in — reading the SDK
+directly from the record loop caught one eye updated and not the other on 7% of
+frames. A pair that still fails to match raises a rate-limited warning naming the
+skew rather than being recorded silently.
 
 ## 🔑 The `LeRobotDataset` format
 
