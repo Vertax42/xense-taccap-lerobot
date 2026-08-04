@@ -64,6 +64,16 @@ def _quat_xyzw_from_6d(r6d) -> list[float]:
     return [float(qx), float(qy), float(qz), float(qw)]
 
 
+def _eye_order(key: str) -> tuple[int, str]:
+    """Sort camera keys left-then-right, as they sit on the operator.
+
+    Plain sorting puts ``right_headcam`` before ``left_headcam``, which reads
+    backwards next to a pair of images.
+    """
+    side = 0 if key.startswith("left") else 1 if key.startswith("right") else 2
+    return (side, key)
+
+
 class TaccapTrajectoryViz:
     """Stateful Rerun 3D trajectory overlay for one TacCap (single or bimanual).
 
@@ -175,37 +185,43 @@ class TaccapTrajectoryViz:
         """Lay the viewer out by what each stream is for, not by how many there are.
 
         Rerun's auto-layout gives every entity an equal tile, which buries the
-        two streams an operator actually watches - the head view and the wrist
-        views - under four tactile pads and thirty scalar plots. So: head camera
-        large on the left, the views you glance at stacked on the right, tactiles
-        in their own grid, and the scalars grouped into tabs rather than piled
-        into one illegible plot.
+        streams an operator actually watches under four tactile pads and thirty
+        scalar plots. So: the 3D trail takes the large left tile, the cameras
+        stack down the right in the order you read them — head for context,
+        wrists for the close-up, tactiles last — and the scalars are grouped
+        into tabs rather than piled into one illegible plot.
         """
         img_keys = self._image_keys()
-        head = [k for k in img_keys if k.startswith("head")]
-        wrist = [k for k in img_keys if "wrist" in k]
+        # Match on "headcam", not a "head" prefix: the keys are left_headcam /
+        # right_headcam, so a prefix test silently dropped them into the
+        # tactile bucket and they ended up in that grid.
+        head = sorted((k for k in img_keys if "headcam" in k), key=_eye_order)
+        wrist = sorted((k for k in img_keys if "wrist" in k), key=_eye_order)
         tactile = [k for k in img_keys if k not in head and k not in wrist]
 
         def view(key: str) -> rrb.Spatial2DView:
             return rrb.Spatial2DView(name=key, origin=f"/observation.{key}")
 
-        # Left column: the head camera if present, else the 3D trail, else wrists.
+        # Left column: the 3D trail when there is one, else the largest camera
+        # group, so the biggest tile is never an empty panel.
         primary = None
-        if head:
-            primary = rrb.Vertical(*(view(k) for k in head))
-        elif self.has_poses:
+        if self.has_poses:
             # line_grid=False drops Rerun's built-in floor grid; we only want the
             # origin axes, gripper markers and trail.
             primary = rrb.Spatial3DView(name="trajectory", origin="/world", line_grid=False)
 
-        # Right column: 3D trail (when the head took the left slot), wrists, tactiles.
+        # Right column, top to bottom: head cameras, then the wrists directly
+        # under them (they show the same scene at two scales, so reading down
+        # the column goes from context to close-up), then the tactile grid.
         secondary: list[Any] = []
-        if head and self.has_poses:
-            secondary.append(rrb.Spatial3DView(name="trajectory", origin="/world", line_grid=False))
+        if head:
+            secondary.append(rrb.Horizontal(*(view(k) for k in head), name="head"))
         if wrist:
             secondary.append(rrb.Horizontal(*(view(k) for k in wrist), name="wrist"))
         if tactile:
             secondary.append(rrb.Grid(*(view(k) for k in tactile), name="tactile"))
+        if primary is None and secondary:
+            primary, secondary = secondary[0], secondary[1:]
 
         if primary is not None and secondary:
             top = rrb.Horizontal(primary, rrb.Vertical(*secondary), column_shares=[3, 2])
