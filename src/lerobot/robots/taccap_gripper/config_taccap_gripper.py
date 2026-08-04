@@ -162,8 +162,8 @@ class TaccapGripperConfig(RobotConfig):
 
     # ---- Pico head camera ---------------------------------------------------
     enable_head_camera: bool = False
-    """Stream the headset's stereo camera as ``left_headcam`` /
-    ``right_headcam`` (one key per eye), plus the headset
+    """Stream the headset's stereo camera as ``left_head`` /
+    ``right_head`` (one key per eye), plus the headset
     pose as ``head_camera.*``. There is one headset regardless of how many
     grippers are in use, so this is the same stream the bimanual robot records
     — do not enable it on two single-arm processes at once and expect two

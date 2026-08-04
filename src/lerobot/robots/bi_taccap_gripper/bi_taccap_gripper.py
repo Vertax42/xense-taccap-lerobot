@@ -30,7 +30,7 @@ Observation features (per side ``{s}`` in left/right):
     {s}_wrist                       -- wrist UVC frame (if enable_wrist_camera)
     {s}_tactile_left / {s}_tactile_right -- recorded tactile frames (sensor on
                                        left/right finger), ``rectify`` by default
-    left_headcam / right_headcam    -- Pico headset camera, one key per eye (if
+    left_head / right_head    -- Pico headset camera, one key per eye (if
                                        enable_head_camera). NOTE these name the
                                        headset's EYES, not the left/right arm.
     head_camera.x/y/z/r1..r6        -- headset pose, same world frame as *_tcp.*
@@ -153,8 +153,8 @@ class BiTaccapGripper(Robot):
         self._camera_configs = self._discover_camera_configs()
         self.cameras = make_cameras_from_configs(self._camera_configs)
         self._head_pose_warned = False
-        self._headcam_skew_count = 0
-        self._headcam_warn_at = 0.0
+        self._head_skew_count = 0
+        self._head_warn_at = 0.0
 
         # Auto-discover the Pico4 motion tracker(s): enumerate from the XenseVR PC
         # service and assign one per side by serial (second-to-last digit, strict).
@@ -521,15 +521,15 @@ class BiTaccapGripper(Robot):
         if self.config.enable_head_camera:
             skew = read_head_camera_skew(self.cameras, self.config.head_camera_pair_max_skew_ms)
             if skew is not None and skew > 0.0:
-                self._headcam_skew_count += 1
+                self._head_skew_count += 1
                 now = time.monotonic()
-                if now - self._headcam_warn_at > 5.0:
-                    self._headcam_warn_at = now
+                if now - self._head_warn_at > 5.0:
+                    self._head_warn_at = now
                     self.logger.warn(
                         f"Head camera eyes are {skew:.1f}ms apart (limit "
                         f"{self.config.head_camera_pair_max_skew_ms:.0f}ms); "
-                        f"{self._headcam_skew_count} frames so far. left_headcam and "
-                        "right_headcam are recorded as separate keys, so a mismatched "
+                        f"{self._head_skew_count} frames so far. left_head and "
+                        "right_head are recorded as separate keys, so a mismatched "
                         "pair is not otherwise visible in the dataset."
                     )
 

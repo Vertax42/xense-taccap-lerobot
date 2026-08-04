@@ -158,8 +158,8 @@ class BiTaccapGripperConfig(RobotConfig):
 
     # ---- Pico head camera ---------------------------------------------------
     enable_head_camera: bool = False
-    """Stream the headset's stereo camera as ``left_headcam`` /
-    ``right_headcam`` (one key per eye), plus the headset
+    """Stream the headset's stereo camera as ``left_head`` /
+    ``right_head`` (one key per eye), plus the headset
     pose as ``head_camera.*``. Shares the Pico SDK connection with the
     trackers, so it needs the headset app streaming either way."""
     head_camera_eyes: str = "both"

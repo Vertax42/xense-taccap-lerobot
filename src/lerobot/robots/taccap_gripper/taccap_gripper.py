@@ -31,7 +31,7 @@ Observation features:
     tactile_left / tactile_right     -- recorded tactile frames (sensor on
                                         left/right finger), ``rectify`` by default
     wrist_cam                        -- wrist UVC frame (if enable_wrist_camera)
-    left_headcam / right_headcam     -- Pico headset camera, one key per eye
+    left_head / right_head     -- Pico headset camera, one key per eye
                                         (if enable_head_camera; head_camera_eyes
                                         can select a single eye)
     head_camera.x/y/z/r1..r6         -- headset pose, same world frame as tcp.*
@@ -213,14 +213,14 @@ def tactile_camera_output_types(record_types: list[str], display_types: list[str
 HEAD_POSE_KEYS = ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6")
 
 
-HEAD_CAMERA_KEYS = {"left": "left_headcam", "right": "right_headcam"}
+HEAD_CAMERA_KEYS = {"left": "left_head", "right": "right_head"}
 
 
 def build_head_camera_configs(config: Any) -> dict[str, Any]:
     """One ``PicoCameraConfig`` per recorded eye, keyed by observation name.
 
     Each eye becomes its own camera and its own video key —
-    ``left_headcam`` / ``right_headcam`` — rather than one merged
+    ``left_head`` / ``right_head`` — rather than one merged
     double-width frame. Two independent streams are what the headset
     actually sends, so this is the shape with the least translation, and it
     lets a consumer take one eye without decoding both.
@@ -262,7 +262,7 @@ def read_head_camera_skew(cameras: dict[str, Any], max_skew_ms: float) -> float 
     merged frame had, so this is the only thing standing between a
     mis-synchronised stereo pair and a dataset that looks fine.
     """
-    left, right = cameras.get("left_headcam"), cameras.get("right_headcam")
+    left, right = cameras.get("left_head"), cameras.get("right_head")
     if left is None or right is None:
         return None
     lm, rm = left.last_frame_meta(), right.last_frame_meta()
@@ -399,8 +399,8 @@ class TaccapGripper(Robot):
         self._camera_configs = self._build_camera_configs(self._side)
         self.cameras = make_cameras_from_configs(self._camera_configs)
         self._head_pose_warned = False
-        self._headcam_skew_count = 0
-        self._headcam_warn_at = 0.0
+        self._head_skew_count = 0
+        self._head_warn_at = 0.0
 
         # Auto-discover the Pico4 motion tracker for this unit's side: enumerate
         # from the XenseVR PC service and pick the one whose serial's second-to-last
@@ -759,15 +759,15 @@ class TaccapGripper(Robot):
         if self.config.enable_head_camera:
             skew = read_head_camera_skew(self.cameras, self.config.head_camera_pair_max_skew_ms)
             if skew is not None and skew > 0.0:
-                self._headcam_skew_count += 1
+                self._head_skew_count += 1
                 now = time.monotonic()
-                if now - self._headcam_warn_at > 5.0:
-                    self._headcam_warn_at = now
+                if now - self._head_warn_at > 5.0:
+                    self._head_warn_at = now
                     self.logger.warn(
                         f"Head camera eyes are {skew:.1f}ms apart (limit "
                         f"{self.config.head_camera_pair_max_skew_ms:.0f}ms); "
-                        f"{self._headcam_skew_count} frames so far. left_headcam and "
-                        "right_headcam are recorded as separate keys, so a mismatched "
+                        f"{self._head_skew_count} frames so far. left_head and "
+                        "right_head are recorded as separate keys, so a mismatched "
                         "pair is not otherwise visible in the dataset."
                     )
 

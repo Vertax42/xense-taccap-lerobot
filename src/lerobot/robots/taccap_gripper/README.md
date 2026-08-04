@@ -450,7 +450,7 @@ at connect). Leave it unset (default) to keep auto-discovery.
 
 - **Wrist** → obs key `wrist_cam`; `--robot.enable_wrist_camera=false` skips. Tune
   `--robot.wrist_camera_width/_height/_fps`.
-- **Head** → obs keys `left_headcam` / `right_headcam`, off by default;
+- **Head** → obs keys `left_head` / `right_head`, off by default;
   `--robot.enable_head_camera=true` streams the Pico headset's stereo camera as **one key
   per eye**. `--robot.head_camera_width/_height` accept `1024x768` (default) or `1280x960`;
   `--robot.head_camera_eyes=left` (or `right`) records a single eye. It shares the
@@ -495,7 +495,7 @@ column subset of a bimanual one.
 | `imu.mag.{x,y,z}`               | `enable_imu`          | TacCap IMU                                             | float (µT)                                           |
 | `tactile_left`, `tactile_right` | auto-discovered       | Xense sensor on that finger, recorded view (`rectify`) | uint8 (H, W, 3), landscape — currently (400, 700, 3) |
 | `wrist_cam`                     | `enable_wrist_camera` | wrist UVC via `cameras/`                               | uint8 (H, W, 3)                                      |
-| `left_headcam`, `right_headcam` | `enable_head_camera`  | Pico headset camera, one key per eye                   | uint8 (H, W, 3) — default (768, 1024, 3)             |
+| `left_head`, `right_head` | `enable_head_camera`  | Pico headset camera, one key per eye                   | uint8 (H, W, 3) — default (768, 1024, 3)             |
 | `head_camera.x/y/z/r1..r6`      | `enable_head_camera`  | headset pose, same world frame as `tcp.*`              | float                                                |
 
 The flags are all `--robot.*` (e.g. `--robot.enable_imu=true`); the tracker and gripper

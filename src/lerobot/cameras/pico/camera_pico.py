@@ -121,7 +121,7 @@ class PicoCamera(Camera):
         node, so there is nothing to scan; whether frames are flowing only
         becomes knowable after ``connect()``.
         """
-        return [{"name": "Pico head camera", "type": "pico", "id": "pico_headcam"}]
+        return [{"name": "Pico head camera", "type": "pico", "id": "pico_head"}]
 
     def connect(self, warmup: bool = True) -> None:
         if self.is_connected:

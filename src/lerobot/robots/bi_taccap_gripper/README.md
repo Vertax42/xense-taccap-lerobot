@@ -25,7 +25,7 @@ Per side `{s}` ∈ {left, right}:
 | `{s}_wrist`                              | `{s}_enable_wrist_camera`      | wrist UVC frame                                                                           |
 | `{s}_tactile_left` / `{s}_tactile_right` | auto-discovered                | **recorded** tactile frame from the left / right finger sensor (`rectify`)                |
 | `{s}_tactile_{left,right}_difference`    | `tactile_display_output_types` | **display-only** amplified-deformation view of the same read — Rerun only, never recorded |
-| `left_headcam` / `right_headcam`         | `enable_head_camera`           | headset camera, one key per **eye** (not per arm) — `head_camera_eyes` can select one     |
+| `left_head` / `right_head`         | `enable_head_camera`           | headset camera, one key per **eye** (not per arm) — `head_camera_eyes` can select one     |
 | `head_camera.x/y/z`                      | `enable_head_camera`           | headset position, same world frame as `{s}_tcp.*`                                         |
 | `head_camera.r1..r6`                     | `enable_head_camera`           | headset orientation as the first two rotation-matrix columns                               |
 
@@ -117,8 +117,8 @@ enumeration, no rule check); un-pinned sides still auto-discover by the second-t
 rule. Use this for a tracker whose serial does not follow the rule, or when enumeration is flaky.
 
 Enable the head camera with `--robot.enable_head_camera=true`. It records `width=1024`,
-`height=768` at dataset FPS 30 as **two keys, one per eye** — `left_headcam` and
-`right_headcam`, each 768x1024. `--robot.head_camera_eyes=left` (or `right`) records a
+`height=768` at dataset FPS 30 as **two keys, one per eye** — `left_head` and
+`right_head`, each 768x1024. `--robot.head_camera_eyes=left` (or `right`) records a
 single eye, halving both the JPEG decoding and the encoder load.
 
 > These names refer to the headset's **eyes**, not to the left/right arm. There is one
