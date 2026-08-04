@@ -160,8 +160,39 @@ class TaccapGripperConfig(RobotConfig):
     wrist_camera_height: int = 480
     wrist_camera_fps: int = 30
 
+    # ---- Pico head camera ---------------------------------------------------
+    enable_head_camera: bool = False
+    """Stream the headset's stereo camera as ``head_rgb``, plus the headset
+    pose as ``head_camera.*``. There is one headset regardless of how many
+    grippers are in use, so this is the same stream the bimanual robot records
+    — do not enable it on two single-arm processes at once and expect two
+    independent views."""
+    head_camera_eyes: str = "both"
+    """``"both"`` records the eyes side by side, ``"left"``/``"right"`` one of
+    them. Merged frames are ``head_camera_height x (2 * head_camera_width)``."""
+    head_camera_width: int = 1024
+    head_camera_height: int = 768
+    """Per-eye size, following the stereo convention that width is one eye and
+    a merge doubles it. Only 1024x768 and 1280x960 are supported — both 4:3,
+    matching the sensor (PICO's camera-access API caps a frame at 2328x1748,
+    which is 4:3, so a 16:9 request would crop or stretch rather than widen
+    the field of view)."""
+    head_camera_fps: int = 30
+    head_camera_startup_timeout_s: float = 5.0
+    head_camera_stale_after_s: float = 0.2
+    head_camera_pair_max_skew_ms: float = 20.0
+    """How far apart the two eyes' timestamps may be and still count as one
+    stereo capture, when their sequence numbers differ."""
+
     def __post_init__(self):
         super().__post_init__()
+
+        if self.enable_head_camera:
+            # Delegate to the camera config so there is one definition of what
+            # a valid mode is, rather than a copy here that can drift from it.
+            from .taccap_gripper import build_head_camera_config
+
+            build_head_camera_config(self)
 
         if self.role.strip().lower() not in ("leader", "master", "follower", "slave"):
             raise ValueError(f"role must be leader/master or follower/slave, got {self.role!r}.")

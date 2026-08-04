@@ -190,17 +190,9 @@ class BiTaccapGripperConfig(RobotConfig):
         if self.enable_head_camera:
             # Delegate to the camera config so there is one definition of what
             # a valid mode is, rather than a copy here that can drift from it.
-            from lerobot.cameras.pico import PicoCameraConfig
+            from ..taccap_gripper.taccap_gripper import build_head_camera_config
 
-            PicoCameraConfig(
-                width=self.head_camera_width,
-                height=self.head_camera_height,
-                fps=self.head_camera_fps,
-                eyes=self.head_camera_eyes,
-                startup_timeout_s=self.head_camera_startup_timeout_s,
-                stale_after_s=self.head_camera_stale_after_s,
-                pair_max_skew_ms=self.head_camera_pair_max_skew_ms,
-            )
+            build_head_camera_config(self)
         # One recorded stream per sensor: observation_features declares a single
         # (H, W, 3) per tactile camera, so a second recorded type would silently
         # hand build_dataset_frame a dict instead of an image. Extra live views
