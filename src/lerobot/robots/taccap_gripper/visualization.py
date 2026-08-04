@@ -13,7 +13,8 @@ Rerun 3D trajectory visualisation for TacCap-Gripper devices.
 
 Adds an example-style 3D world view on top of LeRobot's default scalar/image
 panels: each gripper is drawn as a labelled ellipsoid with a local axis triad at
-its live Pico4 pose, leaving a fading breadcrumb trail behind it — the same
+its live Pico4 pose, leaving a fading breadcrumb trail behind it (fading for
+real: the alpha ramps along the trail) — the same
 "where has the gripper been" effect as
 ``third_party/taccap-gripper/python/examples/rerun_dual_with_tracker.py``.
 
@@ -52,6 +53,13 @@ _SIDE_COLOR = {
     "head": (230, 190, 60),
 }
 
+# Trail rendering. 90 samples is ~3 s at 30 fps: long enough to read the
+# stroke the operator just made, short enough that two of them do not knot
+# together. The old 300 (~10 s) at flat opacity was the thicket.
+_TRAIL_CHUNKS = 8
+_TRAIL_ALPHA_MIN = 25
+_TRAIL_RADIUS = 0.0022
+
 _ROT_KEYS = ("r1", "r2", "r3", "r4", "r5", "r6")
 _POSE_KEYS = ("x", "y", "z", *_ROT_KEYS)
 
@@ -87,7 +95,7 @@ class TaccapTrajectoryViz:
     def __init__(
         self,
         observation_features: dict[str, Any],
-        trail_max: int = 300,
+        trail_max: int = 90,
         signals: str = "all",
         show_trajectory: bool = True,
     ) -> None:
@@ -364,13 +372,39 @@ class TaccapTrajectoryViz:
         )
 
     def _log_trail(self, name: str, pose: tuple) -> None:
+        """Recent path, fading out towards the oldest end.
+
+        Drawn as a few chunks rather than one polyline so each can carry its
+        own alpha. A per-point gradient would be smoother but costs a strip
+        per sample; at this length the steps are not visible anyway.
+
+        Two grippers at full opacity for ten seconds was a thicket you could
+        not read either trail out of — the fade and the shorter window are
+        what make two of them legible at once.
+        """
         x, y, z, _ = pose
         trail = self._trails[name]
         trail.append([x, y, z])
         if len(trail) < 2:
             return
-        color = _SIDE_COLOR.get(name, _SIDE_COLOR[""])
+
+        pts = list(trail)
+        r, g, b = _SIDE_COLOR.get(name, _SIDE_COLOR[""])
+        chunks, colors = [], []
+        n = _TRAIL_CHUNKS
+        for i in range(n):
+            lo = len(pts) * i // n
+            hi = len(pts) * (i + 1) // n + 1  # overlap by one so chunks join up
+            seg = pts[lo:hi]
+            if len(seg) < 2:
+                continue
+            # Oldest chunk barely there, newest at full strength.
+            alpha = int(_TRAIL_ALPHA_MIN + (255 - _TRAIL_ALPHA_MIN) * (i + 1) / n)
+            chunks.append(seg)
+            colors.append([r, g, b, alpha])
+        if not chunks:
+            return
         rr.log(
             f"world/trails/{name}",
-            rr.LineStrips3D([list(trail)], colors=[color], radii=0.003),
+            rr.LineStrips3D(chunks, colors=colors, radii=_TRAIL_RADIUS),
         )
