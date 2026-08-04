@@ -206,7 +206,19 @@ install_xensevr_service() {
 
     local ARCH DEB_VER DEB_URL DEB
     ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"   # amd64 | arm64
-    DEB_VER="0.1.0"
+    DEB_VER="0.2.0"
+
+    # v0.2.0 ships amd64 only. Without this, an arm64 host would build a URL
+    # for an asset that does not exist and fail with a bare 404 — pinning it
+    # to the last release that has an arm64 build is both truthful and
+    # working, at the cost of no Pico camera support there.
+    if [[ "$ARCH" == "arm64" && -z "${XENSEVR_DEB_URL:-}${XENSEVR_DEB:-}" ]]; then
+        DEB_VER="0.1.0"
+        echo "  NOTE: arm64 detected — pinning to v${DEB_VER}, the newest release with"
+        echo "        an arm64 asset. v0.2.0 (Pico camera support) is amd64-only; build"
+        echo "        it from source with RoboticsService/qt-gcc_aarch64.sh if you need it."
+    fi
+
     DEB_URL="${XENSEVR_DEB_URL:-https://github.com/Vertax42/XenseVR-PC-Service/releases/download/v${DEB_VER}/XenseVR-PC-Service_${DEB_VER}_${ARCH}.deb}"
 
     DEB="${XENSEVR_DEB:-}"
