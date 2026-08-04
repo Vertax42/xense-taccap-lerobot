@@ -18,14 +18,18 @@
 
 The headset encodes each eye as JPEG and sends it as a ``0x30`` custom
 message; the service relays the bytes untouched and the pybind layer keeps
-only the newest frame per eye. Nothing upstream pairs the eyes — they arrive
-as two independent streams, each with its own ``frame_sequence`` and
-``timestamp_ns`` — so pairing is this adapter's job. See
-``doc/pico_camera_integration.md`` for the payload layout.
+only the newest frame per eye. See ``doc/pico_camera_integration.md`` for the
+payload layout.
+
+Frames are collected by a background thread and read from its cache, the same
+shape as the OpenCV and RealSense cameras. Here it also buys stereo alignment:
+the eyes arrive as separate messages, so a reader sampling them directly can
+catch one updated and not the other. :mod:`.stereo_poller` explains that.
 """
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any
 
@@ -37,18 +41,52 @@ from lerobot.utils.robot_utils import get_logger
 
 from ..camera import Camera
 from .configuration_pico import PicoCameraConfig
+from .stereo_poller import StereoPoller
 
-_EYE_INDEX = {"left": 0, "right": 1}
+# One poller serves every PicoCamera in the process. Two single-eye cameras
+# recording separate keys have to agree on which capture they are showing, and
+# that can only be decided somewhere that sees both.
+_poller_lock = threading.Lock()
+_poller: StereoPoller | None = None
+_poller_users: int = 0
+
+
+def _acquire_poller(xrt: Any, expect_size: tuple[int, int]) -> StereoPoller:
+    """Start (or join) the shared poller. Pair with :func:`_release_poller`.
+
+    It always watches both eyes, whatever any one camera records. Widening the
+    set later would mean replacing the poller, and a camera that already holds
+    a reference would go on reading the replaced one — which is exactly the
+    stall that showed up the first time this was written that way: the first
+    camera froze on the last frame before the swap while the second advanced,
+    so every pair mismatched.
+    """
+    global _poller, _poller_users
+    with _poller_lock:
+        if _poller is None:
+            _poller = StereoPoller(xrt, ("left", "right"), expect_size)
+            _poller.start()
+        _poller_users += 1
+        return _poller
+
+
+def _release_poller() -> None:
+    global _poller, _poller_users
+    with _poller_lock:
+        _poller_users = max(0, _poller_users - 1)
+        if _poller_users == 0 and _poller is not None:
+            _poller.stop()
+            _poller = None
 
 
 class PicoCamera(Camera):
-    """One head camera view assembled from the headset's per-eye JPEG streams.
+    """One eye of the Pico headset camera, or both merged side by side.
 
-    With ``eyes="both"`` the two eyes are decoded and concatenated
-    horizontally into a single ``height x (2 * width)`` RGB image, the same
-    shape convention the ZED stereo path uses (one image, one video key,
-    per-eye width doubled on merge). With ``eyes="left"`` or ``"right"`` only
-    that eye is decoded.
+    ``eyes="left"`` / ``"right"`` gives that eye at ``height x width``;
+    ``eyes="both"`` concatenates them horizontally into
+    ``height x (2 * width)``, the convention the ZED stereo path uses. Either
+    way the frames come from the shared poller, so two single-eye cameras
+    recording separate keys always show the same capture.
 
     The SDK connection is shared with the Pico tracker through
     :mod:`lerobot.teleoperators.pico4.xrt_session`; disconnecting this camera
@@ -60,23 +98,13 @@ class PicoCamera(Camera):
         self.config = config
         self._is_connected = False
         self._xrt: Any = None
+        self._poller: StereoPoller | None = None
         self.logger = get_logger("PicoCamera")
 
         self._eyes: tuple[str, ...] = ("left", "right") if config.eyes == "both" else (config.eyes,)
         self._last_rgb: NDArray[np.uint8] | None = None
         self._last_host_ns: int | None = None
-        self._last_seq: dict[str, int | None] = dict.fromkeys(self._eyes)
-        # Metadata of the frame behind the last successful read, per eye. Two
-        # single-eye cameras recording separate keys have no pairing check of
-        # their own — whoever owns both can compare these to catch left and
-        # right drifting apart, which is otherwise invisible in the dataset.
         self._last_meta: dict[str, dict[str, Any]] = {}
-        # Reusing the previous frame is normal on a stereo mismatch, but it is
-        # also how a genuinely broken stream looks, so it is counted and
-        # surfaced periodically rather than passed over in silence.
-        self._unpaired_count = 0
-        self._decode_fail_count = 0
-        self._last_warn_ns = 0
 
     def __str__(self) -> str:
         return f"PicoCamera(eyes={self.config.eyes})"
@@ -105,7 +133,11 @@ class PicoCamera(Camera):
         try:
             missing = [
                 name
-                for name in ("has_pico_camera_frame", "get_pico_camera_frame_metadata", "get_pico_camera_frame_jpeg")
+                for name in (
+                    "has_pico_camera_frame",
+                    "get_pico_camera_frame_metadata",
+                    "get_pico_camera_frame_jpeg",
+                )
                 if not hasattr(self._xrt, name)
             ]
             if missing:
@@ -115,6 +147,7 @@ class PicoCamera(Camera):
                     "src/lerobot/teleoperators/pico4/xensevr-pc-service-pybind/."
                 )
 
+            self._poller = _acquire_poller(self._xrt, (self.config.width, self.config.height))
             self._is_connected = True
             if warmup:
                 self._wait_until_ready()
@@ -125,103 +158,63 @@ class PicoCamera(Camera):
             )
         except Exception:
             self._is_connected = False
+            if self._poller is not None:
+                _release_poller()
+                self._poller = None
             xrt_session.release()
             self._xrt = None
             raise
 
     def _wait_until_ready(self) -> None:
         deadline = time.monotonic() + self.config.startup_timeout_s
-        last_error = "no frames received"
         while time.monotonic() < deadline:
-            try:
-                self.read()
+            assert self._poller is not None
+            self._poller.raise_if_size_mismatch()
+            if self._poller.wait_for_frame(0.1) and all(self._poller.latest(eye) is not None for eye in self._eyes):
                 return
-            except (RuntimeError, TimeoutError, ValueError) as e:
-                last_error = str(e)
-            time.sleep(0.02)
         raise ConnectionError(
-            f"No Pico camera frame within {self.config.startup_timeout_s:.1f}s: {last_error}. "
+            f"No Pico camera frame within {self.config.startup_timeout_s:.1f}s. "
             "Check that the headset app is running and streaming, that 'Send' is ticked in "
             "XenseVR-Toolkit, and that the PC Service is up."
         )
 
-    def _grab_eye(self, eye: str) -> tuple[dict[str, Any], bytes] | None:
-        """Metadata + JPEG for one eye, or None if nothing new is cached."""
-        idx = _EYE_INDEX[eye]
-        if not self._xrt.has_pico_camera_frame(idx):
-            return None
-        meta = self._xrt.get_pico_camera_frame_metadata(idx)
-        jpeg = bytes(self._xrt.get_pico_camera_frame_jpeg(idx))
-        return meta, jpeg
-
-    def _check_size(self, eye: str, meta: dict[str, Any]) -> None:
-        w, h = int(meta["width"]), int(meta["height"])
-        if (w, h) != (self.config.width, self.config.height):
-            raise ValueError(
-                f"Pico {eye} eye is sending {w}x{h} but this camera is configured for "
-                f"{self.config.width}x{self.config.height}. Rescaling here would silently "
-                "change the recorded field of view, so fix one side to match the other: "
-                "either set --robot.head_camera_width/_height, or change the headset app."
-            )
-
-    def _decode(self, jpeg: bytes) -> NDArray[np.uint8] | None:
-        import cv2
-
-        arr = np.frombuffer(jpeg, dtype=np.uint8)
-        bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if bgr is None:
-            return None
-        return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-
     def read(self) -> NDArray[np.uint8]:
-        if not self.is_connected or self._xrt is None:
+        if not self.is_connected or self._poller is None:
             raise DeviceNotConnectedError(f"{self} is not connected")
 
-        grabbed: dict[str, tuple[dict[str, Any], bytes]] = {}
-        for eye in self._eyes:
-            got = self._grab_eye(eye)
-            if got is not None:
-                self._check_size(eye, got[0])
-                grabbed[eye] = got
-
-        if len(grabbed) != len(self._eyes):
-            return self._reuse_or_fail("waiting for frames from both eyes")
-
-        if len(self._eyes) == 2 and not self._eyes_paired(grabbed):
-            self._unpaired_count += 1
-            self._maybe_warn()
-            return self._reuse_or_fail("left and right frames are not from the same capture")
+        self._poller.raise_if_size_mismatch()
 
         planes = []
         for eye in self._eyes:
-            meta, jpeg = grabbed[eye]
-            rgb = self._decode(jpeg)
-            if rgb is None:
-                self._decode_fail_count += 1
-                self._maybe_warn()
-                return self._reuse_or_fail(f"{eye} eye JPEG failed to decode")
+            got = self._poller.latest(eye)
+            if got is None:
+                if self._last_rgb is None:
+                    raise RuntimeError(f"no Pico camera frame available yet ({eye} eye)")
+                return self._last_rgb
+            meta, rgb = got
             planes.append(rgb)
-            self._last_seq[eye] = int(meta["frame_sequence"])
             self._last_meta[eye] = meta
 
         self._last_rgb = planes[0] if len(planes) == 1 else np.hstack(planes)
         self._last_host_ns = time.time_ns()
         return self._last_rgb
 
-    def _eyes_paired(self, grabbed: dict[str, tuple[dict[str, Any], bytes]]) -> bool:
-        """Whether the two cached frames come from one capture.
+    def async_read(self, timeout_ms: float = 200) -> NDArray[np.uint8]:
+        # Latest-cache semantics, matching the other UMI-path cameras: the
+        # recording loop sets the cadence and must never block on a camera.
+        # The poller is already running ahead of it, so there is nothing to
+        # wait for.
+        del timeout_ms
+        return self.read()
 
-        Same ``frame_sequence`` is the definitive answer when the headset
-        stamps both eyes alike. It may not — the payload spec only calls the
-        field an incrementing counter, without saying whether it is shared or
-        per-eye — so a timestamp window is the fallback rather than the
-        primary test.
-        """
-        left, right = grabbed["left"][0], grabbed["right"][0]
-        if int(left["frame_sequence"]) == int(right["frame_sequence"]):
-            return True
-        skew_ms = abs(int(left["timestamp_ns"]) - int(right["timestamp_ns"])) / 1e6
-        return skew_ms <= self.config.pair_max_skew_ms
+    def read_latest(self, max_age_ms: int = 500) -> NDArray[np.uint8]:
+        rgb = self.read()
+        if self._last_host_ns is None:
+            raise RuntimeError("no Pico camera frame received yet")
+        age_ms = (time.time_ns() - self._last_host_ns) / 1e6
+        if age_ms > max_age_ms:
+            raise TimeoutError(f"Pico camera cache is {age_ms:.1f}ms old (limit={max_age_ms}ms).")
+        return rgb
 
     def last_frame_meta(self, eye: str | None = None) -> dict[str, Any] | None:
         """Metadata behind this camera's last successful read.
@@ -235,37 +228,6 @@ class PicoCamera(Camera):
             eye = self._eyes[0]
         return self._last_meta.get(eye)
 
-    def _reuse_or_fail(self, why: str) -> NDArray[np.uint8]:
-        if self._last_rgb is None:
-            raise RuntimeError(f"no Pico camera frame available yet ({why})")
-        return self._last_rgb
-
-    def _maybe_warn(self) -> None:
-        """Rate-limited so a persistently broken stream does not flood the log."""
-        now = time.monotonic_ns()
-        if now - self._last_warn_ns < 5_000_000_000:
-            return
-        self._last_warn_ns = now
-        self.logger.warn(
-            f"{self}: reusing previous frame — {self._unpaired_count} stereo mismatches, "
-            f"{self._decode_fail_count} decode failures so far."
-        )
-
-    def async_read(self, timeout_ms: float = 200) -> NDArray[np.uint8]:
-        # Latest-cache semantics, matching the other UMI-path cameras: the
-        # recording loop sets the cadence and must never block on a camera.
-        del timeout_ms
-        return self.read()
-
-    def read_latest(self, max_age_ms: int = 500) -> NDArray[np.uint8]:
-        rgb = self.read()
-        if self._last_host_ns is None:
-            raise RuntimeError("no Pico camera frame received yet")
-        age_ms = (time.time_ns() - self._last_host_ns) / 1e6
-        if age_ms > max_age_ms:
-            raise TimeoutError(f"Pico camera cache is {age_ms:.1f}ms old (limit={max_age_ms}ms).")
-        return rgb
-
     def disconnect(self) -> None:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected")
@@ -273,6 +235,9 @@ class PicoCamera(Camera):
         from lerobot.teleoperators.pico4 import xrt_session
 
         self._is_connected = False
+        if self._poller is not None:
+            _release_poller()
+            self._poller = None
         self._xrt = None
         closed = xrt_session.release()
         self.logger.info(

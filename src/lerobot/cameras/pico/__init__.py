@@ -16,5 +16,6 @@
 
 from .camera_pico import PicoCamera
 from .configuration_pico import SUPPORTED_MODES, PicoCameraConfig
+from .stereo_poller import StereoPoller
 
-__all__ = ["PicoCamera", "PicoCameraConfig", "SUPPORTED_MODES"]
+__all__ = ["PicoCamera", "PicoCameraConfig", "SUPPORTED_MODES", "StereoPoller"]
