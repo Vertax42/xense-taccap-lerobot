@@ -93,13 +93,8 @@ orientation — starting a UMI session with the gripper pointing anywhere is fin
 
 ### Checking the mount transform in Rerun
 
-`lerobot-teleoperate --display_data=true` draws **both frames** in the `/world` view:
-the EE frame (large marker, 10 cm axes, labelled `EE`) and the tracker's own frame
-(small dim marker, 6 cm axes, labelled `TRACKER`), joined by a thin dashed yellow
-construction line labelled with its length in mm. The tracker pose is published as
-display-only `tracker.*` keys — absent from `observation_features`, so it never
-reaches a dataset — and a `tracker pose` tab appears in the scalar panel next to
-`tcp pose`.
+`lerobot-teleoperate --display_data=true` draws the EE frame in the `/world` view —
+a marker with 10 cm axes, labelled `EE` — trailing a breadcrumb of where it has been.
 
 The scene declares `rr.ViewCoordinates.FLU` (X forward, Y left, Z up) rather than
 the weaker `RIGHT_HAND_Z_UP`, so the viewer knows which axis is _forward_ and aims
@@ -108,18 +103,25 @@ its initial camera down +X. The origin triad is labelled `+X forward` / `+Y left
 
 What to look for, with the gripper lying flat:
 
-| Check              | Expected                                                                           |
-| ------------------ | ---------------------------------------------------------------------------------- |
-| Segment length     | **≈195 mm** (right) / **≈194 mm** (left), and **constant** as you wave the gripper |
-| EE marker position | at the **two-finger midpoint**                                                     |
-| EE axes when flat  | X forward, Y left, Z up — i.e. **level**                                           |
+| Check              | Expected                                             |
+| ------------------ | ---------------------------------------------------- |
+| EE marker position | at the **two-finger midpoint**                       |
+| EE axes when flat  | X forward, Y left, Z up — i.e. **level**             |
 
 **Checked on 2026-08-02 and correct**, so this is a regression check now rather
-than an open question. The middle row is the one that matters: it is the only one
-that distinguishes `APPLY_G_REBASE` — both settings put the EE the right 195 mm
-from the tracker, just 51° apart, so the segment length looks fine either way.
+than an open question. The marker position is the row that matters: it is the only
+one that distinguishes `APPLY_G_REBASE` — both settings put the EE the right 195 mm
+from the tracker, just 51° apart, so a distance check alone looks fine either way.
 If the EE ever lands somewhere unrelated to the fingers, flip
 `APPLY_G_REBASE` in [`ee_transform.py`](ee_transform.py).
+
+> The viewer used to also draw the tracker's own frame and a dashed line between the
+> two, labelled with its length. That was scaffolding for verifying the mount
+> transform; with the transform confirmed it was just clutter over the EE frame, so
+> it is gone. The tracker pose is still published as display-only `tracker.*` keys —
+> absent from `observation_features`, so it never reaches a dataset — and still has a
+> `tracker pose` tab in the scalar panel next to `tcp pose`, which is enough to see
+> the raw numbers if the transform is ever in question again.
 
 Verify a mount with the pivot check — no extra hardware needed:
 
