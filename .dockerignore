@@ -98,5 +98,27 @@ target/
 *.avi
 
 # Hardware SDK sources and their vendor-provided native libraries under
-# third_party/ must remain in the context. Keep this override last.
+# third_party/ must remain in the context.
 !third_party/**
+
+# ...but NOT anything a previous native build left behind on the host. Keep
+# these last: .dockerignore is last-match-wins, so they have to come after the
+# third_party/** override that would otherwise pull the C SDK's build tree in.
+#
+# This is not hypothetical. A host that has run `setup_env.sh --install` has a
+# CMake tree here whose CMakeCache.txt records host paths; copied into the
+# image, cmake refuses to reconfigure ("directory is different than the
+# directory where CMakeCache.txt was created"), the C SDK is never rebuilt, and
+# setup_env.sh installs the *host's* libPXREARobotSDK.so instead. On a 24.04
+# host that library needs GLIBC_2.38, which the 22.04 base image does not have,
+# and the build dies at post-install verification with an ImportError.
+#
+# Note these need the `**/` prefixes: unlike .gitignore, a .dockerignore
+# pattern is matched against the whole path, so a bare `lib/` or `*.so`
+# (both present above) only ever matched the repository root.
+**/CMakeCache.txt
+**/CMakeFiles
+**/*.egg-info
+third_party/**/build
+src/lerobot/teleoperators/pico4/xensevr-pc-service-pybind/lib
+src/lerobot/teleoperators/pico4/xensevr-pc-service-pybind/build
