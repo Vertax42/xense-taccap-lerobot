@@ -35,6 +35,13 @@ from lerobot.cameras.realsense import RealSenseCamera, RealSenseCameraConfig
 TEST_ARTIFACTS_DIR = Path(__file__).parent.parent / "artifacts" / "cameras"
 BAG_FILE_PATH = TEST_ARTIFACTS_DIR / "test_rs.bag"
 
+# The recorded .bag these tests replay is not committed (only the generator
+# scripts under tests/artifacts/ are), so a fresh clone cannot run them. Skip
+# instead of failing with a RealSense "failed to create ros reader", which
+# reads like a driver problem rather than a missing fixture.
+if not BAG_FILE_PATH.exists():
+    pytest.skip(f"RealSense .bag artifact absent ({BAG_FILE_PATH})", allow_module_level=True)
+
 # NOTE(Steven): For some reason these tests take ~20sec in macOS but only ~2sec in Linux.
 
 

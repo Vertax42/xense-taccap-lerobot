@@ -65,7 +65,11 @@ def test_record_and_resume(tmp_path):
 
     assert dataset.fps == 30
     assert dataset.meta.total_episodes == dataset.num_episodes == 1
-    assert dataset.meta.total_frames == dataset.num_frames == 3
+    # 0.1s at 30 fps is 3 samples, but this fork's record loop pairs each action
+    # with the PREVIOUS observation (shifted-frame / 错帧, see the `record_loop`
+    # docstring), so the first sample has no predecessor and N samples yield N-1
+    # frames. Upstream records N; the 3 here is upstream's number.
+    assert dataset.meta.total_frames == dataset.num_frames == 2
     assert dataset.meta.total_tasks == 1
 
     cfg.resume = True
@@ -79,7 +83,7 @@ def test_record_and_resume(tmp_path):
         dataset = record(cfg)
 
     assert dataset.meta.total_episodes == dataset.num_episodes == 2
-    assert dataset.meta.total_frames == dataset.num_frames == 6
+    assert dataset.meta.total_frames == dataset.num_frames == 4  # 2 per episode, see above
     assert dataset.meta.total_tasks == 1
 
 
