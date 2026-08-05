@@ -33,11 +33,12 @@ taccap teleoperator, so **no `--teleop` is required**. `lerobot-teleoperate` jus
 would give a tactile pad the same screen area as the head camera. The layout adapts to what
 the rig actually reports:
 
-- **Left, largest**: `head_rgb` when the head camera is on, otherwise the 3D trajectory view.
-- **Right**: the 3D view (when the head camera took the left slot), then the wrist cameras,
-  then the tactile pads in their own grid.
-- **Bottom**: scalars split into tabs by unit — `gripper.pos`, head VIO position, head VIO
-  rotation, tcp pose, imu. One shared plot would be unreadable, since metres, unit-length
+- **Left, largest**: the 3D trajectory view — gripper EE frames with fading trails, plus the
+  headset when the head camera is on.
+- **Right, top to bottom**: the head cameras (`left_head` / `right_head`), the wrist cameras
+  under them, then the tactile pads in their own grid.
+- **Bottom**: scalars split into tabs by unit — `gripper.pos`, head pose, tcp pose, tracker
+  pose, imu. One shared plot would be unreadable, since metres, unit-length
   rotation components and accelerations do not share an axis.
 
 With the tracker on, the 3D view (`/world`) shows each gripper as a labelled marker at its
@@ -89,15 +90,16 @@ The bimanual rig can add the Pico headset camera with:
     --robot.head_camera_eyes=both \
 ```
 
-`head_camera_width`/`height` default to 1024x768 and rarely need overriding — the sensor
-has a single 1088x1920 portrait mode, and those values select the landscape crop taken
-out of it. `crop_bias` is the one to tune: it slides that crop along the tall axis
-(0.0 top, 0.5 centre, 1.0 bottom) to match how the camera is mounted.
+`head_camera_width`/`height` are **per eye** and default to 1024x768. Only that and
+1280x960 are accepted — both 4:3, matching the sensor — and an unlisted size is an error
+rather than a silent resize, as is a first frame whose size disagrees with the config,
+since rescaling would quietly change the recorded field of view.
 
-Capture stores `head_rgb` plus the raw device-frame VIO pose as
-`head_camera.x/y/z/r1..r6`. The quaternion is converted to the same rotation-matrix
-first-two-columns representation used by the left/right gripper poses; no IMU or
-timing/age/status metadata is stored.
+Capture stores `left_head` and `right_head` — one video key per eye, not a merged frame —
+plus the headset pose as `head_camera.x/y/z/r1..r6`. That pose goes through the same
+Pico→world remap as the gripper trackers, so it shares their world frame and the same
+rotation-matrix first-two-columns representation; no IMU or timing/age/status metadata is
+stored. `--robot.head_camera_eyes=left` (or `right`) records a single eye.
 
 ### Single (`taccap_gripper`)
 
@@ -138,8 +140,9 @@ lerobot-record \
 One gripper, its two tactile pads and its wrist camera, recorded through the same
 `self_driven_record_loop`. Keys are **unprefixed** (`tcp.*`, `gripper.pos`,
 `tactile_left` / `tactile_right`, `wrist_cam`), so a single-arm dataset is not a
-column subset of a bimanual one. There is no head camera here —
-`--robot.enable_head_camera` is a `bi_taccap_gripper` option.
+column subset of a bimanual one. `--robot.enable_head_camera` works here too, and the
+head keys are unprefixed the same way on both robots (`left_head` / `right_head` name the
+headset's eyes, not the arms).
 
 `--robot.side` is only needed when both grippers are plugged in; a lone unit
 auto-resolves, and so does its Pico4 tracker (side from the serial's 2nd-to-last
