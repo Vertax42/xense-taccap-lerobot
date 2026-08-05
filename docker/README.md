@@ -58,6 +58,34 @@ XENSE_PROXY_URL=http://127.0.0.1:7897 ./install_customer.sh
 Secure Boot 和系统重启。若 `nvidia-smi` 不可用或驱动低于 `570.144`，脚本会停止并
 提示先处理驱动。
 
+### 安装完成后的宿主机设置
+
+`install_customer.sh` 已经执行 Docker 服务启用和用户组配置。为了确保当前用户
+立即获得 Docker 权限，可在宿主机执行以下命令：
+
+```bash
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
+newgrp docker
+docker images
+```
+
+`newgrp docker` 会为当前终端启动一个应用了新用户组的子 Shell；也可以注销并重新
+登录。这里仅将**当前用户**加入 `docker` 组，不会自动授权所有本地用户。请注意，
+`docker` 组成员拥有接近 root 的系统控制权限，只应加入可信用户。
+
+如果需要在容器内显示 Rerun 等 X11 图形窗口，还要由宿主机当前图形桌面用户执行：
+
+```bash
+xhost +si:localuser:root
+```
+
+使用完成后可以撤销授权：
+
+```bash
+xhost -si:localuser:root
+```
+
 ## 3. 初始化源码并构建
 
 镜像会编译三个硬件 SDK，因此构建前必须拉取 git submodule：
