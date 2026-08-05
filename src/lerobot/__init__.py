@@ -14,67 +14,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-This file contains lists of available environments, dataset and policies to reflect the current state of LeRobot library.
-We do not want to import all the dependencies, but instead we keep it lightweight to ensure fast access to these variables.
+Lists the robots, teleoperators, cameras and ported datasets this build exposes,
+so they can be inspected without importing their (heavy, hardware-bound)
+dependencies.
 
 Example:
     ```python
         import lerobot
-        print(lerobot.available_envs)
-        print(lerobot.available_tasks_per_env)
-        print(lerobot.available_datasets)
-        print(lerobot.available_datasets_per_env)
-        print(lerobot.available_real_world_datasets)
-        print(lerobot.available_policies)
-        print(lerobot.available_policies_per_env)
         print(lerobot.available_robots)
+        print(lerobot.available_teleoperators)
         print(lerobot.available_cameras)
-        print(lerobot.available_motors)
+        print(lerobot.available_datasets)
     ```
 
-When implementing a new dataset loadable with LeRobotDataset follow these steps:
-- Update `available_datasets_per_env` in `lerobot/__init__.py`
-
-When implementing a new environment (e.g. `gym_aloha`), follow these steps:
-- Update `available_tasks_per_env` and `available_datasets_per_env` in `lerobot/__init__.py`
-
-When implementing a new policy class (e.g. `DiffusionPolicy`) follow these steps:
-- Update `available_policies` and `available_policies_per_env`, in `lerobot/__init__.py`
-- Set the required `name` class attribute.
-- Update variables in `tests/test_available.py` by importing your new Policy class
+NOTE: the simulation-environment and policy registries upstream carries here
+(``available_envs``, ``available_tasks_per_env``, ``available_datasets_per_env``,
+``env_task_pairs``, ``env_dataset_pairs``) are gone: this fork ships neither
+``lerobot.envs`` nor ``lerobot.policies``, so they described things that could
+not be constructed. ``available_policies`` is kept as an empty list because it
+is part of the documented surface.
 """
 
-import itertools
-
 from lerobot.__version__ import __version__  # noqa: F401
-
-# TODO(rcadene): Improve policies and envs. As of now, an item in `available_policies`
-# refers to a yaml file AND a modeling name. Same for `available_envs` which refers to
-# a yaml file AND a environment name. The difference should be more obvious.
-available_tasks_per_env = {
-    "aloha": [
-        "AlohaInsertion-v0",
-        "AlohaTransferCube-v0",
-    ],
-    "pusht": ["PushT-v0"],
-}
-available_envs = list(available_tasks_per_env.keys())
-
-available_datasets_per_env = {
-    "aloha": [
-        "lerobot/aloha_sim_insertion_human",
-        "lerobot/aloha_sim_insertion_scripted",
-        "lerobot/aloha_sim_transfer_cube_human",
-        "lerobot/aloha_sim_transfer_cube_scripted",
-        "lerobot/aloha_sim_insertion_human_image",
-        "lerobot/aloha_sim_insertion_scripted_image",
-        "lerobot/aloha_sim_transfer_cube_human_image",
-        "lerobot/aloha_sim_transfer_cube_scripted_image",
-    ],
-    # TODO(alexander-soare): Add "lerobot/pusht_keypoints". Right now we can't because this is too tightly
-    # coupled with tests.
-    "pusht": ["lerobot/pusht", "lerobot/pusht_image"],
-}
 
 available_real_world_datasets = [
     "lerobot/aloha_mobile_cabinet",
@@ -152,7 +113,7 @@ available_real_world_datasets = [
     "lerobot/usc_cloth_sim",
 ]
 
-available_datasets = sorted(set(itertools.chain(*available_datasets_per_env.values(), available_real_world_datasets)))
+available_datasets = sorted(set(available_real_world_datasets))
 
 # Policies are not bundled in this build.
 available_policies: list[str] = []
@@ -165,17 +126,29 @@ available_robots = [
 ]
 
 # lists all available cameras from `lerobot/cameras`
+# These are the ``type`` strings registered by each CameraConfig subclass, i.e.
+# what ``make_cameras_from_configs`` dispatches on — ``pico`` and ``zmq`` used to
+# be missing here while being perfectly constructible.
 available_cameras = [
     "opencv",
     "intelrealsense",
     "xense",
+    "pico",
+    "zmq",
+]
+
+# lists all available teleoperators from `lerobot/teleoperators`
+available_teleoperators = [
+    "pico4",
+    "bi_pico4",
 ]
 
 # lists all available motors from `lerobot/motors`
+# The buses are still vendored from upstream, but this fork drives no motorised
+# arm — the TacCap jaw is read-only over its own SDK, not through a MotorsBus.
 available_motors = [
     "dynamixel",
     "feetech",
+    "damiao",
+    "robstride",
 ]
-
-env_task_pairs = [(env, task) for env, tasks in available_tasks_per_env.items() for task in tasks]
-env_dataset_pairs = [(env, dataset) for env, datasets in available_datasets_per_env.items() for dataset in datasets]

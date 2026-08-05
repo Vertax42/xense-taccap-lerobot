@@ -12,7 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: tests
+# NOTE: upstream's end-to-end targets (test-act-ete-train, test-diffusion-ete-eval,
+# and the rest) drove `lerobot-train` / `lerobot-eval` over the bundled policies.
+# This fork ships no policies and no training entry points, so every one of those
+# targets invoked a command that does not exist. They are gone; `test` below runs
+# the suite that this build actually has, the same one CI runs.
+
+.PHONY: test test-fast lint format build-user
+
+DEVICE ?= cpu
 
 PYTHON_PATH := $(shell which python)
 
@@ -24,154 +32,19 @@ endif
 
 export PATH := $(dir $(PYTHON_PATH)):$(PATH)
 
-DEVICE ?= cpu
+test:
+	LEROBOT_TEST_DEVICE=$(DEVICE) pytest tests/ -v --timeout=300
+
+# The fork's own code — hardware-free and quick, so it is the one to run while
+# working on the grippers, discovery rules or the camera read path.
+test-fast:
+	LEROBOT_TEST_DEVICE=$(DEVICE) pytest tests/robots/ tests/utils/ -q
+
+lint:
+	ruff check .
+
+format:
+	ruff format .
 
 build-user:
 	docker build -f docker/Dockerfile.user -t lerobot-user .
-
-test-end-to-end:
-	${MAKE} DEVICE=$(DEVICE) test-act-ete-train
-	${MAKE} DEVICE=$(DEVICE) test-act-ete-train-resume
-	${MAKE} DEVICE=$(DEVICE) test-act-ete-eval
-	${MAKE} DEVICE=$(DEVICE) test-diffusion-ete-train
-	${MAKE} DEVICE=$(DEVICE) test-diffusion-ete-eval
-	${MAKE} DEVICE=$(DEVICE) test-tdmpc-ete-train
-	${MAKE} DEVICE=$(DEVICE) test-tdmpc-ete-eval
-	${MAKE} DEVICE=$(DEVICE) test-smolvla-ete-train
-	${MAKE} DEVICE=$(DEVICE) test-smolvla-ete-eval
-
-test-act-ete-train:
-	lerobot-train \
-		--policy.type=act \
-		--policy.dim_model=64 \
-		--policy.n_action_steps=20 \
-		--policy.chunk_size=20 \
-		--policy.device=$(DEVICE) \
-		--policy.push_to_hub=false \
-		--env.type=aloha \
-		--env.episode_length=5 \
-		--dataset.repo_id=lerobot/aloha_sim_transfer_cube_human \
-		--dataset.image_transforms.enable=true \
-		--dataset.episodes="[0]" \
-		--batch_size=2 \
-		--steps=4 \
-		--eval_freq=2 \
-		--eval.n_episodes=1 \
-		--eval.batch_size=1 \
-		--save_freq=2 \
-		--save_checkpoint=true \
-		--log_freq=1 \
-		--wandb.enable=false \
-		--output_dir=tests/outputs/act/
-
-test-act-ete-train-resume:
-	lerobot-train \
-		--config_path=tests/outputs/act/checkpoints/000002/pretrained_model/train_config.json \
-		--resume=true
-
-test-act-ete-eval:
-	lerobot-eval \
-		--policy.path=tests/outputs/act/checkpoints/000004/pretrained_model \
-		--policy.device=$(DEVICE) \
-		--env.type=aloha \
-		--env.episode_length=5 \
-		--eval.n_episodes=1 \
-		--eval.batch_size=1
-
-test-diffusion-ete-train:
-	lerobot-train \
-		--policy.type=diffusion \
-		--policy.down_dims='[64,128,256]' \
-		--policy.diffusion_step_embed_dim=32 \
-		--policy.num_inference_steps=10 \
-		--policy.device=$(DEVICE) \
-		--policy.push_to_hub=false \
-		--env.type=pusht \
-		--env.episode_length=5 \
-		--dataset.repo_id=lerobot/pusht \
-		--dataset.image_transforms.enable=true \
-		--dataset.episodes="[0]" \
-		--batch_size=2 \
-		--steps=2 \
-		--eval_freq=2 \
-		--eval.n_episodes=1 \
-		--eval.batch_size=1 \
-		--save_checkpoint=true \
-		--save_freq=2 \
-		--log_freq=1 \
-		--wandb.enable=false \
-		--output_dir=tests/outputs/diffusion/
-
-test-diffusion-ete-eval:
-	lerobot-eval \
-		--policy.path=tests/outputs/diffusion/checkpoints/000002/pretrained_model \
-		--policy.device=$(DEVICE) \
-		--env.type=pusht \
-		--env.episode_length=5 \
-		--eval.n_episodes=1 \
-		--eval.batch_size=1
-
-test-tdmpc-ete-train:
-	lerobot-train \
-		--policy.type=tdmpc \
-		--policy.device=$(DEVICE) \
-		--policy.push_to_hub=false \
-		--env.type=pusht \
-		--env.episode_length=5 \
-		--dataset.repo_id=lerobot/pusht_image \
-		--dataset.image_transforms.enable=true \
-		--dataset.episodes="[0]" \
-		--batch_size=2 \
-		--steps=2 \
-		--eval_freq=2 \
-		--eval.n_episodes=1 \
-		--eval.batch_size=1 \
-		--save_checkpoint=true \
-		--save_freq=2 \
-		--log_freq=1 \
-		--wandb.enable=false \
-		--output_dir=tests/outputs/tdmpc/
-
-test-tdmpc-ete-eval:
-	lerobot-eval \
-		--policy.path=tests/outputs/tdmpc/checkpoints/000002/pretrained_model \
-		--policy.device=$(DEVICE) \
-		--env.type=pusht \
-		--env.episode_length=5 \
-		--env.observation_height=96 \
-        --env.observation_width=96 \
-		--eval.n_episodes=1 \
-		--eval.batch_size=1
-
-
-test-smolvla-ete-train:
-	lerobot-train \
-		--policy.type=smolvla \
-		--policy.n_action_steps=20 \
-		--policy.chunk_size=20 \
-		--policy.device=$(DEVICE) \
-		--policy.push_to_hub=false \
-		--env.type=aloha \
-		--env.episode_length=5 \
-		--dataset.repo_id=lerobot/aloha_sim_transfer_cube_human \
-		--dataset.image_transforms.enable=true \
-		--dataset.episodes="[0]" \
-		--batch_size=2 \
-		--steps=4 \
-		--eval_freq=2 \
-		--eval.n_episodes=1 \
-		--eval.batch_size=1 \
-		--save_freq=2 \
-		--save_checkpoint=true \
-		--log_freq=1 \
-		--wandb.enable=false \
-		--output_dir=tests/outputs/smolvla/
-
-test-smolvla-ete-eval:
-	lerobot-eval \
-		--policy.path=tests/outputs/smolvla/checkpoints/000004/pretrained_model \
-		--policy.device=$(DEVICE) \
-		--env.type=aloha \
-		--env.episode_length=5 \
-		--eval.n_episodes=1 \
-		--eval.batch_size=1

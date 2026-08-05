@@ -156,9 +156,10 @@ finally:
 PY
 ```
 
-For interactive SDK viewer examples, use the checked-in scripts
-`example1.py`, `example2.py`, `example_all_function.py`, or `example_remote.py`
-after replacing the hard-coded serial number with your device serial.
+For an interactive SDK viewer, use the vendor's own samples from the
+`xensesdk` distribution. Copies of them used to sit in this package, which meant
+they shipped inside the installed wheel and drifted from upstream; go to the SDK
+for the current version.
 
 ## Integration with BiARX5 Robot
 
@@ -358,12 +359,9 @@ Main camera class implementing the Camera interface.
 
 ## Examples
 
-See the checked-in example scripts for complete examples:
-
-- `example1.py`: Local SDK viewer using a single sensor
-- `example2.py`: Local SDK viewer variant for a second hard-coded serial
-- `example_all_function.py`: Local viewer with force, marker, depth, and image outputs
-- `example_remote.py`: Remote-service viewer using `xensesdk.call_service`
+The code blocks above are the complete usage surface. For raw-SDK viewers
+(force / marker / depth overlays, the remote `call_service` path), use the
+samples shipped with the `xensesdk` distribution.
 
 ## Support
 
