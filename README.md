@@ -17,6 +17,11 @@ training scripts) refer to the
 
 ## 🔧 Installation
 
+> **Docker users:** a complete GPU + hardware-SDK image and Compose setup are
+> available in [`docker/README.md`](docker/README.md). It is the quickest way to
+> give an end user a reproducible environment; the host still needs NVIDIA
+> Container Toolkit and the udev rules documented below.
+
 Tested on Ubuntu 22.04, NVIDIA driver ≥ 570.144. Use
 [`Mamba`](https://github.com/conda-forge/miniforge?tab=readme-ov-file#install)
 (strongly recommended over plain conda — it's much faster on the
