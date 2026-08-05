@@ -58,9 +58,18 @@ jobs:
         # opencv-python (a hard dependency, alongside the headless build) links
         # against libGL, which a headless runner does not necessarily carry, and
         # `import cv2` fails at collection time without it.
+        #
+        # ffmpeg is for torchcodec, which dlopens the FFmpeg *shared* libraries
+        # to decode the dataset videos. The ubuntu-24.04 runner image dropped
+        # ffmpeg (22.04 carried it), so torchcodec walked FFmpeg 7 down to 4
+        # and failed on every one — libavutil.so.58/57/56 all absent — taking
+        # 25 dataset tests with it. The `imageio[ffmpeg]` dependency does not
+        # cover this: it bundles a static binary, not the .so files.
+        # 24.04 ships FFmpeg 6.x, i.e. the libavutil.so.58 that
+        # libtorchcodec_core6 asks for.
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+          sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0 ffmpeg
 
       - name: Install package
         run: pip install -e ".[test]"
