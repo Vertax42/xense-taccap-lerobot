@@ -147,7 +147,9 @@ class PicoCamera(Camera):
                     "src/lerobot/teleoperators/pico4/xensevr-pc-service-pybind/."
                 )
 
-            self._poller = _acquire_poller(self._xrt, (self.config.width, self.config.height))
+            width, height = self.config.width, self.config.height
+            assert width is not None and height is not None  # filled in by __post_init__
+            self._poller = _acquire_poller(self._xrt, (width, height))
             self._is_connected = True
             if warmup:
                 self._wait_until_ready()

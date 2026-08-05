@@ -104,4 +104,6 @@ class PicoCameraConfig(CameraConfig):
     @property
     def frame_width(self) -> int:
         """Width of the image this adapter returns (both eyes when merged)."""
-        return self.width * 2 if self.eyes == "both" else self.width
+        width = self.width
+        assert width is not None  # filled in by __post_init__
+        return width * 2 if self.eyes == "both" else width

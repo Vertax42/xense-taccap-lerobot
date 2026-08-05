@@ -47,10 +47,10 @@ cd xense-taccap-lerobot
 
 This repository uses `third_party/` git submodules to manage hardware SDK dependencies:
 
-| Submodule                            | Installed package                                      |
-| ------------------------------------ | ------------------------------------------------------ |
-| `third_party/taccap-gripper`         | `xense.taccap` (TacCap UMI tactile gripper SDK)        |
-| `third_party/XenseVR-PC-Service`     | `xensevr_pc_service_sdk` (Pico4 teleop/tracker)        |
+| Submodule                        | Installed package                               |
+| -------------------------------- | ----------------------------------------------- |
+| `third_party/taccap-gripper`     | `xense.taccap` (TacCap UMI tactile gripper SDK) |
+| `third_party/XenseVR-PC-Service` | `xensevr_pc_service_sdk` (Pico4 teleop/tracker) |
 
 `taccap-gripper` is installed in editable mode.
 Changes made inside those initialized submodules are therefore picked up by the

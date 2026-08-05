@@ -257,9 +257,9 @@ default.extend-ignore-identifiers-re = [
 ]
 # Words read as typos but spelled the way we mean them: the English prefix in
 # mis-installed / mis-burned / mis-counted, Shepperd's method (quaternion from a
-# rotation matrix), Simple Open EtherCAT Master, and the "PN" typos splits out
-# of "PNGs".
-default.extend-words = { mis = "mis", Shepperd = "Shepperd", SOEM = "SOEM", PN = "PN" }
+# rotation matrix), Simple Open EtherCAT Master, the "PN" typos splits out
+# of "PNGs", and UE for the Unreal Engine app running on the headset.
+default.extend-words = { mis = "mis", Shepperd = "Shepperd", SOEM = "SOEM", PN = "PN", UE = "UE" }
 
 [tool.mypy]
 python_version = "3.12"

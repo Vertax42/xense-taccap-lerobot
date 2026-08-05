@@ -25,9 +25,9 @@ Per side `{s}` ∈ {left, right}:
 | `{s}_wrist`                              | `{s}_enable_wrist_camera`      | wrist UVC frame                                                                           |
 | `{s}_tactile_left` / `{s}_tactile_right` | auto-discovered                | **recorded** tactile frame from the left / right finger sensor (`rectify`)                |
 | `{s}_tactile_{left,right}_difference`    | `tactile_display_output_types` | **display-only** amplified-deformation view of the same read — Rerun only, never recorded |
-| `left_head` / `right_head`         | `enable_head_camera`           | headset camera, one key per **eye** (not per arm) — `head_camera_eyes` can select one     |
+| `left_head` / `right_head`               | `enable_head_camera`           | headset camera, one key per **eye** (not per arm) — `head_camera_eyes` can select one     |
 | `head_camera.x/y/z`                      | `enable_head_camera`           | headset position, same world frame as `{s}_tcp.*`                                         |
-| `head_camera.r1..r6`                     | `enable_head_camera`           | headset orientation as the first two rotation-matrix columns                               |
+| `head_camera.r1..r6`                     | `enable_head_camera`           | headset orientation as the first two rotation-matrix columns                              |
 
 `action_features` = the per-side gripper pose + `{s}_gripper.pos` subset; the head
 camera pose and all images remain observation-only. With both Pico4 trackers, both

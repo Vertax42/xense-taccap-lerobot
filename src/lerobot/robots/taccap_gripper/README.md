@@ -110,10 +110,10 @@ its initial camera down +X. The origin triad is labelled `+X forward` / `+Y left
 
 What to look for, with the gripper lying flat:
 
-| Check              | Expected                                             |
-| ------------------ | ---------------------------------------------------- |
-| EE marker position | at the **two-finger midpoint**                       |
-| EE axes when flat  | X forward, Y left, Z up — i.e. **level**             |
+| Check              | Expected                                 |
+| ------------------ | ---------------------------------------- |
+| EE marker position | at the **two-finger midpoint**           |
+| EE axes when flat  | X forward, Y left, Z up — i.e. **level** |
 
 **Checked on 2026-08-02 and correct**, so this is a regression check now rather
 than an open question. The marker position is the row that matters: it is the only
@@ -502,7 +502,7 @@ column subset of a bimanual one.
 | `imu.mag.{x,y,z}`               | `enable_imu`          | TacCap IMU                                             | float (µT)                                           |
 | `tactile_left`, `tactile_right` | auto-discovered       | Xense sensor on that finger, recorded view (`rectify`) | uint8 (H, W, 3), landscape — currently (400, 700, 3) |
 | `wrist_cam`                     | `enable_wrist_camera` | wrist UVC via `cameras/`                               | uint8 (H, W, 3)                                      |
-| `left_head`, `right_head` | `enable_head_camera`  | Pico headset camera, one key per eye                   | uint8 (H, W, 3) — default (768, 1024, 3)             |
+| `left_head`, `right_head`       | `enable_head_camera`  | Pico headset camera, one key per eye                   | uint8 (H, W, 3) — default (768, 1024, 3)             |
 | `head_camera.x/y/z/r1..r6`      | `enable_head_camera`  | headset pose, same world frame as `tcp.*`              | float                                                |
 
 The flags are all `--robot.*` (e.g. `--robot.enable_imu=true`); the tracker and gripper

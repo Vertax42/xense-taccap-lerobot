@@ -35,16 +35,16 @@ cmd = 0x30
 
 payload 内部格式：
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| deviceIdLen | uint8 | 设备 ID 字符串长度 |
-| deviceId | bytes | 设备 ID 字符串 |
-| eyeIndex | uint8 | `0=left`, `1=right` |
-| width | uint16 | JPEG 原始宽度 |
-| height | uint16 | JPEG 原始高度 |
-| frameSequence | uint32 | Pico 端递增帧序号 |
-| timestampNs | uint64 | Pico 端时间戳，纳秒 |
-| jpegBytes | bytes | JPEG 图像数据，必须以 `0xFF 0xD8` 开头 |
+| 字段          | 类型   | 说明                                   |
+| ------------- | ------ | -------------------------------------- |
+| deviceIdLen   | uint8  | 设备 ID 字符串长度                     |
+| deviceId      | bytes  | 设备 ID 字符串                         |
+| eyeIndex      | uint8  | `0=left`, `1=right`                    |
+| width         | uint16 | JPEG 原始宽度                          |
+| height        | uint16 | JPEG 原始高度                          |
+| frameSequence | uint32 | Pico 端递增帧序号                      |
+| timestampNs   | uint64 | Pico 端时间戳，纳秒                    |
+| jpegBytes     | bytes  | JPEG 图像数据，必须以 `0xFF 0xD8` 开头 |
 
 当前 C++ 解析端使用 `memcpy` 读取非对齐数值，按当前 Pico/PC 小端平台解释。
 
@@ -98,7 +98,6 @@ get_right_pico_camera_frame() -> dict
 0 = left eye
 1 = right eye
 ```
-
 
 ## 最小 Python 调用
 

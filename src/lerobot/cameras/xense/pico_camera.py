@@ -79,10 +79,7 @@ def decode_eye_frame(eye_index, last_sequences, max_width):
     metadata = xrt.get_pico_camera_frame_metadata(eye_index)
     sequence = int(metadata["frame_sequence"])
     if last_sequences.get(eye_index) == sequence:
-        return None, (
-            f"[{eye_name:5}] unchanged seq={sequence} "
-            f"size={metadata['width']}x{metadata['height']}"
-        )
+        return None, (f"[{eye_name:5}] unchanged seq={sequence} size={metadata['width']}x{metadata['height']}")
 
     jpeg_bytes = bytes(xrt.get_pico_camera_frame_jpeg(eye_index))
     jpeg_array = np.frombuffer(jpeg_bytes, dtype=np.uint8)
@@ -174,9 +171,7 @@ class CameraViewer:
 
         statuses = []
         for eye_index in EYES:
-            pil_image, status = decode_eye_frame(
-                eye_index, self.last_sequences, self.args.max_width
-            )
+            pil_image, status = decode_eye_frame(eye_index, self.last_sequences, self.args.max_width)
             statuses.append(status)
             self.status_vars[eye_index].set(status)
 
@@ -236,9 +231,7 @@ def run_camera_viewer(args):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Display the latest Pico left/right camera frames on the desktop."
-    )
+    parser = argparse.ArgumentParser(description="Display the latest Pico left/right camera frames on the desktop.")
     parser.add_argument(
         "--hz",
         type=float,
