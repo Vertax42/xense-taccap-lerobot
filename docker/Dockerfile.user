@@ -25,8 +25,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # making the image useful for both end users and hardware SDK development.
 RUN test "${TARGETARCH}" = "amd64" || \
         (echo "LeRobot-Xense Docker currently supports linux/amd64 only" >&2; exit 1) \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
+    && apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=60 update \
+    && apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=60 install -y --no-install-recommends \
         bash \
         build-essential \
         ca-certificates \
@@ -42,7 +42,9 @@ RUN test "${TARGETARCH}" = "amd64" || \
         libsm6 \
         libudev-dev \
         libusb-1.0-0-dev \
+        libvulkan1 \
         libx11-6 \
+        libxkbcommon-x11-0 \
         libxext6 \
         libxrender1 \
         ninja-build \
@@ -50,16 +52,19 @@ RUN test "${TARGETARCH}" = "amd64" || \
         sudo \
         tini \
         udev \
+        usbutils \
+        vulkan-tools \
+        xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Miniforge supplies mamba, which is the project's supported solver. Pinning the
 # installer avoids silently changing the base environment between image builds.
-RUN curl -fsSL \
+RUN curl --http1.1 --retry 10 --retry-delay 5 --retry-all-errors -fsSL \
         "https://github.com/conda-forge/miniforge/releases/download/${MINIFORGE_VERSION}/Miniforge3-${MINIFORGE_VERSION}-Linux-x86_64.sh" \
         -o /tmp/miniforge.sh \
     && bash /tmp/miniforge.sh -b -p /opt/conda \
     && rm /tmp/miniforge.sh \
-    && /opt/conda/bin/conda config --system --set channel_priority strict \
+    && /opt/conda/bin/conda config --system --set channel_priority flexible \
     && /opt/conda/bin/conda clean -afy
 
 ENV PATH=/opt/conda/envs/xense-taccap/bin:/opt/conda/bin:${PATH} \
@@ -69,6 +74,9 @@ ENV PATH=/opt/conda/envs/xense-taccap/bin:/opt/conda/bin:${PATH} \
     HF_LEROBOT_HOME=/data/lerobot \
     TORCH_HOME=/root/.cache/torch \
     TRITON_CACHE_DIR=/root/.cache/triton \
+    XDG_RUNTIME_DIR=/tmp/xdg-runtime \
+    WGPU_BACKEND=vulkan \
+    CONDA_OVERRIDE_CUDA=12.8 \
     UV_HTTP_TIMEOUT=300 \
     PYTHONUNBUFFERED=1 \
     QT_X11_NO_MITSHM=1 \
@@ -78,7 +86,7 @@ WORKDIR /opt/lerobot
 
 # Resolve the expensive conda layer before copying frequently changing source.
 COPY conda_environment.yaml /tmp/conda_environment.yaml
-RUN mamba env create -f /tmp/conda_environment.yaml \
+RUN mamba env create --channel-priority flexible -f /tmp/conda_environment.yaml \
     && mamba clean -afy \
     && rm /tmp/conda_environment.yaml
 
@@ -91,9 +99,10 @@ RUN bash ./setup_env.sh --install \
     && rm -rf /root/.cache/pip /root/.cache/uv
 
 RUN install -m 0755 docker/entrypoint.sh /usr/local/bin/lerobot-entrypoint \
-    && mkdir -p /data "${HF_HOME}" "${TORCH_HOME}" "${TRITON_CACHE_DIR}"
+    && mkdir -p /data /root/.xensesdk "${HF_HOME}" "${TORCH_HOME}" "${TRITON_CACHE_DIR}" "${XDG_RUNTIME_DIR}" \
+    && chmod 0700 "${XDG_RUNTIME_DIR}"
 
-VOLUME ["/data", "/root/.cache/huggingface", "/root/.cache/torch"]
+VOLUME ["/data", "/root/.xensesdk", "/root/.cache/huggingface", "/root/.cache/torch"]
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/lerobot-entrypoint"]
 CMD ["bash"]

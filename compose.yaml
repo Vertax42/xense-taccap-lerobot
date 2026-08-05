@@ -6,6 +6,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.user
+      network: host
       args:
         UBUNTU_VERSION: "22.04"
         MINIFORGE_VERSION: "25.3.1-0"
@@ -28,8 +29,16 @@ services:
     environment:
       DISPLAY: ${DISPLAY:-:0}
       START_XENSEVR_SERVICE: ${START_XENSEVR_SERVICE:-1}
+      XDG_RUNTIME_DIR: /tmp/xdg-runtime
+      WGPU_BACKEND: vulkan
+      NVIDIA_DRIVER_CAPABILITIES: all
       HF_TOKEN: ${HF_TOKEN:-}
     volumes:
+      # The discovery code needs host udev's by-id/by-path links, not only the
+      # raw device nodes exposed by privileged mode.
+      - /dev:/dev
+      - /run/udev:/run/udev:ro
+      - xensesdk-cache:/root/.xensesdk
       - lerobot-data:/data
       - huggingface-cache:/root/.cache/huggingface
       - torch-cache:/root/.cache/torch
@@ -37,6 +46,7 @@ services:
     working_dir: /opt/lerobot
 
 volumes:
+  xensesdk-cache:
   lerobot-data:
   huggingface-cache:
   torch-cache:
