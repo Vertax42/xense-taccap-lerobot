@@ -46,18 +46,14 @@ Unity. Restarting Unity mid-session relocates the origin.
 
 Concurrency
 -----------
-``xrt.init()`` is a process-level singleton. This module guards it with
-a class-level flag so multiple readers in one process share the same
-SDK instance. A class-level counter tracks how many readers have the SDK
-open; ``disconnect()`` only calls ``xrt.close()`` once the last reader
-releases it, so a still-alive subscriber is never torn down early. An
-``atexit`` hook closes the SDK on interpreter shutdown as a fallback for
-paths that never call ``disconnect()`` (e.g. discovery-only use via
-``list_serial_numbers()``). This matters because the underlying SDK
-spawns background ``std::thread``s that are only joined by
-``xrt.close()``; leaving them joinable at process teardown makes their
-destructor call ``std::terminate()`` (observed as
-``terminate called without an active exception`` / core dump).
+``xrt.init()`` is a process-level singleton, shared with the Pico head
+camera (:mod:`lerobot.cameras.pico`) which reads frames off the same
+connection. Both are optional, so neither owns it: the lifecycle lives in
+:mod:`.xrt_session`, which hands out holds and closes the SDK only when
+the last holder releases. See that module for why this matters — closing
+early would drop a still-alive subscriber, and not closing at all makes
+the SDK's joinable ``std::thread``s call ``std::terminate()`` at process
+teardown (``terminate called without an active exception`` / core dump).
 
 Threading model — background poller
 -----------------------------------
@@ -78,8 +74,6 @@ Matches the architecture of the SDK's
 
 from __future__ import annotations
 
-import atexit
-import contextlib
 import threading
 import time
 from typing import Any
@@ -93,6 +87,8 @@ from lerobot.utils.robot_utils import (
     quaternion_to_matrix,
     quaternion_to_rotation_6d,
 )
+
+from . import xrt_session
 
 # Pico tracker's native sampling rate. Polling slower wastes data;
 # faster just returns duplicates. SDK example uses the same constant.
@@ -156,41 +152,15 @@ class Pico4TrackerReader:
         logger_name: Optional logger name suffix.
     """
 
-    # Class-level singleton guard so multiple readers don't re-init xrt.
-    _xrt_initialized: bool = False
-    _xrt = None  # module reference, set on first connect
-    _init_lock = threading.Lock()
-    # Number of readers currently holding the SDK open. Incremented on a
-    # successful connect(), decremented on disconnect(); the SDK is closed
-    # (which joins its background threads) only when this hits zero. Guarded
-    # by _init_lock. An atexit fallback (see _shutdown_sdk) closes the SDK
-    # even if some path never calls disconnect().
-    _active_readers: int = 0
-    _atexit_registered: bool = False
+    # The xrt singleton and its hold count now live in ``xrt_session`` — the
+    # head camera needs the same connection, and neither consumer can own it.
+    # See that module for why the count and the atexit hook exist.
+    #
     # spdlog rejects duplicate logger names; use an instance counter to
     # disambiguate when multiple readers share the same logger_name (e.g.
     # both default to "auto").
     _instance_counter: int = 0
     _counter_lock = threading.Lock()
-
-    @classmethod
-    def _shutdown_sdk(cls) -> None:
-        """Close the XenseVR SDK, joining its background threads.
-
-        Registered as an atexit hook on first init so that discovery-only
-        use (``list_serial_numbers``) or any path that skips
-        ``disconnect()`` still tears the SDK down cleanly. Without this,
-        the SDK's joinable ``std::thread``s are destroyed at process exit
-        and call ``std::terminate()`` (core dump). Idempotent.
-        """
-        with cls._init_lock:
-            if cls._xrt_initialized and cls._xrt is not None:
-                # pragma: no cover — best-effort at teardown
-                with contextlib.suppress(Exception):
-                    cls._xrt.close()
-            cls._xrt_initialized = False
-            cls._xrt = None
-            cls._active_readers = 0
 
     def __init__(
         self,
@@ -291,23 +261,9 @@ class Pico4TrackerReader:
             DeviceNotConnectedError: if no tracker serials appear in time.
         """
         logger = get_logger(f"Pico4TrackerReader-list-{logger_name or 'auto'}")
-        with cls._init_lock:
-            if not cls._xrt_initialized:
-                try:
-                    import xensevr_pc_service_sdk as xrt
-                except ImportError as e:
-                    raise ImportError(
-                        "xensevr_pc_service_sdk is required for Pico4 tracker discovery. "
-                        "Build the pybind under "
-                        "src/lerobot/teleoperators/pico4/xensevr-pc-service-pybind/."
-                    ) from e
-                xrt.init()
-                cls._xrt = xrt
-                cls._xrt_initialized = True
-                if not cls._atexit_registered:
-                    atexit.register(cls._shutdown_sdk)
-                    cls._atexit_registered = True
-        xrt = cls._xrt
+        # Discovery deliberately does not take a hold: it is a few reads, and
+        # holding once per call would leak. The atexit hook does the closing.
+        xrt, _ = xrt_session.ensure_loaded("Pico4 tracker discovery")
 
         deadline = time.monotonic() + float(device_wait_timeout)
         while time.monotonic() < deadline:
@@ -371,26 +327,14 @@ class Pico4TrackerReader:
         else:
             self._ee_init_matrix = None
 
-        with Pico4TrackerReader._init_lock:
-            if not Pico4TrackerReader._xrt_initialized:
-                try:
-                    import xensevr_pc_service_sdk as xrt
-                except ImportError as e:
-                    raise ImportError(
-                        "xensevr_pc_service_sdk is required for Pico4TrackerReader. "
-                        "Build the pybind under src/lerobot/teleoperators/pico4/xensevr-pc-service-pybind/."
-                    ) from e
-                xrt.init()
-                Pico4TrackerReader._xrt = xrt
-                Pico4TrackerReader._xrt_initialized = True
-                if not Pico4TrackerReader._atexit_registered:
-                    atexit.register(Pico4TrackerReader._shutdown_sdk)
-                    Pico4TrackerReader._atexit_registered = True
-                self.logger.info("XenseVR SDK initialized.")
-            else:
-                self.logger.info("XenseVR SDK already initialized; reusing singleton.")
-
-        xrt = Pico4TrackerReader._xrt
+        # Load now (device resolution below needs it) but do not hold yet —
+        # the hold is taken once the poller is actually running, so a failure
+        # in between leaves nothing to leak.
+        xrt, did_init = xrt_session.ensure_loaded("Pico4TrackerReader")
+        if did_init:
+            self.logger.info("XenseVR SDK initialized.")
+        else:
+            self.logger.info("XenseVR SDK already initialized; reusing singleton.")
 
         # IMPORTANT: the Pico4 coordinate origin is set by Unity at app
         # launch — not by xrt.init(), and not by re-clicking Connect in
@@ -432,8 +376,7 @@ class Pico4TrackerReader:
             daemon=True,
         )
         self._poller_thread.start()
-        with Pico4TrackerReader._init_lock:
-            Pico4TrackerReader._active_readers += 1
+        xrt_session.hold()
         self.logger.info(
             f"Pico4TrackerReader connected to tracker idx={self._tracker_index} "
             f"sn={self._resolved_sn!r} after {attempt + 1} polls; "
@@ -492,22 +435,7 @@ class Pico4TrackerReader:
             self._align_matrix = None
         self._ee_init_matrix = None
 
-        closed = False
-        with Pico4TrackerReader._init_lock:
-            if Pico4TrackerReader._active_readers > 0:
-                Pico4TrackerReader._active_readers -= 1
-            if (
-                Pico4TrackerReader._active_readers == 0
-                and Pico4TrackerReader._xrt_initialized
-                and Pico4TrackerReader._xrt is not None
-            ):
-                try:
-                    Pico4TrackerReader._xrt.close()
-                except Exception as e:  # pragma: no cover — best-effort at teardown
-                    self.logger.warn(f"xrt.close() failed: {e}")
-                Pico4TrackerReader._xrt_initialized = False
-                Pico4TrackerReader._xrt = None
-                closed = True
+        closed = xrt_session.release()
 
         if closed:
             self.logger.info("Pico4TrackerReader disconnected (last reader; XenseVR SDK closed).")
@@ -520,7 +448,7 @@ class Pico4TrackerReader:
         """Body of the background thread. Polls xrt at the requested rate
         and updates the cached pose under the lock. Lifecycle is driven
         by ``_stop_evt`` (set by ``disconnect()``)."""
-        xrt = Pico4TrackerReader._xrt
+        xrt = xrt_session.module()
         prev_ee_quat: np.ndarray | None = None
 
         while not self._stop_evt.wait(self._poll_period):

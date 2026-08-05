@@ -30,8 +30,10 @@ Observation features (per side ``{s}`` in left/right):
     {s}_wrist                       -- wrist UVC frame (if enable_wrist_camera)
     {s}_tactile_left / {s}_tactile_right -- recorded tactile frames (sensor on
                                        left/right finger), ``rectify`` by default
-    head_rgb                        -- Insight RGB (if enable_head_camera)
-    head_camera.x/y/z/r1..r6        -- Insight-frame raw VIO pose
+    left_head / right_head    -- Pico headset camera, one key per eye (if
+                                       enable_head_camera). NOTE these name the
+                                       headset's EYES, not the left/right arm.
+    head_camera.x/y/z/r1..r6        -- headset pose, same world frame as *_tcp.*
 
 Display-only keys (in ``get_observation()`` and ``display_features``, absent from
 ``observation_features``, so Rerun shows them but the dataset never sees them —
@@ -49,7 +51,6 @@ from typing import Any
 
 import numpy as np
 
-from lerobot.cameras.insight import InsightCamera, InsightCameraConfig
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.cameras.xense.configuration_xense import XenseTactileCameraConfig
@@ -60,7 +61,11 @@ from ..robot import Robot
 from ..taccap_gripper import serial_discovery as disco
 from ..taccap_gripper.ee_transform import resolve_tracker_to_ee
 from ..taccap_gripper.taccap_gripper import (
+    HEAD_POSE_KEYS,
+    build_head_camera_configs,
     prewarm_tactile_config_cache,
+    read_head_camera_skew,
+    read_head_pose,
     resolve_wrist_camera_path,
     split_camera_read,
     tactile_camera_output_types,
@@ -147,8 +152,9 @@ class BiTaccapGripper(Robot):
         # powered at construction); wrist cameras are filesystem-only.
         self._camera_configs = self._discover_camera_configs()
         self.cameras = make_cameras_from_configs(self._camera_configs)
-        head_camera = self.cameras.get("head_rgb")
-        self._head_camera = head_camera if isinstance(head_camera, InsightCamera) else None
+        self._head_pose_warned = False
+        self._head_skew_count = 0
+        self._head_warn_at = 0.0
 
         # Auto-discover the Pico4 motion tracker(s): enumerate from the XenseVR PC
         # service and assign one per side by serial (second-to-last digit, strict).
@@ -250,16 +256,7 @@ class BiTaccapGripper(Robot):
                 )
 
         if self.config.enable_head_camera:
-            configs["head_rgb"] = InsightCameraConfig(
-                library_path=self.config.head_camera_library_path,
-                width=self.config.head_camera_width,
-                height=self.config.head_camera_height,
-                crop_bias=self.config.head_camera_crop_bias,
-                fps=self.config.head_camera_fps,
-                startup_timeout_s=self.config.head_camera_startup_timeout_s,
-                stale_after_s=self.config.head_camera_stale_after_s,
-                stale_timeout_s=self.config.head_camera_stale_timeout_s,
-            )
+            configs.update(build_head_camera_configs(self.config))
         return configs
 
     # ------------------------------------------------------------------ schema
@@ -281,12 +278,15 @@ class BiTaccapGripper(Robot):
                     features[f"{side}_imu.mag.{axis}"] = float
 
         if self.config.enable_head_camera:
-            for key in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"):
+            for key in HEAD_POSE_KEYS:
                 features[f"head_camera.{key}"] = float
 
         # Tactile + wrist cameras (keys already left_/right_ prefixed).
+        # ``frame_width`` differs from ``width`` only for the stereo head
+        # camera, where ``width`` is one eye and a merged frame is twice that.
         for cam_name, cam_cfg in self._camera_configs.items():
-            features[cam_name] = (cam_cfg.height, cam_cfg.width, 3)
+            width = getattr(cam_cfg, "frame_width", cam_cfg.width)
+            features[cam_name] = (cam_cfg.height, width, 3)
 
         return features
 
@@ -514,19 +514,29 @@ class BiTaccapGripper(Robot):
                 except Exception as e:
                     self.logger.warn(f"  [{side}] IMU read failed: {e}")
 
-        if self._head_camera is not None:
-            head = self._head_camera.read_snapshot_latest()
-            obs["head_rgb"] = head.rgb
-            for axis, value in zip(("x", "y", "z"), head.vio_position, strict=True):
-                obs[f"head_camera.{axis}"] = value
-            for key, value in zip(("r1", "r2", "r3", "r4", "r5", "r6"), head.vio_rotation_6d, strict=True):
-                obs[f"head_camera.{key}"] = float(value)
+        if self.config.enable_head_camera:
+            head, self._head_pose_warned = read_head_pose(self.logger, self._head_pose_warned)
+            obs.update(head)
 
+        if self.config.enable_head_camera:
+            skew = read_head_camera_skew(self.cameras, self.config.head_camera_pair_max_skew_ms)
+            if skew is not None and skew > 0.0:
+                self._head_skew_count += 1
+                now = time.monotonic()
+                if now - self._head_warn_at > 5.0:
+                    self._head_warn_at = now
+                    self.logger.warn(
+                        f"Head camera eyes are {skew:.1f}ms apart (limit "
+                        f"{self.config.head_camera_pair_max_skew_ms:.0f}ms); "
+                        f"{self._head_skew_count} frames so far. left_head and "
+                        "right_head are recorded as separate keys, so a mismatched "
+                        "pair is not otherwise visible in the dataset."
+                    )
+
+        # The head cameras need no special case here — they are ordinary
+        # cameras, and the pose comes from the SDK above, not from a frame.
+        # Insight bundled the two, which is why this used to be read apart.
         for cam_name, cam in self.cameras.items():
-            # The head camera is read above via read_snapshot_latest (RGB + VIO
-            # together); skip it here so it isn't read twice.
-            if cam_name == "head_rgb":
-                continue
             obs.update(
                 split_camera_read(
                     cam_name,

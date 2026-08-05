@@ -4,9 +4,3 @@
 [submodule "third_party/taccap-gripper"]
 	path = third_party/taccap-gripper
 	url = git@github.com:Vertax42/TacCap-Gripper.git
-[submodule "third_party/XenseVR-RobotVision-PC"]
-	path = third_party/XenseVR-RobotVision-PC
-	url = git@github.com:Vertax42/XenseVR-RobotVision-PC.git
-[submodule "third_party/pyinsight"]
-	path = third_party/pyinsight
-	url = git@github.com:Vertax42/pyinsight.git

@@ -206,7 +206,19 @@ install_xensevr_service() {
 
     local ARCH DEB_VER DEB_URL DEB
     ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"   # amd64 | arm64
-    DEB_VER="0.1.0"
+    DEB_VER="0.2.0"
+
+    # v0.2.0 ships amd64 only. Without this, an arm64 host would build a URL
+    # for an asset that does not exist and fail with a bare 404 — pinning it
+    # to the last release that has an arm64 build is both truthful and
+    # working, at the cost of no Pico camera support there.
+    if [[ "$ARCH" == "arm64" && -z "${XENSEVR_DEB_URL:-}${XENSEVR_DEB:-}" ]]; then
+        DEB_VER="0.1.0"
+        echo "  NOTE: arm64 detected — pinning to v${DEB_VER}, the newest release with"
+        echo "        an arm64 asset. v0.2.0 (Pico camera support) is amd64-only; build"
+        echo "        it from source with RoboticsService/qt-gcc_aarch64.sh if you need it."
+    fi
+
     DEB_URL="${XENSEVR_DEB_URL:-https://github.com/Vertax42/XenseVR-PC-Service/releases/download/v${DEB_VER}/XenseVR-PC-Service_${DEB_VER}_${ARCH}.deb}"
 
     DEB="${XENSEVR_DEB:-}"
@@ -416,32 +428,6 @@ install_taccap() {
     echo "[taccap] Done. Verify with: python -c 'import xense.taccap; print(xense.taccap.__file__)'"
 }
 
-# ── Hardware module: Insight head camera --------------------------------------
-
-install_insight() {
-    echo ""
-    echo "══════════════════════════════════════════"
-    echo " pyinsight (Insight camera interface)"
-    echo "══════════════════════════════════════════"
-
-    local SDK_DIR="$PROJECT_ROOT/third_party/pyinsight"
-    if [[ ! -f "$SDK_DIR/pyproject.toml" ]]; then
-        echo "ERROR: $SDK_DIR not found (submodule not initialized)."
-        echo "  Run: git submodule update --init third_party/pyinsight"
-        return 1
-    fi
-
-    uv pip install -e "$SDK_DIR" --no-deps
-
-    python - <<'PY'
-from pyinsight import Insight, find_library
-
-print("Insight ->", Insight)
-print("libinsight9.so ->", find_library())
-PY
-    echo "[insight] Done. Device/HID readiness: pyinsight-check-env --hidraw"
-}
-
 # ── Argument parsing ──────────────────────────────────────────────────────────
 
 # Check if an environment name is provided
@@ -592,7 +578,6 @@ elif [[ "$1" == "--install" ]]; then
     ( install_pico4 ) || echo "[WARN] pico4 installation skipped or failed (see above)"
     install_xense     || echo "[WARN] xense installation skipped or failed (see above)"
     install_taccap    || echo "[WARN] taccap installation skipped or failed (see above)"
-    install_insight  || echo "[WARN] pyinsight installation skipped or failed (see above)"
 
 
     # ── Post-install verification ────────────────────────────────────────────
@@ -611,7 +596,6 @@ xensevr_pc_service_sdk|import importlib.metadata as M, xensevr_pc_service_sdk; p
 xensesdk|import importlib.metadata as M, xensesdk; print("v"+M.version("xensesdk"), "->", xensesdk.__file__)
 xensesdk flash|from xensesdk.flash.linux_backend import LinuxFlashBackend; print("available" if LinuxFlashBackend().available else "NOT available")
 taccap-gripper|import importlib.metadata as M, xense.taccap; print("v"+M.version("taccap-gripper"), "->", xense.taccap.__file__)
-pyinsight|import importlib.metadata as M; from pyinsight import find_library; print("v"+M.version("pyinsight"), "->", find_library())
 VERIFY
 
     echo ""

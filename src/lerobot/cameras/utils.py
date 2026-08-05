@@ -42,6 +42,11 @@ def make_cameras_from_configs(camera_configs: dict[str, CameraConfig]) -> dict[s
 
             cameras[key] = ZMQCamera(cfg)
 
+        elif cfg.type == "pico":
+            from .pico import PicoCamera
+
+            cameras[key] = PicoCamera(cfg)
+
         else:
             try:
                 cameras[key] = cast(Camera, make_device_from_device_class(cfg))

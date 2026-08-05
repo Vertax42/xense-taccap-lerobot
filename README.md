@@ -6,9 +6,10 @@ It is scoped to a single device: the **TacCap-Gripper** (**TacCap** = _Tactile
 Capture_ Gripper) — a handheld **UMI** leader gripper for tactile data
 collection. This branch tracks **upstream lerobot v5.1**, slimmed to the
 TacCap-Gripper (single + bimanual) and its **Pico4** teleoperator/tracker, with
-Xense tactile cameras layered on top. The bimanual rig can optionally record an
-**Insight head camera** as RGB plus a raw-frame VIO pose represented in the same
-position + 6D rotation format as the gripper trackers. See
+Xense tactile cameras layered on top. Either rig can optionally record the
+**Pico headset camera** — one key per eye, `left_head` and `right_head` — plus
+the headset pose, in the same position + 6D rotation format and the same world
+frame as the gripper trackers, so head and hands can be read against each other. See
 [`src/lerobot/robots/taccap_gripper/README.md`](src/lerobot/robots/taccap_gripper/README.md)
 for device-specific usage. For generic lerobot usage (datasets, policies,
 training scripts) refer to the
@@ -46,14 +47,12 @@ cd xense-taccap-lerobot
 
 This repository uses `third_party/` git submodules to manage hardware SDK dependencies:
 
-| Submodule                            | Installed package                                      |
-| ------------------------------------ | ------------------------------------------------------ |
-| `third_party/taccap-gripper`         | `xense.taccap` (TacCap UMI tactile gripper SDK)        |
-| `third_party/XenseVR-PC-Service`     | `xensevr_pc_service_sdk` (Pico4 teleop/tracker)        |
-| `third_party/XenseVR-RobotVision-PC` | ZED-M → Pico4 stereo passthrough (built separately)    |
-| `third_party/pyinsight`              | `pyinsight` (Insight camera native RGB/VIO/IMU bridge) |
+| Submodule                        | Installed package                               |
+| -------------------------------- | ----------------------------------------------- |
+| `third_party/taccap-gripper`     | `xense.taccap` (TacCap UMI tactile gripper SDK) |
+| `third_party/XenseVR-PC-Service` | `xensevr_pc_service_sdk` (Pico4 teleop/tracker) |
 
-`taccap-gripper` and `pyinsight` are installed in editable mode.
+`taccap-gripper` is installed in editable mode.
 Changes made inside those initialized submodules are therefore picked up by the
 environment without rebuilding the main `lerobot` package.
 
@@ -69,12 +68,17 @@ environment without rebuilding the main `lerobot` package.
 > likewise shipped as a separate ~100 MB Debian package (installs to
 > `/opt/apps/roboticsservice`). `setup_env.sh --install` installs it
 > automatically by **downloading the matching-arch asset** from the
-> [v0.1.0 release](https://github.com/Vertax42/XenseVR-PC-Service/releases/tag/v0.1.0)
+> [v0.2.0 release](https://github.com/Vertax42/XenseVR-PC-Service/releases/tag/v0.2.0)
 > (override the URL with `$XENSEVR_DEB_URL`), then runs `sudo dpkg -i`
 > (idempotent — same version is skipped). It no longer searches repo `dist/`
 > or `~/Downloads/`; set `$XENSEVR_DEB` only when you explicitly need an
 > offline or patched local package. Start it with
 > `/opt/apps/roboticsservice/runService.sh`.
+>
+> **arm64 hosts stay on v0.1.0.** v0.2.0 ships an amd64 asset only, so
+> `setup_env.sh` pins arm64 to the newest release that has an arm64 build and
+> says so. Build v0.2.0 for arm64 yourself with
+> `RoboticsService/qt-gcc_aarch64.sh` if you need it there.
 
 **Step 2:** 🐍 Create and activate the mamba environment:
 
@@ -99,7 +103,7 @@ This step will:
 - Update the conda environment from `conda_environment.yaml`
 - Install the main package from `pyproject.toml`
 - Install `xensesdk` from PyPI (`uv pip install xensesdk`; see the note above — override with a local wheel via `$XENSESDK_WHEEL` for offline/patched builds)
-- Install the XenseVR PC Service daemon from its `.deb` (resolved out-of-band — see the note above), then build/install the `third_party` SDK packages: `xensevr_pc_service_sdk` (Pico4), `xense.taccap` (TacCap UMI gripper), and the editable `pyinsight`
+- Install the XenseVR PC Service daemon from its `.deb` (resolved out-of-band — see the note above), then build/install the `third_party` SDK packages: `xensevr_pc_service_sdk` (Pico4) and `xense.taccap` (TacCap UMI gripper)
 
 **Step 4:** ✅ Verify the installation:
 
@@ -107,7 +111,6 @@ This step will:
 python -c 'import xensevr_pc_service_sdk; print("xensevr_pc_service_sdk OK ->", xensevr_pc_service_sdk.__file__)'
 python -c 'import xensesdk; print("xensesdk OK ->", xensesdk.__file__)'
 python -c 'import xense.taccap; print("xense.taccap OK ->", xense.taccap.__file__)'
-python -c 'from pyinsight import find_library; print("pyinsight OK ->", find_library())'
 ```
 
 **Step 5:** 📌 **Note on FFmpeg / video:** v5.1 no longer pins `ffmpeg`
@@ -190,42 +193,40 @@ mmcli -L                                                               # gripper
 Revert by deleting the rule file and reloading. (Alternatively, on a dedicated
 robot PC with no cellular modem: `sudo systemctl disable --now ModemManager`.)
 
-**Step 8:** 🎥 **Insight device readiness (only when using the head camera).**
-The Python package and bundled `libinsight9.so` can be checked without opening the
-device:
+## 🥽 Pico headset camera (optional)
+
+Off by default. `--robot.enable_head_camera=true` records the headset's stereo
+camera as **one key per eye** — `left_head` and `right_head` — plus the headset
+pose under `head_camera.*`. Works on both `taccap_gripper` and
+`bi_taccap_gripper`.
 
 ```bash
-pyinsight-check-env --hidraw
+lerobot-record --robot.type=bi_taccap_gripper \
+    --robot.enable_head_camera=true \
+    --dataset.repo_id=<org>/<name> --dataset.single_task='...'
 ```
 
-The camera needs **two** kinds of node, and the SDK fails to initialise if either
-is unreadable:
+- **The names are the headset's eyes, not the arms.** On a bimanual rig
+  `{side}_wrist` is per-arm, but there is one headset, so the prefix means
+  something different here.
+- **`--robot.head_camera_eyes=left`** (or `right`) records a single eye, halving
+  the JPEG decoding and the encoder load.
+- **`--robot.head_camera_width/_height`** accept `1024x768` (default) or
+  `1280x960`. Both are 4:3, matching the sensor. An unlisted size is an error
+  rather than a silent downgrade, and so is a first frame whose size disagrees
+  with the config — rescaling would quietly change the recorded field of view.
+- **`head_camera.*` shares the world frame with `tcp.*`**, remapped through the
+  same Pico→world rotation the tracker uses, so the headset and the grippers can
+  be compared directly and are drawn in one 3D scene.
+- **It shares the XenseVR SDK connection with the trackers**, so the headset app
+  must be running and streaming. Turning the camera off does not drop the
+  trackers' connection, and vice versa.
 
-| Node                       | Carries            | Default owner            |
-| -------------------------- | ------------------ | ------------------------ |
-| `/dev/video4,6,8` (3 of 6) | RGB, stereo, depth | `root:video`, mode 660   |
-| `/dev/hidraw*` (2)         | IMU, VIO           | `root:plugdev`, mode 660 |
-
-On a host where those group defaults do not already apply, grant access with:
-
-```bash
-sudo tee /etc/udev/rules.d/99-insight.rules >/dev/null <<'EOF'
-SUBSYSTEM=="hidraw",      ATTRS{idVendor}=="3652", ATTRS{idProduct}=="0104", MODE="0660", GROUP="plugdev"
-SUBSYSTEM=="video4linux", ATTRS{idVendor}=="3652", ATTRS{idProduct}=="0104", MODE="0660", GROUP="video"
-EOF
-sudo usermod -aG plugdev,video "$USER"
-sudo udevadm control --reload-rules
-sudo udevadm trigger
-# Log out/in, then reconnect the camera and rerun pyinsight-check-env --hidraw.
-```
-
-`3652:0104` is what the camera actually reports — `lsusb` shows it as
-`LooperRobotics Insight Series USB AI Camera`. Confirm yours with `lsusb` before
-applying, and keep the VID/PID match rather than opening up every HID device.
-
-> Do not match on `ATTRS{product}`. The USB product string is
-> `Insight Series USB AI Camera` across the whole series, so a rule written
-> against a per-model name silently matches nothing.
+The two eyes arrive as separate messages, so a background thread collects them
+and holds a pair back until both halves of one capture are in — reading the SDK
+directly from the record loop caught one eye updated and not the other on 7% of
+frames. A pair that still fails to match raises a rate-limited warning naming the
+skew rather than being recorded silently.
 
 ## 🔑 The `LeRobotDataset` format
 

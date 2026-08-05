@@ -13,7 +13,8 @@ Rerun 3D trajectory visualisation for TacCap-Gripper devices.
 
 Adds an example-style 3D world view on top of LeRobot's default scalar/image
 panels: each gripper is drawn as a labelled ellipsoid with a local axis triad at
-its live Pico4 pose, leaving a fading breadcrumb trail behind it — the same
+its live Pico4 pose, leaving a fading breadcrumb trail behind it (fading for
+real: the alpha ramps along the trail) — the same
 "where has the gripper been" effect as
 ``third_party/taccap-gripper/python/examples/rerun_dual_with_tracker.py``.
 
@@ -48,7 +49,16 @@ _SIDE_COLOR = {
     "left": (255, 80, 80),
     "right": (80, 160, 255),
     "": (120, 220, 120),
+    # The headset, distinct from either gripper so the three read apart.
+    "head": (230, 190, 60),
 }
+
+# Trail rendering. 90 samples is ~3 s at 30 fps: long enough to read the
+# stroke the operator just made, short enough that two of them do not knot
+# together. The old 300 (~10 s) at flat opacity was the thicket.
+_TRAIL_CHUNKS = 8
+_TRAIL_ALPHA_MIN = 25
+_TRAIL_RADIUS = 0.0022
 
 _ROT_KEYS = ("r1", "r2", "r3", "r4", "r5", "r6")
 _POSE_KEYS = ("x", "y", "z", *_ROT_KEYS)
@@ -64,6 +74,16 @@ def _quat_xyzw_from_6d(r6d) -> list[float]:
     return [float(qx), float(qy), float(qz), float(qw)]
 
 
+def _eye_order(key: str) -> tuple[int, str]:
+    """Sort camera keys left-then-right, as they sit on the operator.
+
+    Plain sorting puts ``right_head`` before ``left_head``, which reads
+    backwards next to a pair of images.
+    """
+    side = 0 if key.startswith("left") else 1 if key.startswith("right") else 2
+    return (side, key)
+
+
 class TaccapTrajectoryViz:
     """Stateful Rerun 3D trajectory overlay for one TacCap (single or bimanual).
 
@@ -75,7 +95,7 @@ class TaccapTrajectoryViz:
     def __init__(
         self,
         observation_features: dict[str, Any],
-        trail_max: int = 300,
+        trail_max: int = 90,
         signals: str = "all",
         show_trajectory: bool = True,
     ) -> None:
@@ -175,37 +195,44 @@ class TaccapTrajectoryViz:
         """Lay the viewer out by what each stream is for, not by how many there are.
 
         Rerun's auto-layout gives every entity an equal tile, which buries the
-        two streams an operator actually watches - the head view and the wrist
-        views - under four tactile pads and thirty scalar plots. So: head camera
-        large on the left, the views you glance at stacked on the right, tactiles
-        in their own grid, and the scalars grouped into tabs rather than piled
-        into one illegible plot.
+        streams an operator actually watches under four tactile pads and thirty
+        scalar plots. So: the 3D trail takes the large left tile, the cameras
+        stack down the right in the order you read them — head for context,
+        wrists for the close-up, tactiles last — and the scalars are grouped
+        into tabs rather than piled into one illegible plot.
         """
         img_keys = self._image_keys()
-        head = [k for k in img_keys if k.startswith("head")]
-        wrist = [k for k in img_keys if "wrist" in k]
+        # Match the suffix, not a "head" prefix: the keys are left_head /
+        # right_head, so a prefix test silently dropped them into the tactile
+        # bucket and they ended up in that grid. Scalars named head_camera.*
+        # are not a risk here — img_keys only carries the image features.
+        head = sorted((k for k in img_keys if k.endswith("_head")), key=_eye_order)
+        wrist = sorted((k for k in img_keys if "wrist" in k), key=_eye_order)
         tactile = [k for k in img_keys if k not in head and k not in wrist]
 
         def view(key: str) -> rrb.Spatial2DView:
             return rrb.Spatial2DView(name=key, origin=f"/observation.{key}")
 
-        # Left column: the head camera if present, else the 3D trail, else wrists.
+        # Left column: the 3D trail when there is one, else the largest camera
+        # group, so the biggest tile is never an empty panel.
         primary = None
-        if head:
-            primary = rrb.Vertical(*(view(k) for k in head))
-        elif self.has_poses:
+        if self.has_poses:
             # line_grid=False drops Rerun's built-in floor grid; we only want the
             # origin axes, gripper markers and trail.
             primary = rrb.Spatial3DView(name="trajectory", origin="/world", line_grid=False)
 
-        # Right column: 3D trail (when the head took the left slot), wrists, tactiles.
+        # Right column, top to bottom: head cameras, then the wrists directly
+        # under them (they show the same scene at two scales, so reading down
+        # the column goes from context to close-up), then the tactile grid.
         secondary: list[Any] = []
-        if head and self.has_poses:
-            secondary.append(rrb.Spatial3DView(name="trajectory", origin="/world", line_grid=False))
+        if head:
+            secondary.append(rrb.Horizontal(*(view(k) for k in head), name="head"))
         if wrist:
             secondary.append(rrb.Horizontal(*(view(k) for k in wrist), name="wrist"))
         if tactile:
             secondary.append(rrb.Grid(*(view(k) for k in tactile), name="tactile"))
+        if primary is None and secondary:
+            primary, secondary = secondary[0], secondary[1:]
 
         if primary is not None and secondary:
             top = rrb.Horizontal(primary, rrb.Vertical(*secondary), column_shares=[3, 2])
@@ -283,74 +310,35 @@ class TaccapTrajectoryViz:
             self._log_pose(name, pose)
             self._log_trail(name, pose)
 
-            # The tracker's own frame, when the robot publishes it (display-only).
-            # Drawing both is how the mount transform gets checked on hardware:
-            # the two frames should stay a fixed distance apart, with the EE at
-            # the two-finger midpoint.
-            tracker_pose = self._extract_pose(data, prefix, "tracker")
-            if tracker_pose is not None:
-                self._log_static_once(f"{name}_tracker", is_tracker=True)
-                self._log_pose(f"{name}_tracker", tracker_pose)
-                self._log_mount_link(name, tracker_pose, pose)
+        # The headset, when the head camera is on. It shares the gripper's
+        # world frame — the same Pico→world remap is applied to both — so
+        # drawing them together shows where the operator was looking relative
+        # to what their hands were doing. No trail: the head wanders
+        # continuously and its breadcrumb would bury the gripper trails.
+        head = self._extract_pose(data, "head_camera.", "")
+        if head is not None:
+            self._log_static_once("head")
+            self._log_pose("head", head)
 
     def _extract_pose(self, data: dict, prefix: str, frame: str) -> tuple | None:
-        keys = [f"{prefix}{frame}.{k}" for k in _POSE_KEYS]
+        # ``frame`` is the middle segment ("tcp"); an empty one lets a caller
+        # pass a fully-formed prefix such as "head_camera.".
+        stem = f"{prefix}{frame}." if frame else prefix
+        keys = [f"{stem}{k}" for k in _POSE_KEYS]
         if not all(k in data and data[k] is not None for k in keys):
             return None
         vals = [float(data[k]) for k in keys]
         return (vals[0], vals[1], vals[2], vals[3:9])  # (x, y, z, r6d)
 
-    def _log_mount_link(self, name: str, tracker_pose: tuple, ee_pose: tuple) -> None:
-        """Dashed segment from tracker origin to EE origin, labelled with its length.
-
-        The label is the quickest read on whether the mount transform is right:
-        it should sit at the CAD distance (~195 mm) and stay constant no matter
-        how the gripper is waved around.
-
-        Dashed because this is a construction line, not something the hardware
-        has — a solid bar reads like a physical link between the two frames.
-        Rerun has no dash style, so it is drawn as several short strips.
-        """
-        a = np.array(tracker_pose[:3], dtype=np.float64)
-        b = np.array(ee_pose[:3], dtype=np.float64)
-        length = float(np.linalg.norm(b - a))
-
-        # Fixed dash count rather than fixed dash length: the gap stays visible
-        # whatever the offset turns out to be, and the strip count never grows.
-        n_dashes = 9
-        strips = []
-        for i in range(n_dashes):
-            t0 = i / n_dashes
-            t1 = t0 + 0.55 / n_dashes  # 55% mark, 45% gap
-            strips.append([(a + (b - a) * t0).tolist(), (a + (b - a) * t1).tolist()])
-
-        rr.log(
-            f"world/mount/{name}",
-            rr.LineStrips3D(strips, colors=[[255, 200, 40]] * n_dashes, radii=0.0008),
-        )
-        # The length goes on its own entity at the midpoint. Putting it in the
-        # strips' `labels` gave every dash a label, and Rerun draws each one as a
-        # text plaque with a dark background — eight of them in a row read as a
-        # second, thicker, dark dashed line on top of the yellow one.
-        rr.log(
-            f"world/mount/{name}/length",
-            rr.Points3D(
-                [((a + b) / 2).tolist()],
-                labels=[f"{length * 1000:.1f} mm"],
-                colors=[[255, 200, 40]],
-                radii=0.0015,
-            ),
-        )
-
-    def _log_static_once(self, name: str, is_tracker: bool = False) -> None:
+    def _log_static_once(self, name: str) -> None:
         if name in self._static_logged:
             return
         ent = f"world/{name}"
-        color = _SIDE_COLOR.get(name.removesuffix("_tracker"), _SIDE_COLOR[""])
-        # The tracker gets a smaller, dimmer body and shorter axes so the EE
-        # frame stays the one your eye goes to.
-        if is_tracker:
-            half_sizes, axes_len, alpha = [[0.018, 0.018, 0.012]], 0.06, 120
+        color = _SIDE_COLOR.get(name, _SIDE_COLOR[""])
+        if name == "head":
+            # Smaller and shorter-axed than a gripper: it is context for what
+            # the hands are doing, not the thing being watched.
+            half_sizes, axes_len, alpha = [[0.045, 0.030, 0.030]], 0.07, 160
         else:
             half_sizes, axes_len, alpha = [[0.035, 0.035, 0.02]], 0.10, 220
         rr.log(
@@ -363,13 +351,10 @@ class TaccapTrajectoryViz:
                 origins=[[0, 0, 0]] * 3,
                 vectors=[[axes_len, 0, 0], [0, axes_len, 0], [0, 0, axes_len]],
                 colors=[[255, 80, 80], [80, 255, 80], [80, 80, 255]],
-                radii=0.004 if not is_tracker else 0.0025,
+                radii=0.004,
             ),
         )
-        if is_tracker:
-            label = "TRACKER" if name == "gripper_tracker" else f"{name.removesuffix('_tracker').upper()} TRACKER"
-        else:
-            label = "EE" if name == "gripper" else f"{name.upper()} EE"
+        label = "HEAD" if name == "head" else ("EE" if name == "gripper" else f"{name.upper()} EE")
         rr.log(
             f"{ent}/label",
             rr.Points3D([[0, 0, axes_len]], labels=[label], colors=[color], radii=0.004),
@@ -387,13 +372,39 @@ class TaccapTrajectoryViz:
         )
 
     def _log_trail(self, name: str, pose: tuple) -> None:
+        """Recent path, fading out towards the oldest end.
+
+        Drawn as a few chunks rather than one polyline so each can carry its
+        own alpha. A per-point gradient would be smoother but costs a strip
+        per sample; at this length the steps are not visible anyway.
+
+        Two grippers at full opacity for ten seconds was a thicket you could
+        not read either trail out of — the fade and the shorter window are
+        what make two of them legible at once.
+        """
         x, y, z, _ = pose
         trail = self._trails[name]
         trail.append([x, y, z])
         if len(trail) < 2:
             return
-        color = _SIDE_COLOR.get(name, _SIDE_COLOR[""])
+
+        pts = list(trail)
+        r, g, b = _SIDE_COLOR.get(name, _SIDE_COLOR[""])
+        chunks, colors = [], []
+        n = _TRAIL_CHUNKS
+        for i in range(n):
+            lo = len(pts) * i // n
+            hi = len(pts) * (i + 1) // n + 1  # overlap by one so chunks join up
+            seg = pts[lo:hi]
+            if len(seg) < 2:
+                continue
+            # Oldest chunk barely there, newest at full strength.
+            alpha = int(_TRAIL_ALPHA_MIN + (255 - _TRAIL_ALPHA_MIN) * (i + 1) / n)
+            chunks.append(seg)
+            colors.append([r, g, b, alpha])
+        if not chunks:
+            return
         rr.log(
             f"world/trails/{name}",
-            rr.LineStrips3D([list(trail)], colors=[color], radii=0.003),
+            rr.LineStrips3D(chunks, colors=colors, radii=_TRAIL_RADIUS),
         )

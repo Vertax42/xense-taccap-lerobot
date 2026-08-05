@@ -6,10 +6,16 @@
 #include <mutex>
 #include <sstream>
 #include <array>
+#include <cstdint>
+#include <cstring>
+#include <stdexcept>
+#include <utility>
+#include <vector>
 #include <nlohmann/json.hpp>
 #include "PXREARobotSDK.h"
 
 using json = nlohmann::json;
+namespace py = pybind11;
 
 std::array<double, 7> LeftControllerPose;
 std::array<double, 7> RightControllerPose;
@@ -64,6 +70,77 @@ std::mutex leftHandMutex;
 std::mutex rightHandMutex;
 std::mutex bodyMutex;  // Mutex for body tracking data
 std::mutex motionMutex;
+std::mutex cameraMutex;
+
+struct PicoCameraFrame {
+    bool valid = false;
+    std::string deviceId;
+    int eyeIndex = -1;
+    int width = 0;
+    int height = 0;
+    uint32_t frameSequence = 0;
+    uint64_t timestampNs = 0;
+    std::vector<uint8_t> jpegBytes;
+};
+
+std::array<PicoCameraFrame, 2> PicoCameraFrames;
+
+template <typename T>
+T readUnalignedValue(const uint8_t* data) {
+    T value{};
+    std::memcpy(&value, data, sizeof(T));
+    return value;
+}
+
+bool cachePicoCameraFrame(const char* data, uint64_t size) {
+    if (data == nullptr || size < 1 + 1 + 2 + 2 + 4 + 8 + 2) {
+        return false;
+    }
+
+    const auto* bytes = reinterpret_cast<const uint8_t*>(data);
+    uint64_t offset = 0;
+
+    const uint8_t deviceIdLen = bytes[offset++];
+    if (deviceIdLen == 0 || offset + deviceIdLen + 1 + 2 + 2 + 4 + 8 + 2 > size) {
+        return false;
+    }
+
+    std::string deviceId(reinterpret_cast<const char*>(bytes + offset), deviceIdLen);
+    offset += deviceIdLen;
+
+    const uint8_t eyeIndex = bytes[offset++];
+    if (eyeIndex > 1) {
+        return false;
+    }
+
+    const uint16_t width = readUnalignedValue<uint16_t>(bytes + offset);
+    offset += sizeof(uint16_t);
+    const uint16_t height = readUnalignedValue<uint16_t>(bytes + offset);
+    offset += sizeof(uint16_t);
+    const uint32_t frameSequence = readUnalignedValue<uint32_t>(bytes + offset);
+    offset += sizeof(uint32_t);
+    const uint64_t timestampNs = readUnalignedValue<uint64_t>(bytes + offset);
+    offset += sizeof(uint64_t);
+
+    const uint64_t jpegSize = size - offset;
+    if (width == 0 || height == 0 || jpegSize < 2 || bytes[offset] != 0xFF || bytes[offset + 1] != 0xD8) {
+        return false;
+    }
+
+    PicoCameraFrame frame;
+    frame.valid = true;
+    frame.deviceId = std::move(deviceId);
+    frame.eyeIndex = eyeIndex;
+    frame.width = width;
+    frame.height = height;
+    frame.frameSequence = frameSequence;
+    frame.timestampNs = timestampNs;
+    frame.jpegBytes.assign(bytes + offset, bytes + size);
+
+    std::lock_guard<std::mutex> lock(cameraMutex);
+    PicoCameraFrames[eyeIndex] = std::move(frame);
+    return true;
+}
 
 std::array<double, 7> stringToPoseArray(const std::string& poseStr) {
     std::array<double, 7> result{0};
@@ -107,6 +184,7 @@ void OnPXREAClientCallback(void* context, PXREAClientCallbackType type, int stat
         std::cout << "device connect\n" << (const char*)userData << status << std::endl;
         break;
     case PXREADeviceStateJson:
+    {
         auto& dsj = *((PXREADevStateJson*)userData);
         try {
             json data = json::parse(dsj.stateJson);
@@ -261,6 +339,13 @@ void OnPXREAClientCallback(void* context, PXREAClientCallbackType type, int stat
             std::cerr << "JSON parsing error: " << e.what() << std::endl;
         }
             break;
+    }
+    case PXREADeviceCustomMessage:
+    {
+        auto& dcm = *((PXREADevCustomMessage*)userData);
+        cachePicoCameraFrame(dcm.dataPtr, dcm.dataSize);
+        break;
+    }
     }
 }
 
@@ -472,6 +557,81 @@ int64_t getMotionTimeStampNs() {
     return MotionTimeStampNs;
 }
 
+bool hasPicoCameraFrame(int eyeIndex) {
+    if (eyeIndex < 0 || eyeIndex >= static_cast<int>(PicoCameraFrames.size())) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(cameraMutex);
+    return PicoCameraFrames[eyeIndex].valid;
+}
+
+py::dict getPicoCameraFrameMetadata(int eyeIndex) {
+    if (eyeIndex < 0 || eyeIndex >= static_cast<int>(PicoCameraFrames.size())) {
+        throw std::out_of_range("Pico camera eye index must be 0 (left) or 1 (right).");
+    }
+
+    std::lock_guard<std::mutex> lock(cameraMutex);
+    const PicoCameraFrame& frame = PicoCameraFrames[eyeIndex];
+    if (!frame.valid) {
+        throw std::runtime_error("No Pico camera frame has been received for the requested eye.");
+    }
+
+    py::dict metadata;
+    metadata["device_id"] = frame.deviceId;
+    metadata["eye_index"] = frame.eyeIndex;
+    metadata["width"] = frame.width;
+    metadata["height"] = frame.height;
+    metadata["frame_sequence"] = frame.frameSequence;
+    metadata["timestamp_ns"] = frame.timestampNs;
+    metadata["jpeg_size"] = frame.jpegBytes.size();
+    return metadata;
+}
+
+py::bytes getPicoCameraFrameJpeg(int eyeIndex) {
+    if (eyeIndex < 0 || eyeIndex >= static_cast<int>(PicoCameraFrames.size())) {
+        throw std::out_of_range("Pico camera eye index must be 0 (left) or 1 (right).");
+    }
+
+    std::lock_guard<std::mutex> lock(cameraMutex);
+    const PicoCameraFrame& frame = PicoCameraFrames[eyeIndex];
+    if (!frame.valid || frame.jpegBytes.empty()) {
+        throw std::runtime_error("No Pico camera JPEG has been received for the requested eye.");
+    }
+
+    return py::bytes(reinterpret_cast<const char*>(frame.jpegBytes.data()), frame.jpegBytes.size());
+}
+
+py::dict getPicoCameraFrame(int eyeIndex) {
+    if (eyeIndex < 0 || eyeIndex >= static_cast<int>(PicoCameraFrames.size())) {
+        throw std::out_of_range("Pico camera eye index must be 0 (left) or 1 (right).");
+    }
+
+    std::lock_guard<std::mutex> lock(cameraMutex);
+    const PicoCameraFrame& frame = PicoCameraFrames[eyeIndex];
+    if (!frame.valid || frame.jpegBytes.empty()) {
+        throw std::runtime_error("No Pico camera frame has been received for the requested eye.");
+    }
+
+    py::dict result;
+    result["device_id"] = frame.deviceId;
+    result["eye_index"] = frame.eyeIndex;
+    result["width"] = frame.width;
+    result["height"] = frame.height;
+    result["frame_sequence"] = frame.frameSequence;
+    result["timestamp_ns"] = frame.timestampNs;
+    result["jpeg"] = py::bytes(reinterpret_cast<const char*>(frame.jpegBytes.data()), frame.jpegBytes.size());
+    return result;
+}
+
+py::dict getLeftPicoCameraFrame() {
+    return getPicoCameraFrame(0);
+}
+
+py::dict getRightPicoCameraFrame() {
+    return getPicoCameraFrame(1);
+}
+
 
 PYBIND11_MODULE(xensevr_pc_service_sdk, m) {
     m.def("init", &init, "Initialize the PXREARobot SDK.");
@@ -514,6 +674,14 @@ PYBIND11_MODULE(xensevr_pc_service_sdk, m) {
     m.def("get_motion_tracker_acceleration", &getMotionTrackerAcceleration, "Get the motion tracker acceleration data (3 trackers, 6 values each: ax,ay,az,wax,way,waz).");
     m.def("get_motion_tracker_serial_numbers", &getMotionTrackerSerialNumbers, "Get the serial numbers of the motion trackers.");
     m.def("get_motion_timestamp_ns", &getMotionTimeStampNs, "Get the motion data timestamp in nanoseconds.");
+
+    // Pico eye camera functions. eye_index: 0 = left, 1 = right.
+    m.def("has_pico_camera_frame", &hasPicoCameraFrame, "Check whether a Pico camera frame has been received for an eye.");
+    m.def("get_pico_camera_frame_metadata", &getPicoCameraFrameMetadata, "Get metadata for the latest Pico camera frame for an eye.");
+    m.def("get_pico_camera_frame_jpeg", &getPicoCameraFrameJpeg, "Get the latest Pico camera JPEG bytes for an eye.");
+    m.def("get_pico_camera_frame", &getPicoCameraFrame, "Get metadata and JPEG bytes for the latest Pico camera frame for an eye.");
+    m.def("get_left_pico_camera_frame", &getLeftPicoCameraFrame, "Get metadata and JPEG bytes for the latest left-eye Pico camera frame.");
+    m.def("get_right_pico_camera_frame", &getRightPicoCameraFrame, "Get metadata and JPEG bytes for the latest right-eye Pico camera frame.");
 
     m.doc() = "Python bindings for PXREARobot SDK using pybind11.";
 }
