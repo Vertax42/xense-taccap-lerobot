@@ -39,6 +39,7 @@ auto-discover by rule.
 from dataclasses import dataclass, field
 
 from ..config import RobotConfig
+from ..taccap_gripper.common import build_head_camera_configs
 
 _SIDES = ("left", "right")
 
@@ -191,8 +192,6 @@ class BiTaccapGripperConfig(RobotConfig):
         if self.enable_head_camera:
             # Delegate to the camera config so there is one definition of what
             # a valid mode is, rather than a copy here that can drift from it.
-            from ..taccap_gripper.taccap_gripper import build_head_camera_configs
-
             build_head_camera_configs(self)
         # One recorded stream per sensor: observation_features declares a single
         # (H, W, 3) per tactile camera, so a second recorded type would silently
