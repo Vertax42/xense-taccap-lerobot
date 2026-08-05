@@ -1,0 +1,455 @@
+#!/usr/bin/env python
+
+# Copyright 2026 The XenseRobotics Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+"""The pure helpers shared by the single and bimanual TacCap grippers, plus the
+tracker→TCP mount transform.
+
+These are the pieces both robots import rather than re-implement, so a change
+here moves both at once — which is the point, and the reason they are worth
+pinning. Nothing below touches hardware or either vendor SDK.
+"""
+
+import numpy as np
+import pytest
+
+from lerobot.robots.taccap_gripper.common import (
+    HEAD_CAMERA_KEYS,
+    HEAD_POSE_KEYS,
+    POSE_KEYS,
+    HeadSkewMonitor,
+    build_head_camera_configs,
+    build_tactile_camera_configs,
+    read_head_camera_skew,
+    split_camera_read,
+    swap_tactile_display_features,
+    tactile_camera_output_types,
+    tactile_display_key,
+)
+from lerobot.robots.taccap_gripper.ee_transform import resolve_tracker_to_ee, tracker_to_tcp
+
+
+class TestTactileOutputTypes:
+    def test_recorded_type_comes_first(self):
+        """Order is load-bearing: everything after the first entry is treated as
+        display-only when the display-key map is built."""
+        assert tactile_camera_output_types(["rectify"], ["difference"]) == ["rectify", "difference"]
+
+    def test_display_type_equal_to_the_recorded_one_collapses(self):
+        """Asking the sensor for the same view twice would be pure waste; the
+        recorded key then doubles as the displayed one."""
+        assert tactile_camera_output_types(["rectify"], ["rectify"]) == ["rectify"]
+
+    def test_no_display_types_leaves_just_the_recorded_one(self):
+        assert tactile_camera_output_types(["rectify"], []) == ["rectify"]
+
+    def test_repeats_within_the_display_list_are_left_to_the_config(self):
+        """This helper only guards the recorded-vs-display collision. Repeats
+        *within* the display list — and any spelling variants — are collapsed
+        authoritatively by ``XenseTactileCameraConfig.__post_init__``, which is
+        where the strings become enums; see the test below."""
+        assert tactile_camera_output_types(["rectify"], ["difference", "depth", "difference"]) == [
+            "rectify",
+            "difference",
+            "depth",
+            "difference",
+        ]
+
+    def test_input_lists_are_not_mutated(self):
+        recorded = ["rectify"]
+        display = ["difference"]
+        tactile_camera_output_types(recorded, display)
+        assert recorded == ["rectify"]
+        assert display == ["difference"]
+
+
+class TestTactileOutputTypesReachTheConfigDeduplicated:
+    """The other half of the split above: whatever this helper passes through,
+    the camera config collapses to one entry per output type.
+
+    It matters because ``read()`` keys its result dict by output type, so a
+    duplicate would take a key away from a caller expecting one entry each —
+    and the robots read the types back *off the config* when deciding which are
+    display-only, precisely so they see the post-normalisation list.
+    """
+
+    def test_repeats_and_spelling_variants_collapse_to_one_enum_each(self):
+        from lerobot.cameras.xense.configuration_xense import XenseTactileCameraConfig
+
+        requested = tactile_camera_output_types(["rectify"], ["difference", "DIFFERENCE", "XenseOutputType.DIFFERENCE"])
+        cfg = XenseTactileCameraConfig(serial_number="GSPS01A25Z0011", output_types=requested)
+
+        values = [output_type.value for output_type in cfg.output_types]
+        assert values == ["rectify", "difference"]
+
+    def test_recorded_type_stays_first_after_normalisation(self):
+        """The robots take ``output_types[1:]`` as the display-only views, so
+        the recorded one has to survive normalisation in position 0."""
+        from lerobot.cameras.xense.configuration_xense import XenseTactileCameraConfig
+
+        cfg = XenseTactileCameraConfig(
+            serial_number="GSPS01A25Z0011",
+            output_types=tactile_camera_output_types(["rectify"], ["difference"]),
+        )
+        assert cfg.output_types[0].value == "rectify"
+        assert [t.value for t in cfg.output_types[1:]] == ["difference"]
+
+
+class TestTactileDisplayKey:
+    def test_key_shape(self):
+        assert tactile_display_key("tactile_left", "difference") == "tactile_left_difference"
+
+    def test_bimanual_prefix_is_preserved(self):
+        assert tactile_display_key("left_tactile_right", "difference") == "left_tactile_right_difference"
+
+
+class TestSplitCameraRead:
+    def test_plain_array_keeps_the_camera_name(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        assert split_camera_read("wrist_cam", frame) == {"wrist_cam": frame}
+
+    def test_multi_output_read_routes_display_types_to_their_own_keys(self):
+        rectify = np.zeros((4, 4, 3), dtype=np.uint8)
+        difference = np.ones((4, 4, 3), dtype=np.uint8)
+
+        obs = split_camera_read(
+            "tactile_left",
+            {"rectify": rectify, "difference": difference},
+            {"difference": "tactile_left_difference"},
+        )
+
+        assert obs["tactile_left"] is rectify
+        assert obs["tactile_left_difference"] is difference
+
+    def test_type_without_a_display_key_is_the_recorded_one(self):
+        """Whatever is left over after the display map keeps the camera's own
+        key — that is how the recorded stream is identified."""
+        rectify = np.zeros((4, 4, 3), dtype=np.uint8)
+        obs = split_camera_read("tactile_left", {"rectify": rectify}, {})
+        assert obs == {"tactile_left": rectify}
+
+    def test_no_display_map_collapses_every_type_onto_the_camera_key(self):
+        obs = split_camera_read("tactile_left", {"rectify": np.zeros((2, 2, 3), dtype=np.uint8)})
+        assert list(obs) == ["tactile_left"]
+
+
+class FakeHeadCamera:
+    def __init__(self, meta):
+        self._meta = meta
+
+    def last_frame_meta(self):
+        return self._meta
+
+
+class FakeLogger:
+    def __init__(self):
+        self.warnings = []
+
+    def warn(self, msg):
+        self.warnings.append(msg)
+
+    def __getattr__(self, name):
+        if name in ("info", "debug", "error"):
+            return lambda *a, **k: None
+        raise AttributeError(name)
+
+
+class TestReadHeadCameraSkew:
+    """The eyes are recorded as separate keys, so a mismatched stereo pair is
+    invisible in the dataset. This is the only thing that surfaces it."""
+
+    def test_matching_sequence_numbers_are_a_definitive_pair(self):
+        cameras = {
+            "left_head": FakeHeadCamera({"frame_sequence": 7, "timestamp_ns": 1_000_000_000}),
+            "right_head": FakeHeadCamera({"frame_sequence": 7, "timestamp_ns": 1_500_000_000}),
+        }
+        # Negative means "same sequence", which settles it regardless of the
+        # timestamps — those can differ for one capture.
+        assert read_head_camera_skew(cameras, max_skew_ms=20.0) == -1.0
+
+    def test_within_the_window_reports_zero(self):
+        cameras = {
+            "left_head": FakeHeadCamera({"frame_sequence": 7, "timestamp_ns": 1_000_000_000}),
+            "right_head": FakeHeadCamera({"frame_sequence": 8, "timestamp_ns": 1_005_000_000}),
+        }
+        assert read_head_camera_skew(cameras, max_skew_ms=20.0) == 0.0
+
+    def test_beyond_the_window_reports_the_skew_in_ms(self):
+        cameras = {
+            "left_head": FakeHeadCamera({"frame_sequence": 7, "timestamp_ns": 1_000_000_000}),
+            "right_head": FakeHeadCamera({"frame_sequence": 8, "timestamp_ns": 1_050_000_000}),
+        }
+        assert read_head_camera_skew(cameras, max_skew_ms=20.0) == pytest.approx(50.0)
+
+    def test_single_eye_recording_has_no_pair_to_check(self):
+        cameras = {"left_head": FakeHeadCamera({"frame_sequence": 7, "timestamp_ns": 0})}
+        assert read_head_camera_skew(cameras, max_skew_ms=20.0) is None
+
+    def test_before_either_eye_has_a_frame(self):
+        cameras = {"left_head": FakeHeadCamera(None), "right_head": FakeHeadCamera(None)}
+        assert read_head_camera_skew(cameras, max_skew_ms=20.0) is None
+
+
+class HeadConfig:
+    """The ``--robot.head_camera_*`` surface both robots expose."""
+
+    def __init__(self, eyes="both"):
+        self.head_camera_eyes = eyes
+        self.head_camera_width = 1024
+        self.head_camera_height = 768
+        self.head_camera_fps = 30
+        self.head_camera_startup_timeout_s = 5.0
+        self.head_camera_stale_after_s = 0.2
+        self.head_camera_pair_max_skew_ms = 20.0
+
+
+class TestBuildHeadCameraConfigs:
+    def test_both_eyes_become_two_cameras(self):
+        configs = build_head_camera_configs(HeadConfig("both"))
+        assert set(configs) == {"left_head", "right_head"}
+
+    def test_each_camera_records_a_single_eye(self):
+        """One key per eye, not one merged double-width frame — so a consumer
+        can take one eye without decoding both."""
+        configs = build_head_camera_configs(HeadConfig("both"))
+        assert configs["left_head"].eyes == "left"
+        assert configs["right_head"].eyes == "right"
+        # and therefore the recorded width is per-eye, not doubled
+        assert configs["left_head"].frame_width == 1024
+
+    @pytest.mark.parametrize("eye", ["left", "right"])
+    def test_selecting_one_eye_builds_only_that_camera(self, eye):
+        configs = build_head_camera_configs(HeadConfig(eye))
+        assert set(configs) == {HEAD_CAMERA_KEYS[eye]}
+
+    def test_config_fields_are_passed_through(self):
+        configs = build_head_camera_configs(HeadConfig("left"))
+        cfg = configs["left_head"]
+        assert (cfg.width, cfg.height, cfg.fps) == (1024, 768, 30)
+        assert cfg.pair_max_skew_ms == 20.0
+
+    def test_unsupported_resolution_is_rejected_rather_than_rescaled(self):
+        """A silent resize would change the recorded field of view with no
+        trace in the dataset."""
+        config = HeadConfig("left")
+        config.head_camera_width = 1920
+        config.head_camera_height = 1080
+        with pytest.raises(ValueError, match="supports"):
+            build_head_camera_configs(config)
+
+
+class TestHeadPoseKeys:
+    def test_nine_dof_pose(self):
+        """3 position + 6D rotation, the same layout as ``tcp.*``."""
+        assert HEAD_POSE_KEYS == ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6")
+
+    def test_head_pose_keys_is_the_shared_pose_layout(self):
+        """``head_camera.*`` is remapped into the same world frame as ``tcp.*``
+        and carries the same 9 components, so it uses the same tuple rather than
+        a parallel copy that could drift."""
+        assert HEAD_POSE_KEYS is POSE_KEYS
+
+
+class TestHeadSkewMonitor:
+    """Rate-limited counter around ``read_head_camera_skew``."""
+
+    def _cameras(self, left_seq, left_ns, right_seq, right_ns):
+        return {
+            "left_head": FakeHeadCamera({"frame_sequence": left_seq, "timestamp_ns": left_ns}),
+            "right_head": FakeHeadCamera({"frame_sequence": right_seq, "timestamp_ns": right_ns}),
+        }
+
+    def test_paired_frames_do_not_warn(self, monkeypatch):
+        logger = FakeLogger()
+        monitor = HeadSkewMonitor(20.0, logger)
+        monitor.check(self._cameras(7, 0, 7, 5_000_000))
+        assert monitor.skewed_frames == 0
+        assert logger.warnings == []
+
+    def test_skewed_frames_are_counted_and_warned(self):
+        logger = FakeLogger()
+        monitor = HeadSkewMonitor(20.0, logger)
+        monitor.check(self._cameras(7, 0, 8, 50_000_000))
+        assert monitor.skewed_frames == 1
+        assert len(logger.warnings) == 1
+        assert "50.0ms apart" in logger.warnings[0]
+
+    def test_warnings_are_rate_limited_but_the_count_is_not(self, monkeypatch):
+        """At 30 fps a persistent mismatch would otherwise emit 30 lines a
+        second; the running total is what makes the one line useful."""
+        clock = {"t": 1000.0}
+        monkeypatch.setattr("lerobot.robots.taccap_gripper.common.time.monotonic", lambda: clock["t"])
+        logger = FakeLogger()
+        monitor = HeadSkewMonitor(20.0, logger)
+
+        for _ in range(100):
+            monitor.check(self._cameras(7, 0, 8, 50_000_000))
+            clock["t"] += 0.01  # 100 frames over one second
+
+        assert monitor.skewed_frames == 100
+        assert len(logger.warnings) == 1
+
+        clock["t"] += HeadSkewMonitor.WARN_INTERVAL_S + 0.1
+        monitor.check(self._cameras(7, 0, 8, 50_000_000))
+        assert len(logger.warnings) == 2
+        assert "101 frames so far" in logger.warnings[1]
+
+    def test_single_eye_never_warns(self):
+        logger = FakeLogger()
+        monitor = HeadSkewMonitor(20.0, logger)
+        monitor.check({"left_head": FakeHeadCamera({"frame_sequence": 1, "timestamp_ns": 0})})
+        assert logger.warnings == []
+
+
+class TestBuildTactileCameraConfigs:
+    """Both robots build their tactile cameras through this; the only difference
+    is the key prefix."""
+
+    DISCOVERED = {"left": "GSPS01A25Z0011", "right": "GSPS01A25Z0012"}
+
+    def _build(self, key_prefix, **kwargs):
+        return build_tactile_camera_configs(
+            self.DISCOVERED,
+            side="left",
+            key_prefix=key_prefix,
+            expected=2,
+            fps=30,
+            output_types=["rectify", "difference"],
+            diff_gain=1.0,
+            **kwargs,
+        )
+
+    def test_single_gripper_keys_are_unprefixed(self):
+        configs, _ = self._build("")
+        assert set(configs) == {"tactile_left", "tactile_right"}
+
+    def test_bimanual_keys_carry_the_side_prefix(self):
+        configs, _ = self._build("left_")
+        assert set(configs) == {"left_tactile_left", "left_tactile_right"}
+
+    def test_serials_land_on_the_finger_from_discovery(self):
+        configs, _ = self._build("")
+        assert configs["tactile_left"].serial_number == "GSPS01A25Z0011"
+        assert configs["tactile_right"].serial_number == "GSPS01A25Z0012"
+
+    def test_display_keys_cover_every_non_recorded_type(self):
+        _, display_keys = self._build("left_")
+        assert display_keys == {
+            "left_tactile_left": {"difference": "left_tactile_left_difference"},
+            "left_tactile_right": {"difference": "left_tactile_right_difference"},
+        }
+
+    def test_no_display_types_means_no_display_map(self):
+        configs, display_keys = build_tactile_camera_configs(
+            self.DISCOVERED,
+            side="left",
+            key_prefix="",
+            expected=2,
+            fps=30,
+            output_types=["rectify"],
+            diff_gain=1.0,
+        )
+        assert display_keys == {}
+        assert len(configs) == 2
+
+    def test_wrong_sensor_count_raises_naming_the_side(self):
+        """Caught at construction, not mid-episode."""
+        with pytest.raises(ValueError, match="Expected 2 left tactile sensors"):
+            build_tactile_camera_configs(
+                {"left": "GSPS01A25Z0011"},
+                side="left",
+                key_prefix="",
+                expected=2,
+                fps=30,
+                output_types=["rectify"],
+                diff_gain=1.0,
+            )
+
+
+class TestSwapTactileDisplayFeatures:
+    def test_recorded_tactile_key_is_replaced_not_added(self):
+        """Same tile count in Rerun, and the recorded stream never reaches the
+        viewer."""
+        observation = {"tcp.x": float, "tactile_left": (4, 6, 3), "wrist_cam": (8, 8, 3)}
+        display = swap_tactile_display_features(
+            observation, {"tactile_left": {"difference": "tactile_left_difference"}}
+        )
+        assert set(display) == {"tcp.x", "tactile_left_difference", "wrist_cam"}
+        assert display["tactile_left_difference"] == (4, 6, 3)
+
+    def test_cameras_without_a_display_view_pass_through(self):
+        observation = {"tactile_left": (4, 6, 3)}
+        assert swap_tactile_display_features(observation, {}) == observation
+
+    def test_several_display_views_all_appear(self):
+        observation = {"tactile_left": (4, 6, 3)}
+        display = swap_tactile_display_features(
+            observation,
+            {"tactile_left": {"difference": "tactile_left_difference", "depth": "tactile_left_depth"}},
+        )
+        assert set(display) == {"tactile_left_difference", "tactile_left_depth"}
+
+    def test_key_order_is_preserved(self):
+        """Rerun lays tiles out in schema order; a swap must keep tactile in the
+        same slot of the blueprint."""
+        observation = {"a": float, "tactile_left": (4, 6, 3), "z": float}
+        display = swap_tactile_display_features(
+            observation, {"tactile_left": {"difference": "tactile_left_difference"}}
+        )
+        assert list(display) == ["a", "tactile_left_difference", "z"]
+
+
+class TestTrackerToTcp:
+    @pytest.mark.parametrize("side", ["left", "right"])
+    def test_returns_a_position_and_a_unit_quaternion(self, side):
+        pos, quat = tracker_to_tcp(side)
+        assert pos.shape == (3,)
+        assert quat.shape == (4,)
+        assert np.linalg.norm(quat) == pytest.approx(1.0)
+
+    def test_sides_are_measured_separately_not_mirrored(self):
+        """Both sides carry their own measured values; a change that starts
+        deriving one from the other would make these identical up to a sign."""
+        left_pos, _ = tracker_to_tcp("left")
+        right_pos, _ = tracker_to_tcp("right")
+        assert not np.allclose(left_pos, right_pos)
+        assert not np.allclose(left_pos, right_pos * np.array([1.0, -1.0, 1.0]))
+
+    def test_unknown_side_raises(self):
+        with pytest.raises(ValueError, match="side must be one of"):
+            tracker_to_tcp("middle")
+
+    def test_side_is_case_and_space_insensitive(self):
+        assert np.allclose(tracker_to_tcp("  LEFT ")[0], tracker_to_tcp("left")[0])
+
+
+class TestResolveTrackerToEe:
+    def test_none_means_use_the_built_in_transform(self):
+        built_in = tracker_to_tcp("left")
+        pos, quat = resolve_tracker_to_ee("left", None, None)
+        assert np.allclose(pos, built_in[0])
+        assert np.allclose(quat, built_in[1])
+
+    def test_position_can_be_overridden_alone(self):
+        """A rig with a re-machined mount pins just the translation."""
+        built_in_quat = tracker_to_tcp("left")[1]
+        pos, quat = resolve_tracker_to_ee("left", (0.1, 0.2, 0.3), None)
+        assert np.allclose(pos, [0.1, 0.2, 0.3])
+        assert np.allclose(quat, built_in_quat)
+
+    def test_rotation_can_be_overridden_alone(self):
+        built_in_pos = tracker_to_tcp("left")[0]
+        pos, quat = resolve_tracker_to_ee("left", None, (1.0, 0.0, 0.0, 0.0))
+        assert np.allclose(pos, built_in_pos)
+        assert np.allclose(quat, [1.0, 0.0, 0.0, 0.0])
+
+    def test_overrides_are_returned_as_float_arrays(self):
+        pos, quat = resolve_tracker_to_ee("right", [0.1, 0.2, 0.3], [1, 0, 0, 0])
+        assert pos.dtype == np.float64
+        assert quat.dtype == np.float64

@@ -14,7 +14,96 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Re-export from canonical location for backward compatibility.
-from lerobot.teleoperators.mock_teleop import MockTeleop, MockTeleopConfig
+# Ported from the deleted ``lerobot.teleoperators.mock_teleop`` (removed when
+# this fork was slimmed to the capture rig). It lives here, beside
+# ``mock_robot``, because a test double has no business shipping in the wheel —
+# and while this file was a re-export shim pointing at the deleted module,
+# importing it failed and took ``test_control_robot`` (the only end-to-end cover
+# of the record / teleoperate / replay entry points) down with it.
 
-__all__ = ["MockTeleopConfig", "MockTeleop"]
+import random
+from dataclasses import dataclass
+from functools import cached_property
+from typing import Any
+
+from lerobot.teleoperators.config import TeleoperatorConfig
+from lerobot.teleoperators.teleoperator import RobotAction, Teleoperator
+from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
+
+
+@TeleoperatorConfig.register_subclass("mock_teleop")
+@dataclass
+class MockTeleopConfig(TeleoperatorConfig):
+    n_motors: int = 3
+    random_values: bool = True
+    static_values: list[float] | None = None
+    calibrated: bool = True
+
+    def __post_init__(self):
+        if self.n_motors < 1:
+            raise ValueError(self.n_motors)
+
+        if self.random_values and self.static_values is not None:
+            raise ValueError("Choose either random values or static values")
+
+        if self.static_values is not None and len(self.static_values) != self.n_motors:
+            raise ValueError("Specify the same number of static values as motors")
+
+
+class MockTeleop(Teleoperator):
+    """Mock Teleoperator to be used for testing."""
+
+    config_class = MockTeleopConfig
+    name = "mock_teleop"
+
+    def __init__(self, config: MockTeleopConfig):
+        super().__init__(config)
+        self.config = config
+        self._is_connected = False
+        self._is_calibrated = config.calibrated
+        self.motors = [f"motor_{i + 1}" for i in range(config.n_motors)]
+
+    @cached_property
+    def action_features(self) -> dict[str, type]:
+        return {f"{motor}.pos": float for motor in self.motors}
+
+    @cached_property
+    def feedback_features(self) -> dict[str, type]:
+        return {f"{motor}.pos": float for motor in self.motors}
+
+    @property
+    def is_connected(self) -> bool:
+        return self._is_connected
+
+    @check_if_already_connected
+    def connect(self, calibrate: bool = True) -> None:
+        self._is_connected = True
+        if calibrate:
+            self.calibrate()
+
+    @property
+    def is_calibrated(self) -> bool:
+        return self._is_calibrated
+
+    @check_if_not_connected
+    def calibrate(self) -> None:
+        self._is_calibrated = True
+
+    def configure(self) -> None:
+        pass
+
+    @check_if_not_connected
+    def get_action(self) -> RobotAction:
+        if self.config.random_values:
+            return {f"{motor}.pos": random.uniform(-100, 100) for motor in self.motors}
+        return {f"{motor}.pos": val for motor, val in zip(self.motors, self.config.static_values, strict=True)}
+
+    @check_if_not_connected
+    def send_feedback(self, feedback: dict[str, Any]) -> None: ...
+
+    @check_if_not_connected
+    def disconnect(self) -> None:
+        self._is_connected = False
+
+
+__all__ = ["MockTeleop", "MockTeleopConfig"]

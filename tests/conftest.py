@@ -22,12 +22,15 @@ from serial import SerialException
 from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
 from tests.utils import DEVICE
 
-# Import fixture modules as plugins
+# Import fixture modules as plugins.
+# ``tests.fixtures.optimizers`` went with the training stack when this fork was
+# slimmed to the capture rig; leaving it listed here made *every* test in the
+# repo unrunnable, since a missing plugin fails conftest load, not just the
+# tests that use it.
 pytest_plugins = [
     "tests.fixtures.dataset_factories",
     "tests.fixtures.files",
     "tests.fixtures.hub",
-    "tests.fixtures.optimizers",
 ]
 
 
