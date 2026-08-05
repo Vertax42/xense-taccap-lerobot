@@ -1,0 +1,52 @@
+name: xense-taccap-lerobot
+
+services:
+  xense-taccap:
+    image: xense-taccap-lerobot:${LEROBOT_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.user
+      network: host
+      args:
+        UBUNTU_VERSION: "22.04"
+        MINIFORGE_VERSION: "25.3.1-0"
+    # USB, serial, HID, V4L2 and CAN devices can be hot-plugged while the
+    # container is running. Privileged mode avoids baking unstable /dev indexes
+    # into the compose file. Only use this image on a trusted robot host.
+    privileged: true
+    network_mode: host
+    ipc: host
+    gpus: all
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      rtprio:
+        soft: 99
+        hard: 99
+    stdin_open: true
+    tty: true
+    environment:
+      DISPLAY: ${DISPLAY:-:0}
+      START_XENSEVR_SERVICE: ${START_XENSEVR_SERVICE:-1}
+      XDG_RUNTIME_DIR: /tmp/xdg-runtime
+      WGPU_BACKEND: vulkan
+      NVIDIA_DRIVER_CAPABILITIES: all
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      # The discovery code needs host udev's by-id/by-path links, not only the
+      # raw device nodes exposed by privileged mode.
+      - /dev:/dev
+      - /run/udev:/run/udev:ro
+      - xensesdk-cache:/root/.xensesdk
+      - lerobot-data:/data
+      - huggingface-cache:/root/.cache/huggingface
+      - torch-cache:/root/.cache/torch
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    working_dir: /opt/lerobot
+
+volumes:
+  xensesdk-cache:
+  lerobot-data:
+  huggingface-cache:
+  torch-cache:
