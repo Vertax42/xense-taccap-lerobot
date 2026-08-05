@@ -183,10 +183,8 @@ all = [
 [project.scripts]
 lerobot-calibrate = "lerobot.scripts.lerobot_calibrate:main"
 lerobot-find-cameras = "lerobot.scripts.lerobot_find_cameras:main"
-lerobot-find-port = "lerobot.scripts.lerobot_find_port:main"
 lerobot-record = "lerobot.scripts.lerobot_record:main"
 lerobot-replay = "lerobot.scripts.lerobot_replay:main"
-lerobot-setup-motors = "lerobot.scripts.lerobot_setup_motors:main"
 lerobot-teleoperate = "lerobot.scripts.lerobot_teleoperate:main"
 lerobot-dataset-viz = "lerobot.scripts.lerobot_dataset_viz:main"
 lerobot-info = "lerobot.scripts.lerobot_info:main"
@@ -194,7 +192,6 @@ lerobot-imgtransform-viz = "lerobot.scripts.lerobot_imgtransform_viz:main"
 lerobot-edit-dataset = "lerobot.scripts.lerobot_edit_dataset:main"
 lerobot-check-dataset = "lerobot.scripts.lerobot_check_dataset:main"
 lerobot-push-dataset-to-hub = "lerobot.scripts.push_dataset_to_hub:main"
-lerobot-setup-can = "lerobot.scripts.lerobot_setup_can:main"
 lerobot-annotate-reward = "lerobot.scripts.lerobot_annotate_reward:main"
 
 # ---------------- Tool Configurations ----------------
@@ -217,10 +214,6 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401", "F403"]
-# xensesdk sample programs, kept close to the vendor's own docs so they can be
-# diffed against them. Their `View` / `View2d` / `MASTER_SERVICE` locals are the
-# SDK's naming, and example2 must patch ctypes before importing xensesdk.
-"src/lerobot/cameras/xense/example*.py" = ["N806", "E402"]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
