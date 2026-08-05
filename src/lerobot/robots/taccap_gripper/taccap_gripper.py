@@ -45,23 +45,34 @@ sees them — see ``tactile_display_output_types``):
 
 from __future__ import annotations
 
-import glob
-import os
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import cached_property
 from typing import Any
 
-import numpy as np
-
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.cameras.utils import make_cameras_from_configs
-from lerobot.cameras.xense.configuration_xense import XenseTactileCameraConfig
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.utils.robot_utils import get_logger
 
 from ..robot import Robot
 from . import serial_discovery as disco
+from .camera_health import CameraReadGuard
+from .common import (
+    HEAD_POSE_KEYS,
+    POSE_KEYS,
+    HeadSkewMonitor,
+    build_head_camera_configs,
+    build_tactile_camera_configs,
+    connect_cameras_parallel,
+    disconnect_cameras_parallel,
+    open_gripper,
+    prewarm_tactile_config_cache,
+    read_gripper_normalized,
+    read_head_pose,
+    resolve_wrist_camera_path,
+    split_camera_read,
+    swap_tactile_display_features,
+    tactile_camera_output_types,
+)
 from .config_taccap_gripper import TaccapGripperConfig
 from .ee_transform import resolve_tracker_to_ee
 
@@ -85,265 +96,6 @@ try:
     PICO4_TRACKER_AVAILABLE = True
 except ImportError:
     PICO4_TRACKER_AVAILABLE = False
-
-
-def resolve_wrist_camera_path(serial: str) -> str:
-    """Resolve a wrist UVC camera serial (e.g. ``"XCA24Z0003m"``) to its stable
-    ``/dev/v4l/by-id`` capture path. The serial is encoded in the by-id name; we
-    match the ``index0`` (capture) node. Unlike Xense tactile sensors, the wrist
-    UVC camera is not enumerable via ``xensesdk.Sensor.scanSerialNumber`` — its
-    USB iSerial is non-unique (e.g. ``01.00.00``), so by-id (which encodes the
-    model serial) is the reliable handle."""
-    matches = sorted(glob.glob(f"/dev/v4l/by-id/*{serial}*-video-index0"))
-    if not matches:
-        raise RuntimeError(
-            f"No wrist camera matching serial {serial!r} under /dev/v4l/by-id/ "
-            "(plugged in? check `ls /dev/v4l/by-id/`)."
-        )
-    if len(matches) > 1:
-        raise RuntimeError(f"Multiple wrist cameras match serial {serial!r}: {matches}. Use a more specific serial.")
-    return matches[0]
-
-
-def _wait_nodes_settle(serials, logger, timeout_s: float = 15.0) -> None:
-    """Wait until each serial's ``/dev/v4l/by-id`` capture node is back + openable
-    after a flash-read reset re-enumerated it."""
-    deadline = time.perf_counter() + timeout_s
-    for sn in serials:
-        settled = False
-        while time.perf_counter() < deadline:
-            matches = glob.glob(f"/dev/v4l/by-id/*{sn}*-video-index0")
-            if matches:
-                try:
-                    fd = os.open(os.path.realpath(matches[0]), os.O_RDWR)
-                    os.close(fd)
-                    settled = True
-                    break
-                except OSError:
-                    pass
-            time.sleep(0.2)
-        if not settled:
-            logger.warn(f"  Sensor {sn} V4L2 node did not settle within {timeout_s:.0f}s after pre-warm")
-
-
-def prewarm_tactile_config_cache(camera_configs: dict[str, Any], logger) -> None:
-    """Warm the xensesdk per-serial config cache for tactile sensors **before**
-    opening any camera.
-
-    The first open of a sensor reads its flash, which resets/re-enumerates the
-    device. Doing that concurrently (the parallel camera connect) on a cold
-    cache races the SDK's non-thread-safe flash lib and moves camera nodes
-    mid-open. Opening each uncached sensor here — sequentially, one at a time —
-    forces those flash reads to happen in a controlled order; then we wait for
-    the nodes to settle. A warm cache is just a cheap ``exists()`` stat: no
-    flash read, no reset (the SDK still reads the cache once at connect).
-
-    We deliberately drive this through plain ``Sensor.create``/``release``
-    rather than reaching into the flash backend and writing the cache
-    ourselves. The SDK owns the cache format and its encryption key, and an
-    earlier version of this function reimplemented that write — which meant
-    hardcoding the SDK's key in this file and pinning two private APIs
-    (``FlashClient``, ``is_sunplus``). Both were renamed upstream, so the
-    import failed, the whole pre-warm silently no-op'd through its except
-    branch, and the cold-start race it exists to prevent was live again. The
-    public path costs ~2s per uncached sensor on cold start and nothing when
-    warm, and cannot rot the same way."""
-    serials = [
-        cfg.serial_number
-        for cfg in camera_configs.values()
-        if isinstance(cfg, XenseTactileCameraConfig) and getattr(cfg, "serial_number", None)
-    ]
-    if not serials:
-        return
-    try:
-        from xensesdk import Sensor
-        from xensesdk.core.ctx_builders import CONFIG_CACHE_DIR
-    except Exception as e:  # No SDK — the tactile cameras will fail later anyway.
-        logger.debug(f"Config pre-warm unavailable ({e}); skipping")
-        return
-
-    uncached = [sn for sn in serials if not (CONFIG_CACHE_DIR / sn).exists()]
-    if not uncached:
-        return  # warm cache: cheap stat only, no flash read / reset
-
-    logger.info(f"  Pre-warming config cache (cold start) for {len(uncached)} sensor(s): {uncached}")
-    for sn in uncached:
-        try:
-            # disable_infer keeps this to the flash read + cache write; the real
-            # connect re-creates the sensor with the caller's actual settings.
-            sensor = Sensor.create(sn, disable_infer=True)
-            sensor.release()
-        except Exception as e:
-            logger.warn(f"  Config pre-warm failed for {sn}: {e}")
-
-    _wait_nodes_settle(uncached, logger)
-
-
-# ---- Recorded vs display-only tactile streams -------------------------------
-# One sensor read carries two views: the recorded one (rectify — everything the
-# sensor saw) and the display one (the amplified difference the operator reads
-# contact from). The SDK hands both back from a single ``selectSensorInfo``, so
-# the split is purely a matter of which observation key each lands on: the
-# recorded view keeps the camera's own key and is the only one in
-# ``observation_features``; each display view gets a ``{camera}_{type}`` sibling
-# that only Rerun ever sees. Shared with ``bi_taccap_gripper``.
-
-
-def tactile_display_key(cam_name: str, output_type: str) -> str:
-    """Observation key carrying ``output_type`` as a display-only view of ``cam_name``."""
-    return f"{cam_name}_{output_type}"
-
-
-def tactile_camera_output_types(record_types: list[str], display_types: list[str]) -> list[str]:
-    """Output types to ask one tactile sensor for: recorded first, then the
-    display-only ones (deduplicated, order preserved).
-
-    A display type that is also the recorded type collapses to a single request —
-    the recorded key then simply doubles as the displayed one. This only catches
-    identical spellings; the authoritative de-duplication happens in
-    ``XenseTactileCameraConfig.__post_init__``, which resolves "DIFFERENCE" and
-    "difference" to the same enum. Read the types back off the config (not from
-    here) when deciding which of them are display-only.
-    """
-    types = list(record_types)
-    types += [t for t in display_types if t not in types]
-    return types
-
-
-HEAD_POSE_KEYS = ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6")
-
-
-HEAD_CAMERA_KEYS = {"left": "left_head", "right": "right_head"}
-
-
-def build_head_camera_configs(config: Any) -> dict[str, Any]:
-    """One ``PicoCameraConfig`` per recorded eye, keyed by observation name.
-
-    Each eye becomes its own camera and its own video key —
-    ``left_head`` / ``right_head`` — rather than one merged
-    double-width frame. Two independent streams are what the headset
-    actually sends, so this is the shape with the least translation, and it
-    lets a consumer take one eye without decoding both.
-
-    The cost is that nothing downstream can see whether a given frame's two
-    eyes came from the same capture; ``read_head_camera_skew`` exists to
-    keep that visible.
-
-    Shared so the single and bimanual robots cannot drift apart on which
-    fields feed the cameras; both expose the same ``--robot.head_camera_*``
-    surface.
-    """
-    from lerobot.cameras.pico import PicoCameraConfig
-
-    eyes = ("left", "right") if config.head_camera_eyes == "both" else (config.head_camera_eyes,)
-    return {
-        HEAD_CAMERA_KEYS[eye]: PicoCameraConfig(
-            width=config.head_camera_width,
-            height=config.head_camera_height,
-            fps=config.head_camera_fps,
-            eyes=eye,
-            startup_timeout_s=config.head_camera_startup_timeout_s,
-            stale_after_s=config.head_camera_stale_after_s,
-            pair_max_skew_ms=config.head_camera_pair_max_skew_ms,
-        )
-        for eye in eyes
-    }
-
-
-def read_head_camera_skew(cameras: dict[str, Any], max_skew_ms: float) -> float | None:
-    """How far apart the two head-camera eyes' last frames are, in ms.
-
-    Returns None when both eyes are not being recorded, or when either has
-    not produced a frame yet. Returns a negative value to mean "same
-    sequence number", which is a definitive match and makes the timestamp
-    comparison moot.
-
-    Recording the eyes as separate keys drops the pairing guarantee the
-    merged frame had, so this is the only thing standing between a
-    mis-synchronised stereo pair and a dataset that looks fine.
-    """
-    left, right = cameras.get("left_head"), cameras.get("right_head")
-    if left is None or right is None:
-        return None
-    lm, rm = left.last_frame_meta(), right.last_frame_meta()
-    if lm is None or rm is None:
-        return None
-    if int(lm["frame_sequence"]) == int(rm["frame_sequence"]):
-        return -1.0
-    skew = abs(int(lm["timestamp_ns"]) - int(rm["timestamp_ns"])) / 1e6
-    return skew if skew > max_skew_ms else 0.0
-
-
-def read_head_pose(logger: Any, warned: bool) -> tuple[dict[str, float], bool]:
-    """Headset pose as ``head_camera.{x,y,z,r1..r6}``, in the world frame.
-
-    Read from the Pico SDK rather than the camera, and remapped with the same
-    Pico→world rotation the trackers use — so unlike the Insight VIO pose this
-    replaces, it shares a frame with ``tcp.*`` and the two can be compared.
-
-    Never raises: the head pose is supplementary and losing it should not take
-    an episode down. Returns zeros if the SDK has nothing, warning once.
-
-    Args:
-        logger: used for the one-shot warning.
-        warned: whether the warning has already been emitted.
-
-    Returns:
-        ``(observation_keys, warned)`` — pass ``warned`` back in next call.
-    """
-    import numpy as np
-
-    from lerobot.teleoperators.pico4 import xrt_session
-    from lerobot.teleoperators.pico4.tracker import PICO_TO_WORLD_R
-    from lerobot.utils.robot_utils import (
-        matrix_to_pose7d,
-        quaternion_to_matrix,
-        quaternion_to_rotation_6d,
-    )
-
-    try:
-        xrt = xrt_session.module()
-        pose = None if xrt is None else xrt.get_headset_pose()
-        if pose is None or len(pose) < 7:
-            raise ValueError(f"headset pose unavailable (got {pose!r})")
-
-        # SDK order is xyzw; everything downstream is wxyz.
-        raw = np.asarray(pose, dtype=np.float64)
-        wxyz = np.array([raw[0], raw[1], raw[2], raw[6], raw[3], raw[4], raw[5]])
-
-        t_world_head = quaternion_to_matrix(wxyz, input_format="wxyz")
-        g = np.eye(4)
-        g[:3, :3] = PICO_TO_WORLD_R
-        t_world_head = g @ t_world_head @ g.T
-
-        out = matrix_to_pose7d(t_world_head, output_format="wxyz")
-        values = (*out[:3], *quaternion_to_rotation_6d(*out[3:7]))
-    except Exception as e:
-        if not warned:
-            warned = True
-            logger.warn(f"Head pose unavailable, recording zeros: {e}")
-        values = (0.0,) * 9
-
-    return {f"head_camera.{k}": float(v) for k, v in zip(HEAD_POSE_KEYS, values, strict=True)}, warned
-
-
-def split_camera_read(cam_name: str, frame: Any, display_keys: dict[str, str] | None = None) -> dict[str, Any]:
-    """Fan one camera read out into observation keys.
-
-    A tactile sensor asked for several output types returns
-    ``{output_type: array}`` (``XenseTactileCamera._format_read_result``); every
-    other camera returns a bare array. ``display_keys`` maps output type →
-    display-only observation key for this camera; whichever type is left over is
-    the recorded one and keeps ``cam_name``.
-    """
-    if not isinstance(frame, dict):
-        return {cam_name: frame}
-
-    display_keys = display_keys or {}
-    obs: dict[str, Any] = {}
-    for output_type, data in frame.items():
-        obs[display_keys.get(output_type, cam_name)] = data
-    return obs
 
 
 class TaccapGripper(Robot):
@@ -399,8 +151,7 @@ class TaccapGripper(Robot):
         self._camera_configs = self._build_camera_configs(self._side)
         self.cameras = make_cameras_from_configs(self._camera_configs)
         self._head_pose_warned = False
-        self._head_skew_count = 0
-        self._head_warn_at = 0.0
+        self._head_skew = HeadSkewMonitor(config.head_camera_pair_max_skew_ms, self.logger)
 
         # Auto-discover the Pico4 motion tracker for this unit's side: enumerate
         # from the XenseVR PC service and pick the one whose serial's second-to-last
@@ -422,6 +173,11 @@ class TaccapGripper(Robot):
         # Where gripper.pos comes from once connected: "firmware" (the device's
         # own encoder-max calibration) or "config" (gripper_open_rad).
         self._gripper_norm_source = "config"
+
+        # Graceful degradation on mid-episode camera loss (hot-unplug, hub drop):
+        # substitutes the last good frame and trips ``device_lost`` so the caller
+        # can stop cleanly and save what was recorded. See ``camera_health``.
+        self._cam_guard = CameraReadGuard(self._camera_configs, self.logger)
 
     # ------------------------------------------------------------------ discovery
 
@@ -457,35 +213,19 @@ class TaccapGripper(Robot):
         self._tactile_display_keys: dict[str, dict[str, str]] = {}
         n_exp = self.config.expected_tactiles_per_side
         if n_exp:
-            got = self._disc_tactiles.get(side, {})
-            if len(got) != n_exp:
-                raise ValueError(
-                    f"Expected {n_exp} {side} tactile sensors (on the {side} "
-                    f"gripper's USB hub), found {len(got)}: {sorted(got.values())}."
-                )
-            output_types = tactile_camera_output_types(
-                list(self.config.tactile_output_types),
-                list(self.config.tactile_display_output_types),
+            tactile_configs, self._tactile_display_keys = build_tactile_camera_configs(
+                self._disc_tactiles.get(side, {}),
+                side=side,
+                key_prefix="",
+                expected=n_exp,
+                fps=self.config.tactile_fps,
+                output_types=tactile_camera_output_types(
+                    list(self.config.tactile_output_types),
+                    list(self.config.tactile_display_output_types),
+                ),
+                diff_gain=self.config.tactile_diff_gain,
             )
-            for finger, sn in sorted(got.items()):
-                cam_name = f"tactile_{finger}"
-                cfg = XenseTactileCameraConfig(
-                    serial_number=sn,
-                    fps=self.config.tactile_fps,
-                    output_types=output_types,
-                    diff_gain=self.config.tactile_diff_gain,
-                )
-                configs[cam_name] = cfg
-                # Read the types back off the camera config: it normalises the
-                # config strings ("DIFFERENCE", "XenseOutputType.DIFFERENCE", …)
-                # into the same enum whose .value keys the read dict. Recorded
-                # type came first, so everything after it is display-only.
-                display_keys = {
-                    output_type.value: tactile_display_key(cam_name, output_type.value)
-                    for output_type in cfg.output_types[1:]
-                }
-                if display_keys:
-                    self._tactile_display_keys[cam_name] = display_keys
+            configs.update(tactile_configs)
         if self.config.enable_wrist_camera:
             sn = self._disc_cameras.get(side)
             if not sn:
@@ -510,7 +250,7 @@ class TaccapGripper(Robot):
         features: dict[str, type | tuple] = {}
 
         if self._tracker_sn is not None:
-            for k in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"):
+            for k in POSE_KEYS:
                 features[f"tcp.{k}"] = float
 
         if self.config.enable_gripper:
@@ -546,20 +286,13 @@ class TaccapGripper(Robot):
         without ``tactile_display_output_types`` this is just
         ``observation_features``.
         """
-        features: dict[str, type | tuple] = {}
-        for key, spec in self.observation_features.items():
-            display_keys = self._tactile_display_keys.get(key)
-            if display_keys:
-                for display_key in display_keys.values():
-                    features[display_key] = spec
-            else:
-                features[key] = spec
+        features = swap_tactile_display_features(self.observation_features, self._tactile_display_keys)
 
         # Display-only: the tracker's own pose, so the viewer can draw it next to
         # the EE frame and show the mount transform. Absent from
         # observation_features, so it never reaches a dataset.
         if self._tracker_sn is not None:
-            for k in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"):
+            for k in POSE_KEYS:
                 features[f"tracker.{k}"] = float
         return features
 
@@ -572,7 +305,7 @@ class TaccapGripper(Robot):
         """
         features: dict[str, type] = {}
         if self._tracker_sn is not None:
-            for k in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"):
+            for k in POSE_KEYS:
                 features[f"tcp.{k}"] = float
         if self.config.enable_gripper:
             features["gripper.pos"] = float
@@ -583,6 +316,13 @@ class TaccapGripper(Robot):
         return self._is_connected
 
     @property
+    def device_lost(self) -> bool:
+        """True once any camera has been detected as physically lost mid-episode
+        (hot-unplug / hub drop). The record loop polls this to stop cleanly and
+        save the in-progress episode instead of crashing on the next read."""
+        return self._cam_guard.lost
+
+    @property
     def is_calibrated(self) -> bool:
         """The TacCap-Gripper uses factory calibration; we only need the
         gripper open/closed endpoints, which live in the config."""
@@ -590,47 +330,12 @@ class TaccapGripper(Robot):
 
     # ------------------------------------------------------------------ lifecycle
 
-    def _connect_cameras_parallel(self) -> None:
-        """Open all cameras concurrently — each camera's V4L2 open + warmup
-        overlaps in time instead of summing (cf. v0.4.4 bi_arx5)."""
-        if not self.cameras:
-            return
-        n = len(self.cameras)
-        self.logger.info(f"  Connecting {n} camera(s) in parallel...")
-        with ThreadPoolExecutor(max_workers=min(n, 8)) as executor:
-            futures = {executor.submit(cam.connect): name for name, cam in self.cameras.items()}
-            for fut in as_completed(futures):
-                name = futures[fut]
-                try:
-                    fut.result()
-                except Exception as e:
-                    self.logger.error(f"  Camera '{name}' connect failed: {e}")
-                    raise
-        self.logger.info(f"  ✅ {n} camera(s) connected")
-
-    def _disconnect_cameras_parallel(self) -> None:
-        if not self.cameras:
-            return
-
-        def _close(cam):
-            if cam.is_connected:
-                cam.disconnect()
-
-        n = len(self.cameras)
-        with ThreadPoolExecutor(max_workers=min(n, 8)) as executor:
-            futures = {executor.submit(_close, cam): name for name, cam in self.cameras.items()}
-            for fut in as_completed(futures):
-                name = futures[fut]
-                try:
-                    fut.result()
-                except Exception as e:  # pragma: no cover — best-effort teardown
-                    self.logger.error(f"  Camera '{name}' disconnect error: {e}")
-
     def connect(self, calibrate: bool = True) -> None:
         if self.is_connected:
             raise DeviceAlreadyConnectedError(f"{self} already connected")
 
         self.logger.info(f"Connecting TacCap-Gripper ({self._side})...")
+        self._cam_guard.reset()  # a reconnect must not inherit the last session's losses
 
         # 1. Gripper — auto-discovered by serial (side + role) on the bus. MCU
         #    transport only; cameras come from the LeRobot camera framework.
@@ -644,7 +349,13 @@ class TaccapGripper(Robot):
                 f"  TacCap-Gripper: side={self._endpoints.side} role={self._endpoints.role} "
                 f"fw_sn={self._endpoints.firmware_sn!r} mcu={self._endpoints.mcu_serial!r}"
             )
-            self._gripper = self._open_gripper(gripper_cls, self._endpoints.mcu_device)
+            self._gripper, self._gripper_norm_source = open_gripper(
+                gripper_cls,
+                self._endpoints.mcu_device,
+                is_leader=self._role == "leader",
+                open_rad=self.config.gripper_open_rad,
+                logger=self.logger,
+            )
             self.logger.info(f"  ✅ {gripper_cls.__name__} attached (MCU-only, read-only — motor stays disabled)")
 
         # 2. Pico4 tracker.
@@ -675,7 +386,7 @@ class TaccapGripper(Robot):
         #    Then connect concurrently — each camera's V4L2 open + warmup overlaps
         #    in time rather than summing (cf. v0.4.4 bi_arx5). Configs now come
         #    from the cache (no flash read), so no device reset during connect.
-        self._connect_cameras_parallel()
+        connect_cameras_parallel(self.cameras, self.logger)
 
         self._is_connected = True
         self.logger.info(f"✅ {self} connected.")
@@ -686,7 +397,7 @@ class TaccapGripper(Robot):
 
         self.logger.info(f"Disconnecting {self}...")
 
-        self._disconnect_cameras_parallel()
+        disconnect_cameras_parallel(self.cameras, self.logger)
 
         if self._tracker is not None:
             try:
@@ -732,7 +443,7 @@ class TaccapGripper(Robot):
             obs.update(self._tracker.get_tracker_display())
 
         if self.config.enable_gripper and self._gripper is not None:
-            obs["gripper.pos"] = self._read_gripper_normalized()
+            obs["gripper.pos"] = read_gripper_normalized(self._gripper, self.config.gripper_open_rad, self.logger)
 
         if self.config.enable_imu and self._gripper is not None:
             try:
@@ -755,26 +466,18 @@ class TaccapGripper(Robot):
         if self.config.enable_head_camera:
             head, self._head_pose_warned = read_head_pose(self.logger, self._head_pose_warned)
             obs.update(head)
-
-        if self.config.enable_head_camera:
-            skew = read_head_camera_skew(self.cameras, self.config.head_camera_pair_max_skew_ms)
-            if skew is not None and skew > 0.0:
-                self._head_skew_count += 1
-                now = time.monotonic()
-                if now - self._head_warn_at > 5.0:
-                    self._head_warn_at = now
-                    self.logger.warn(
-                        f"Head camera eyes are {skew:.1f}ms apart (limit "
-                        f"{self.config.head_camera_pair_max_skew_ms:.0f}ms); "
-                        f"{self._head_skew_count} frames so far. left_head and "
-                        "right_head are recorded as separate keys, so a mismatched "
-                        "pair is not otherwise visible in the dataset."
-                    )
+            self._head_skew.check(self.cameras)
 
         # The head cameras need no special case here — they are ordinary
         # cameras, and the pose comes from the SDK above, not from a frame.
         for cam_name, cam in self.cameras.items():
-            obs.update(split_camera_read(cam_name, cam.async_read(), self._tactile_display_keys.get(cam_name)))
+            obs.update(
+                split_camera_read(
+                    cam_name,
+                    self._cam_guard.read(cam_name, cam),
+                    self._tactile_display_keys.get(cam_name),
+                )
+            )
 
         return obs
 
@@ -792,74 +495,10 @@ class TaccapGripper(Robot):
         if self._tracker is not None:
             action.update(self._tracker.get_action())
         if self.config.enable_gripper and self._gripper is not None:
-            action["gripper.pos"] = self._read_gripper_normalized()
+            action["gripper.pos"] = read_gripper_normalized(self._gripper, self.config.gripper_open_rad, self.logger)
         return action
 
     # ------------------------------------------------------------------ helpers
-
-    def _open_gripper(self, gripper_cls, mcu_device: str):
-        """Open the gripper, asking the firmware to normalise the jaw position.
-
-        ``LeaderGripper(normalize_position=True)`` reads the encoder-max
-        calibration off the device (``Cmd::EncoderMaxCal``, firmware >= V2.1) and
-        installs a converter, so every sample's ``position`` is the true opening
-        of *this* unit in [0, 1]. That beats dividing by a config constant, which
-        is one number for every gripper ever built: a unit whose real travel is
-        1.30 rad would only ever read 0.76 at fully open.
-
-        Two things fall back to ``gripper_open_rad`` instead:
-
-        * **Followers** — ``EncoderMaxCal`` is leader-only, and the follower
-          class does not take the flag at all.
-        * **Uncalibrated or pre-V2.1 leaders** — the constructor raises. Rather
-          than fail the session we re-open with ``encoder_max_rad`` supplied from
-          the host, which is the same arithmetic as before, and say so once. Run
-          ``fisheye_cal.py measure-encoder-max`` to move a unit onto the firmware
-          value.
-        """
-        if gripper_cls is not LeaderGripper:
-            self.logger.info(f"  Jaw normalised by config gripper_open_rad={self.config.gripper_open_rad} (follower)")
-            return gripper_cls(mcu_device)
-
-        try:
-            gripper = gripper_cls(mcu_device, normalize_position=True)
-        except Exception as e:
-            self._gripper_norm_source = "config"
-            self.logger.warn(
-                f"Firmware encoder-max calibration unavailable ({e}); falling back to "
-                f"gripper_open_rad={self.config.gripper_open_rad}. gripper.pos will not reach 1.0 "
-                "if this unit's real travel differs. Fix with: python "
-                "third_party/taccap-gripper/python/examples/fisheye_cal.py measure-encoder-max"
-            )
-            return gripper_cls(mcu_device, normalize_position=True, encoder_max_rad=self.config.gripper_open_rad)
-
-        self._gripper_norm_source = "firmware"
-        self.logger.info("  Jaw normalised by the firmware's encoder-max calibration")
-        return gripper
-
-    def _read_gripper_normalized(self) -> float:
-        """Jaw opening in [0, 1] — 0 closed (the encoder zero), 1 fully open.
-
-        Prefers the SDK's ``position``, which the firmware's own encoder-max
-        calibration produces (see :meth:`_open_gripper`). It is ``nan`` when no
-        converter is installed — a follower, or a leader that fell back — so the
-        radians path stays as the backstop rather than letting a nan reach the
-        dataset.
-        """
-        try:
-            sample = self._gripper.encoder.read_once()
-        except Exception as e:
-            self.logger.warn(f"Encoder read failed: {e}")
-            return 0.0
-
-        normalised = float(getattr(sample, "position", float("nan")))
-        if np.isfinite(normalised):
-            return float(np.clip(normalised, 0.0, 1.0))
-
-        opened = self.config.gripper_open_rad
-        if opened <= 0.0:  # guarded in config.__post_init__ but be defensive
-            return 0.0
-        return float(np.clip(float(sample.position_rad) / opened, 0.0, 1.0))
 
     def get_endpoints(self):
         """Hardware discovery info populated on connect (None otherwise)."""

@@ -34,6 +34,7 @@ Unity-app launch time.
 from dataclasses import dataclass, field
 
 from ..config import RobotConfig
+from .common import build_head_camera_configs
 
 
 @RobotConfig.register_subclass("taccap_gripper")
@@ -191,8 +192,6 @@ class TaccapGripperConfig(RobotConfig):
         if self.enable_head_camera:
             # Delegate to the camera config so there is one definition of what
             # a valid mode is, rather than a copy here that can drift from it.
-            from .taccap_gripper import build_head_camera_configs
-
             build_head_camera_configs(self)
 
         if self.role.strip().lower() not in ("leader", "master", "follower", "slave"):

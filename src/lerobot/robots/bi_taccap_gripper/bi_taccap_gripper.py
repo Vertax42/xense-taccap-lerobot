@@ -44,46 +44,38 @@ see ``tactile_display_output_types``):
 
 from __future__ import annotations
 
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import cached_property
 from typing import Any
 
-import numpy as np
-
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.cameras.utils import make_cameras_from_configs
-from lerobot.cameras.xense.configuration_xense import XenseTactileCameraConfig
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.utils.robot_utils import get_logger
 
 from ..robot import Robot
 from ..taccap_gripper import serial_discovery as disco
-from ..taccap_gripper.ee_transform import resolve_tracker_to_ee
-from ..taccap_gripper.taccap_gripper import (
+from ..taccap_gripper.camera_health import CameraReadGuard
+from ..taccap_gripper.common import (
     HEAD_POSE_KEYS,
+    POSE_KEYS,
+    HeadSkewMonitor,
     build_head_camera_configs,
+    build_tactile_camera_configs,
+    connect_cameras_parallel,
+    disconnect_cameras_parallel,
+    open_gripper,
     prewarm_tactile_config_cache,
-    read_head_camera_skew,
+    read_gripper_normalized,
     read_head_pose,
     resolve_wrist_camera_path,
     split_camera_read,
+    swap_tactile_display_features,
     tactile_camera_output_types,
-    tactile_display_key,
 )
+from ..taccap_gripper.ee_transform import resolve_tracker_to_ee
 from .config_bi_taccap_gripper import BiTaccapGripperConfig
 
 _SIDES = ("left", "right")
-
-# Freeze timeout for graceful degradation. If a camera's ``async_read`` keeps
-# returning the *same* frame object for this long, the stream is treated as
-# physically lost. This covers Xense tactile sensors, whose background read
-# thread survives a hot-unplug (it only stops on ``DeviceNotConnectedError``)
-# and whose ``async_read`` restarts the thread and returns the last cached
-# frame forever without raising — unlike the OpenCV wrist camera, which raises
-# once its read thread dies. Keep this well above the slowest camera's frame
-# interval so a sensor-slower-than-the-sample-loop rate mismatch never trips it.
-_CAM_FREEZE_TIMEOUT_S = 2.0
 
 # ---- TacCap-Gripper SDK -----------------------------------------------------
 try:
@@ -153,8 +145,7 @@ class BiTaccapGripper(Robot):
         self._camera_configs = self._discover_camera_configs()
         self.cameras = make_cameras_from_configs(self._camera_configs)
         self._head_pose_warned = False
-        self._head_skew_count = 0
-        self._head_warn_at = 0.0
+        self._head_skew = HeadSkewMonitor(config.head_camera_pair_max_skew_ms, self.logger)
 
         # Auto-discover the Pico4 motion tracker(s): enumerate from the XenseVR PC
         # service and assign one per side by serial (second-to-last digit, strict).
@@ -176,17 +167,10 @@ class BiTaccapGripper(Robot):
 
         self._is_connected = False
 
-        # Graceful-degradation state for mid-episode camera loss: keep the last
-        # good frame per camera so a hot-unplug degrades to a stale/black frame
-        # instead of crashing the record loop, and remember which cameras died
-        # so the caller can stop cleanly and save what was recorded.
-        # Value is a dict of frames for a multi-output tactile sensor (recorded +
-        # display-only views), a single array for every other camera.
-        self._last_cam_frame: dict[str, np.ndarray | dict[str, np.ndarray]] = {}
-        self._lost_cameras: set[str] = set()
-        # Monotonic time each camera last produced a genuinely new frame object,
-        # used to detect a frozen (non-raising) stream — see _read_camera_or_fallback.
-        self._last_new_frame_t: dict[str, float] = {}
+        # Graceful degradation on mid-episode camera loss (hot-unplug, hub drop):
+        # substitutes the last good frame and trips ``device_lost`` so the caller
+        # can stop cleanly and save what was recorded. See ``camera_health``.
+        self._cam_guard = CameraReadGuard(self._camera_configs, self.logger)
 
     # ------------------------------------------------------------------ discovery
 
@@ -217,31 +201,17 @@ class BiTaccapGripper(Robot):
         for side in _SIDES:
             parity = "odd" if side == "left" else "even"
             if n_exp:
-                got = tactiles.get(side, {})
-                if len(got) != n_exp:
-                    raise ValueError(
-                        f"Expected {n_exp} {side} tactile sensors (on the {side} "
-                        f"gripper's USB hub), found {len(got)}: {sorted(got.values())}."
-                    )
-                for finger, sn in sorted(got.items()):
-                    cam_name = f"{side}_tactile_{finger}"
-                    cfg = XenseTactileCameraConfig(
-                        serial_number=sn,
-                        fps=self.config.tactile_fps,
-                        output_types=output_types,
-                        diff_gain=self.config.tactile_diff_gain,
-                    )
-                    configs[cam_name] = cfg
-                    # Read the types back off the camera config: it normalises the
-                    # config strings ("DIFFERENCE", "XenseOutputType.DIFFERENCE", …)
-                    # into the same enum whose .value keys the read dict. Recorded
-                    # type came first, so everything after it is display-only.
-                    display_keys = {
-                        output_type.value: tactile_display_key(cam_name, output_type.value)
-                        for output_type in cfg.output_types[1:]
-                    }
-                    if display_keys:
-                        self._tactile_display_keys[cam_name] = display_keys
+                tactile_configs, display_keys = build_tactile_camera_configs(
+                    tactiles.get(side, {}),
+                    side=side,
+                    key_prefix=f"{side}_",
+                    expected=n_exp,
+                    fps=self.config.tactile_fps,
+                    output_types=output_types,
+                    diff_gain=self.config.tactile_diff_gain,
+                )
+                configs.update(tactile_configs)
+                self._tactile_display_keys.update(display_keys)
             if getattr(self.config, f"{side}_enable_wrist_camera"):
                 sn = cameras.get(side)
                 if not sn:
@@ -267,7 +237,7 @@ class BiTaccapGripper(Robot):
 
         for side in _SIDES:
             if side in self._tracker_sn_by_side:
-                for k in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"):
+                for k in POSE_KEYS:
                     features[f"{side}_tcp.{k}"] = float
             if getattr(self.config, f"{side}_enable_gripper"):
                 features[f"{side}_gripper.pos"] = float
@@ -302,21 +272,14 @@ class BiTaccapGripper(Robot):
         passed through, so without ``tactile_display_output_types`` this is just
         ``observation_features``.
         """
-        features: dict[str, type | tuple] = {}
-        for key, spec in self.observation_features.items():
-            display_keys = self._tactile_display_keys.get(key)
-            if display_keys:
-                for display_key in display_keys.values():
-                    features[display_key] = spec
-            else:
-                features[key] = spec
+        features = swap_tactile_display_features(self.observation_features, self._tactile_display_keys)
 
         # Display-only: each tracker's own pose, so the viewer can draw it next
         # to that side's EE frame and show the mount transform. Absent from
         # observation_features, so it never reaches a dataset.
         for side in _SIDES:
             if side in self._tracker_sn_by_side:
-                for k in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"):
+                for k in POSE_KEYS:
                     features[f"{side}_tracker.{k}"] = float
         return features
 
@@ -326,7 +289,7 @@ class BiTaccapGripper(Robot):
         features: dict[str, type] = {}
         for side in _SIDES:
             if side in self._tracker_sn_by_side:
-                for k in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"):
+                for k in POSE_KEYS:
                     features[f"{side}_tcp.{k}"] = float
             if getattr(self.config, f"{side}_enable_gripper"):
                 features[f"{side}_gripper.pos"] = float
@@ -341,7 +304,7 @@ class BiTaccapGripper(Robot):
         """True once any camera has been detected as physically lost mid-episode
         (hot-unplug / hub drop). The record loop polls this to stop cleanly and
         save the in-progress episode instead of crashing on the next read."""
-        return bool(self._lost_cameras)
+        return self._cam_guard.lost
 
     @property
     def is_calibrated(self) -> bool:
@@ -351,47 +314,12 @@ class BiTaccapGripper(Robot):
 
     # ------------------------------------------------------------------ lifecycle
 
-    def _connect_cameras_parallel(self) -> None:
-        """Open all cameras concurrently — each camera's V4L2 open + warmup
-        overlaps in time instead of summing (cf. v0.4.4 bi_arx5)."""
-        if not self.cameras:
-            return
-        n = len(self.cameras)
-        self.logger.info(f"  Connecting {n} camera(s) in parallel...")
-        with ThreadPoolExecutor(max_workers=min(n, 8)) as executor:
-            futures = {executor.submit(cam.connect): name for name, cam in self.cameras.items()}
-            for fut in as_completed(futures):
-                name = futures[fut]
-                try:
-                    fut.result()
-                except Exception as e:
-                    self.logger.error(f"  Camera '{name}' connect failed: {e}")
-                    raise
-        self.logger.info(f"  ✅ {n} camera(s) connected")
-
-    def _disconnect_cameras_parallel(self) -> None:
-        if not self.cameras:
-            return
-
-        def _close(cam):
-            if cam.is_connected:
-                cam.disconnect()
-
-        n = len(self.cameras)
-        with ThreadPoolExecutor(max_workers=min(n, 8)) as executor:
-            futures = {executor.submit(_close, cam): name for name, cam in self.cameras.items()}
-            for fut in as_completed(futures):
-                name = futures[fut]
-                try:
-                    fut.result()
-                except Exception as e:  # pragma: no cover — best-effort teardown
-                    self.logger.error(f"  Camera '{name}' disconnect error: {e}")
-
     def connect(self, calibrate: bool = True) -> None:
         if self.is_connected:
             raise DeviceAlreadyConnectedError(f"{self} already connected")
 
         self.logger.info("Connecting BiTacCap-Gripper...")
+        self._cam_guard.reset()  # a reconnect must not inherit the last session's losses
 
         # 1. Grippers — auto-discovered by serial (side + role) on the bus.
         enabled_gripper_sides = tuple(s for s in _SIDES if getattr(self.config, f"{s}_enable_gripper"))
@@ -410,7 +338,14 @@ class BiTaccapGripper(Robot):
                     f"  [{side}] TacCap-Gripper: side={endpoints.side} role={endpoints.role} "
                     f"fw_sn={endpoints.firmware_sn!r} mcu={endpoints.mcu_serial!r}"
                 )
-                self._gripper[side] = self._open_gripper(side, gripper_cls, endpoints.mcu_device)
+                self._gripper[side], self._gripper_norm_source[side] = open_gripper(
+                    gripper_cls,
+                    endpoints.mcu_device,
+                    is_leader=self._role == "leader",
+                    open_rad=getattr(self.config, f"{side}_gripper_open_rad"),
+                    logger=self.logger,
+                    label=f"[{side}] ",
+                )
                 self.logger.info(f"  [{side}] ✅ {gripper_cls.__name__} attached (MCU-only, read-only)")
 
             # 2. Pico4 tracker (auto-discovered SN per side, pinned here).
@@ -442,7 +377,7 @@ class BiTaccapGripper(Robot):
         #    Then connect concurrently — each camera's V4L2 open + warmup overlaps
         #    in time rather than summing (cf. v0.4.4 bi_arx5). Configs now come
         #    from the cache (no flash read), so no device reset during connect.
-        self._connect_cameras_parallel()
+        connect_cameras_parallel(self.cameras, self.logger)
 
         self._is_connected = True
         self.logger.info(f"✅ {self} connected.")
@@ -453,7 +388,7 @@ class BiTaccapGripper(Robot):
 
         self.logger.info(f"Disconnecting {self}...")
 
-        self._disconnect_cameras_parallel()
+        disconnect_cameras_parallel(self.cameras, self.logger)
 
         for side in _SIDES:
             tracker = self._tracker[side]
@@ -501,7 +436,9 @@ class BiTaccapGripper(Robot):
                 obs.update(self._tracker[side].get_tracker_display(prefix=f"{side}_"))
 
             if getattr(self.config, f"{side}_enable_gripper") and self._gripper[side] is not None:
-                obs[f"{side}_gripper.pos"] = self._read_gripper_normalized(side)
+                obs[f"{side}_gripper.pos"] = read_gripper_normalized(
+                    self._gripper[side], getattr(self.config, f"{side}_gripper_open_rad"), self.logger, f"[{side}] "
+                )
 
             if getattr(self.config, f"{side}_enable_imu") and self._gripper[side] is not None:
                 try:
@@ -517,21 +454,7 @@ class BiTaccapGripper(Robot):
         if self.config.enable_head_camera:
             head, self._head_pose_warned = read_head_pose(self.logger, self._head_pose_warned)
             obs.update(head)
-
-        if self.config.enable_head_camera:
-            skew = read_head_camera_skew(self.cameras, self.config.head_camera_pair_max_skew_ms)
-            if skew is not None and skew > 0.0:
-                self._head_skew_count += 1
-                now = time.monotonic()
-                if now - self._head_warn_at > 5.0:
-                    self._head_warn_at = now
-                    self.logger.warn(
-                        f"Head camera eyes are {skew:.1f}ms apart (limit "
-                        f"{self.config.head_camera_pair_max_skew_ms:.0f}ms); "
-                        f"{self._head_skew_count} frames so far. left_head and "
-                        "right_head are recorded as separate keys, so a mismatched "
-                        "pair is not otherwise visible in the dataset."
-                    )
+            self._head_skew.check(self.cameras)
 
         # The head cameras need no special case here — they are ordinary
         # cameras, and the pose comes from the SDK above, not from a frame.
@@ -540,90 +463,12 @@ class BiTaccapGripper(Robot):
             obs.update(
                 split_camera_read(
                     cam_name,
-                    self._read_camera_or_fallback(cam_name, cam),
+                    self._cam_guard.read(cam_name, cam),
                     self._tactile_display_keys.get(cam_name),
                 )
             )
 
         return obs
-
-    def _read_camera_or_fallback(self, cam_name: str, cam: Any) -> np.ndarray | dict[str, np.ndarray]:
-        """Read one camera, degrading gracefully on physical loss.
-
-        Two distinct loss modes are handled, because the camera classes behave
-        differently on a hot-unplug:
-
-        * **Read raises** — an OpenCV/UVC wrist camera's background thread dies
-          after repeated failures and the next ``async_read`` raises
-          ``RuntimeError`` ("read thread is not running"). Letting that propagate
-          crashes the record loop and loses the in-progress episode.
-        * **Read freezes** — a Xense tactile sensor keeps its background thread
-          alive on error (it only stops on ``DeviceNotConnectedError``) and its
-          ``async_read`` restarts the thread and returns the *same* cached frame
-          object indefinitely, so an unplug never raises. We detect this by
-          watching for a genuinely new frame object; if none arrives within
-          ``_CAM_FREEZE_TIMEOUT_S`` the stream is treated as lost. Without this,
-          recording would silently continue writing stale tactile frames.
-
-        In both cases we substitute the last good frame (or a black frame on
-        first-read loss), flag the camera as lost so ``device_lost`` trips, and
-        let the caller stop cleanly and save.
-
-        ``TimeoutError`` (a transient slow/dropped frame) reuses the last frame
-        but is NOT flagged as lost — those recover on their own."""
-        now = time.monotonic()
-        try:
-            frame = cam.async_read()
-        except TimeoutError as e:
-            self.logger.warn(f"  [{cam_name}] frame timeout, reusing last frame: {e}")
-            return self._fallback_frame(cam_name)
-        except Exception as e:
-            self._flag_lost(cam_name, f"camera lost mid-episode: {e}")
-            return self._fallback_frame(cam_name)
-
-        # Freeze detection: a live stream yields a fresh array each frame; a
-        # frozen one returns the identical cached object every call. Only reset
-        # the clock on a genuinely new object, so a sensor slower than the sample
-        # loop (which legitimately re-reads one frame) does not trip it.
-        prev = self._last_cam_frame.get(cam_name)
-        if prev is None or frame is not prev:
-            self._last_new_frame_t[cam_name] = now
-        else:
-            frozen_for = now - self._last_new_frame_t.get(cam_name, now)
-            if frozen_for > _CAM_FREEZE_TIMEOUT_S:
-                self._flag_lost(
-                    cam_name,
-                    f"no new frame for {frozen_for:.1f}s (stream frozen, sensor likely unplugged)",
-                )
-
-        self._last_cam_frame[cam_name] = frame
-        return frame
-
-    def _flag_lost(self, cam_name: str, reason: str) -> None:
-        """Mark a camera as physically lost so ``device_lost`` trips. Idempotent;
-        logs once per camera."""
-        if cam_name not in self._lost_cameras:
-            self.logger.error(f"  [{cam_name}] {reason}")
-            self._lost_cameras.add(cam_name)
-
-    def _fallback_frame(self, cam_name: str) -> np.ndarray | dict[str, np.ndarray]:
-        """Last good frame for this camera, or a black frame of the declared
-        (H, W, 3) shape if none was ever captured.
-
-        A tactile sensor asked for several output types reads as a dict, so the
-        first-read fallback has to be shaped the same way — one black frame per
-        requested type — or the split below would drop the display keys."""
-        cached = self._last_cam_frame.get(cam_name)
-        if cached is not None:
-            return cached
-        cfg = self._camera_configs[cam_name]
-        black = np.zeros((cfg.height, cfg.width, 3), dtype=np.uint8)
-        output_types = getattr(cfg, "output_types", None) or []
-        frame: np.ndarray | dict[str, np.ndarray] = (
-            {output_type.value: black.copy() for output_type in output_types} if len(output_types) > 1 else black
-        )
-        self._last_cam_frame[cam_name] = frame
-        return frame
 
     def send_action(self, action: dict[str, Any] | None = None) -> dict[str, Any]:
         """No-op: passive demonstration device. The operators drive the jaws
@@ -641,61 +486,12 @@ class BiTaccapGripper(Robot):
                 for k, v in self._tracker[side].get_action().items():
                     action[f"{side}_{k}"] = v
             if getattr(self.config, f"{side}_enable_gripper") and self._gripper[side] is not None:
-                action[f"{side}_gripper.pos"] = self._read_gripper_normalized(side)
+                action[f"{side}_gripper.pos"] = read_gripper_normalized(
+                    self._gripper[side], getattr(self.config, f"{side}_gripper_open_rad"), self.logger, f"[{side}] "
+                )
         return action
 
     # ------------------------------------------------------------------ helpers
-
-    def _open_gripper(self, side: str, gripper_cls, mcu_device: str):
-        """Open one side's gripper with firmware-normalised jaw position.
-
-        Same reasoning as the single-gripper device: the leader's own encoder-max
-        calibration gives the true opening of *that* unit, where a shared config
-        constant cannot. Followers and uncalibrated/pre-V2.1 leaders fall back to
-        ``{side}_gripper_open_rad`` — see ``taccap_gripper._open_gripper``.
-        """
-        open_rad = getattr(self.config, f"{side}_gripper_open_rad")
-        if gripper_cls is not LeaderGripper:
-            self.logger.info(f"  [{side}] Jaw normalised by config gripper_open_rad={open_rad} (follower)")
-            return gripper_cls(mcu_device)
-
-        try:
-            gripper = gripper_cls(mcu_device, normalize_position=True)
-        except Exception as e:
-            self._gripper_norm_source[side] = "config"
-            self.logger.warn(
-                f"  [{side}] Firmware encoder-max calibration unavailable ({e}); falling back to "
-                f"gripper_open_rad={open_rad}. Fix with: python "
-                "third_party/taccap-gripper/python/examples/fisheye_cal.py measure-encoder-max"
-            )
-            return gripper_cls(mcu_device, normalize_position=True, encoder_max_rad=open_rad)
-
-        self._gripper_norm_source[side] = "firmware"
-        self.logger.info(f"  [{side}] Jaw normalised by the firmware's encoder-max calibration")
-        return gripper
-
-    def _read_gripper_normalized(self, side: str) -> float:
-        """Jaw opening in [0, 1] — 0 closed, 1 fully open.
-
-        Prefers the SDK's firmware-calibrated ``position``; falls back to the
-        radians / ``{side}_gripper_open_rad`` division when no converter is
-        installed (``position`` is ``nan`` then, and a nan must not reach the
-        dataset).
-        """
-        try:
-            sample = self._gripper[side].encoder.read_once()
-        except Exception as e:
-            self.logger.warn(f"  [{side}] Encoder read failed: {e}")
-            return 0.0
-
-        normalised = float(getattr(sample, "position", float("nan")))
-        if np.isfinite(normalised):
-            return float(np.clip(normalised, 0.0, 1.0))
-
-        opened = getattr(self.config, f"{side}_gripper_open_rad")
-        if opened <= 0.0:  # guarded in config.__post_init__ but be defensive
-            return 0.0
-        return float(np.clip(float(sample.position_rad) / opened, 0.0, 1.0))
 
     def get_endpoints(self):
         """Per-side hardware discovery info populated on connect."""
