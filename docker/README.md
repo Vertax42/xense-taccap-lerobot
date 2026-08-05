@@ -16,7 +16,49 @@ LeRobot-Xense、XenseSDK、TacCap-Gripper SDK、Pico4 Python 绑定、Insight SD
 Compose 使用 `privileged: true`、host 网络和 host IPC，以支持运行中热插拔的
 Xense/Insight 相机、TacCap 串口、Pico4 和 CAN。请只在可信的机器人主机上运行。
 
-## 2. 初始化源码并构建
+## 2. 客户交付与新机器一键安装
+
+开发机在镜像构建、验证完成后执行：
+
+```bash
+export LEROBOT_IMAGE_TAG=0.0.3
+./docker/package_customer_delivery.sh
+```
+
+脚本会在 `dist/customer/` 下生成一个完整交付目录，包含：
+
+- `xense-taccap-lerobot-<版本>-linux-amd64.tar`
+- `SHA256SUMS`
+- `compose.yaml` 和 `.env`
+- 客户侧 `install_customer.sh`
+- Docker 中文说明
+
+将整个目录复制到客户的新机器，然后使用普通用户执行：
+
+```bash
+cd xense-taccap-lerobot-0.0.3-linux-amd64
+./install_customer.sh
+```
+
+客户脚本会自动完成：
+
+1. 检查 Ubuntu/Debian amd64 和宿主机 NVIDIA 驱动。
+2. 缺少时安装 Docker Engine、Buildx 和 Compose 插件。
+3. 缺少时安装 NVIDIA Container Toolkit，并配置 Docker GPU runtime/CDI。
+4. 安装 TacCap/Insight 宿主机 udev 规则。
+5. 校验 SHA256、导入镜像并运行 PyTorch CUDA 冒烟测试。
+
+需要本机 HTTP 代理时：
+
+```bash
+XENSE_PROXY_URL=http://127.0.0.1:7897 ./install_customer.sh
+```
+
+脚本不会自动安装或升级宿主机 NVIDIA 驱动，因为驱动安装涉及显卡型号、
+Secure Boot 和系统重启。若 `nvidia-smi` 不可用或驱动低于 `570.144`，脚本会停止并
+提示先处理驱动。
+
+## 3. 初始化源码并构建
 
 镜像会编译三个硬件 SDK，因此构建前必须拉取 git submodule：
 
@@ -30,7 +72,7 @@ docker compose build
 Dockerfile 已包含 apt/curl 自动重试、CUDA 12.8 构建期覆盖和 flexible channel
 priority，不再需要使用临时 `sed` 命令修改构建过程。
 
-## 3. 启动与验证
+## 4. 启动与验证
 
 进入容器：
 
@@ -61,7 +103,7 @@ lerobot-find-port
 docker compose run --rm xense-taccap lerobot-info
 ```
 
-## 4. 数据、缓存与 GUI
+## 5. 数据、缓存与 GUI
 
 LeRobot 数据根目录 `HF_LEROBOT_HOME` 已设为 `/data/lerobot`，Hugging Face
 和 Torch 缓存也使用 Docker volume，删除容器不会丢失：
@@ -103,7 +145,7 @@ START_XENSEVR_SERVICE=0 docker compose run --rm xense-taccap
 
 服务日志默认位于容器内 `/tmp/xensevr-service.log`。
 
-## 5. 常见问题
+## 6. 常见问题
 
 - `Missing git submodules`：在仓库根目录执行
   `git submodule update --init --recursive` 后重新构建。
