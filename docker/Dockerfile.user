@@ -65,6 +65,10 @@ RUN curl --http1.1 --retry 10 --retry-delay 5 --retry-all-errors -fsSL \
     && bash /tmp/miniforge.sh -b -p /opt/conda \
     && rm /tmp/miniforge.sh \
     && /opt/conda/bin/conda config --system --set channel_priority flexible \
+    && /opt/conda/bin/conda config --system --set remote_connect_timeout_secs 60 \
+    && /opt/conda/bin/conda config --system --set remote_read_timeout_secs 300 \
+    && /opt/conda/bin/conda config --system --set remote_max_retries 10 \
+    && /opt/conda/bin/conda config --system --set remote_backoff_factor 2 \
     && /opt/conda/bin/conda clean -afy
 
 ENV PATH=/opt/conda/envs/xense-taccap/bin:/opt/conda/bin:${PATH} \
@@ -77,6 +81,7 @@ ENV PATH=/opt/conda/envs/xense-taccap/bin:/opt/conda/bin:${PATH} \
     XDG_RUNTIME_DIR=/tmp/xdg-runtime \
     WGPU_BACKEND=vulkan \
     CONDA_OVERRIDE_CUDA=12.8 \
+    MAMBA_DOWNLOAD_TIMEOUT_SECONDS=300 \
     UV_HTTP_TIMEOUT=300 \
     PYTHONUNBUFFERED=1 \
     QT_X11_NO_MITSHM=1 \
@@ -86,7 +91,18 @@ WORKDIR /opt/lerobot
 
 # Resolve the expensive conda layer before copying frequently changing source.
 COPY conda_environment.yaml /tmp/conda_environment.yaml
-RUN mamba env create --channel-priority flexible -f /tmp/conda_environment.yaml \
+RUN set -eu; \
+    conda_create_attempt=1; \
+    until mamba env create --channel-priority flexible -f /tmp/conda_environment.yaml; do \
+        if [ "${conda_create_attempt}" -ge 5 ]; then \
+            echo "Conda environment creation failed after ${conda_create_attempt} attempts" >&2; \
+            exit 1; \
+        fi; \
+        echo "Conda environment creation attempt ${conda_create_attempt} failed; clearing index cache and retrying" >&2; \
+        mamba clean --index-cache --yes || true; \
+        conda_create_attempt=$((conda_create_attempt + 1)); \
+        sleep 10; \
+    done \
     && mamba clean -afy \
     && rm /tmp/conda_environment.yaml
 

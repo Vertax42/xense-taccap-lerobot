@@ -40,6 +40,12 @@ sudo systemctl restart docker
 - GitHub 下载 Miniforge 时出现 HTTP/2 `PROTOCOL_ERROR`。
 - Ubuntu apt 经过代理时返回 `502 Bad Gateway`。
 - Docker 构建阶段无法自动检测 CUDA，且 strict channel priority 导致 CUDA 12.8 求解失败。
+- Conda channel 索引 `repodata.json.zst` 下载超时，导致大量正常依赖被误报为 `does not exist`。
+
+新版 Dockerfile 已将 Conda/Mamba 网络读取超时提高到 300 秒，单连接最多
+重试 10 次，并为整个环境创建增加最多 5 次重试。出现大量
+`does not exist` 前，应先检查日志中是否存在 `repodata.json.zst` 超时；如果有，
+通常是索引下载不完整，而不是真正的版本冲突。
 
 当时使用以下命令临时构建（仅作历史记录）：
 
