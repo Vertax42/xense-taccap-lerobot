@@ -18,7 +18,7 @@
 # targets invoked a command that does not exist. They are gone; `test` below runs
 # the suite that this build actually has, the same one CI runs.
 
-.PHONY: test test-fast lint format build-user
+.PHONY: test test-fast lint format build-image
 
 DEVICE ?= cpu
 
@@ -46,5 +46,10 @@ lint:
 format:
 	ruff format .
 
-build-user:
-	docker build -f docker/Dockerfile.user -t lerobot-user .
+# Builds through Compose rather than `docker build` directly: compose.yaml
+# supplies the build args the Dockerfile expects (UBUNTU_VERSION,
+# MINIFORGE_VERSION) and names the image the rest of the tooling looks for.
+# Calling docker build by hand would silently take the Dockerfile's defaults
+# and produce an image under a different tag. See docker/README.md.
+build-image:
+	docker compose build
