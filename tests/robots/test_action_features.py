@@ -53,7 +53,8 @@ def build(cls, config, trackers):
         patch("lerobot.robots.taccap_gripper.serial_discovery.discover_tactiles_by_hub", return_value=TACTILES),
         patch("lerobot.robots.taccap_gripper.serial_discovery.discover_wrist_cameras", return_value=WRIST),
         patch("lerobot.robots.taccap_gripper.serial_discovery.resolve_pico_trackers", return_value=trackers),
-        patch("lerobot.robots.taccap_gripper.common.resolve_wrist_camera_path", side_effect=lambda sn: f"/dev/{sn}"),
+        # same reason as the factory below: both robots import this name directly
+        patch(f"{module}.resolve_wrist_camera_path", side_effect=lambda sn: f"/dev/{sn}"),
         # patched in the robot's own namespace: both robots do
         # `from lerobot.cameras.utils import make_cameras_from_configs`, so they
         # hold a direct reference and patching the source module is a no-op —
