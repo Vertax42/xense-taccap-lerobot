@@ -225,6 +225,55 @@ twice.
 
 ## Calibration workflow (do once per device)
 
+### 0. What state is a unit already in?
+
+Both questions below — what firmware is on it, and is it calibrated — are
+answered by one command. The name is about fisheye, but `show` prints the
+firmware version and **both** stored calibrations:
+
+```bash
+python third_party/taccap-gripper/python/examples/fisheye_cal.py show --sn TCGU01A28Z0023m
+```
+
+```
+Firmware 1.2.1  (fisheye needs cmd set >= V2.0, encoder-max >= V2.1: leader >= 1.2.0 / follower >= 1.1.0)
+
+Fisheye camera calibration (Cmd 0x2B)
+  not calibrated — firmware returned CalNotSet
+
+Encoder max travel angle (Cmd 0x2C, leader only)
+  max_rad = 1.1582 rad (66.4°)
+```
+
+`max_rad` present means step 1 is done and `gripper.pos` is normalised against
+this unit's real travel; `CalNotSet` there means it still falls back to
+`gripper_open_rad`.
+
+If you only want the version, ask the MCU directly — `scan_grippers()` cannot
+tell you, since `GripperEndpoints` carries `firmware_sn` / `side` / `role` but
+no version, and the C++ `fw_version_str` is not exposed through pybind:
+
+```bash
+python -c "
+from xense.taccap import scan_grippers, LeaderGripper, Cmd
+for ep in scan_grippers():
+    g = LeaderGripper(mcu_device=ep.mcu_device)
+    ack = g.transport.send_cmd(Cmd.GetVersion, b'', 500)
+    print(f'{ep.firmware_sn}  {ep.side.name:5}  fw={ack.data[0]}.{ack.data[1]}.{ack.data[2]}')
+"
+```
+
+Opening by `mcu_device` leaves the cameras off and `normalize_position` at its
+default `False`, so this works on an uncalibrated unit — the normalising
+constructor would throw instead.
+
+`Cmd::GetVersion` returns the constant compiled into the running image, not OTA
+bank metadata, so it is proof of what actually landed. Two things it is not:
+`xense.taccap.__version__` is the **SDK** version (`0.1.7`), unrelated to
+firmware; and `ack.data[3]`, the fourth "build" byte, is pinned to 0 and
+meaningless — versions are `MAJOR.MINOR.PATCH` everywhere, so do not write the
+trailing zero into a version comparison.
+
 ### 1. Encoder zero + travel span
 
 The SDK ships the calibration CLI. Select the gripper by side — it resolves the
@@ -272,9 +321,10 @@ pre-V2.1 units, and for followers (`Cmd::EncoderMaxCal` is leader-only).
 
 #### If the gripper reports pre-V2.1 firmware
 
-`calibrate.py` exits without changing anything when the unit is older than V2.1
-(leader 1.2.0) — the encoder-max command does not exist there. Since 0.1.7 the
-SDK ships the released images, so flashing no longer needs the firmware source:
+`calibrate.py` exits without changing anything when the unit's command set is
+older than V2.1 (i.e. leader < 1.2.0) — the encoder-max command does not exist
+there. Since 0.1.7 the SDK ships the released images, so flashing no longer
+needs the firmware source:
 
 ```bash
 # Which role is this unit?  The LAST character of the firmware SN decides —
@@ -285,7 +335,7 @@ python -c "from xense.taccap import scan_grippers
 for g in scan_grippers(): print(g.firmware_sn, '->', 'leader' if g.firmware_sn.endswith('m') else 'follower')"
 
 python third_party/taccap-gripper/python/examples/ota_update.py \
-    tc-gu-01-master.bin --side left --target-version 1.2.0.0
+    tc-gu-01-master.bin --side left --target-version 1.2.1
 ```
 
 Naming the image is enough — `ota_update.py` finds it in the SDK's own

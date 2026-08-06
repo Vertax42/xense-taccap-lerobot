@@ -157,5 +157,8 @@ lerobot-teleoperate \
 
 最终验证通过：两个夹爪、两个 Pico4 tracker、四个触觉传感器、两个腕部相机、CUDA 和 Rerun 均可正常工作。
 
-> 当前夹爪固件为 `1.1.0.0`，不支持 encoder-max 校准，程序会临时使用
-> `gripper_open_rad=1.7`。这不阻止运行，但后续建议升级固件并重新校准。
+> 该记录写于夹爪固件还是 `1.1.0` 的时候：当时不支持 encoder-max 校准，程序
+> 临时回退到 `gripper_open_rad=1.7`。两台 leader 现已升级到 `1.2.1` 并完成
+> encoder-max 校准，`gripper.pos` 走的是固件里的实测行程，不再走那个回退。
+> 如果连接日志里仍出现 `Firmware encoder-max calibration unavailable …`，
+> 说明该台没校准过，按 `taccap_gripper/README.md` 的"硬件启动流程"补一次。
