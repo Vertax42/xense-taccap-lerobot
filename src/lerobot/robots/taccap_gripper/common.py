@@ -511,8 +511,7 @@ def open_gripper(
     * **Uncalibrated or pre-V2.1 leaders** — the constructor raises. Rather
       than fail the session we re-open with ``encoder_max_rad`` supplied from
       the host, which is the same arithmetic as before, and say so once. Run
-      ``fisheye_cal.py measure-encoder-max`` to move a unit onto the firmware
-      value.
+      ``calibrate.py <side>`` to move a unit onto the firmware value.
 
     Returns ``(gripper, norm_source)`` where ``norm_source`` is ``"firmware"``
     or ``"config"`` — which of the two paths above the unit ended up on.
@@ -528,7 +527,7 @@ def open_gripper(
             f"  {label}Firmware encoder-max calibration unavailable ({e}); falling back to "
             f"gripper_open_rad={open_rad}. gripper.pos will not reach 1.0 if this unit's "
             "real travel differs. Fix with: python "
-            "third_party/taccap-gripper/python/examples/fisheye_cal.py measure-encoder-max"
+            "third_party/taccap-gripper/python/examples/calibrate.py <left|right>"
         )
         return gripper_cls(mcu_device, normalize_position=True, encoder_max_rad=open_rad), "config"
 
