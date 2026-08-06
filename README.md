@@ -50,6 +50,23 @@ cd xense-taccap-lerobot
 > git submodule update --init --recursive --progress
 > ```
 
+> **Cloned before the submodule URLs moved to HTTPS?** Then your checkout still
+> records the old `git@github.com:` addresses, and a machine without an SSH key
+> fails to fetch them — `git submodule update --init` will not fix it, because
+> it uses the URL recorded in your `.git`, not the one in `.gitmodules`. Repoint
+> them once:
+>
+> ```bash
+> git submodule sync --recursive
+> git submodule update --init --recursive --progress
+> ```
+>
+> Check what yours are on with
+> `git submodule foreach 'git remote get-url origin'`. Both submodule
+> repositories are public, so HTTPS needs no credentials at all — which is the
+> point: a customer machine and a Docker build can fetch them without being
+> given a key.
+
 This repository uses `third_party/` git submodules to manage hardware SDK dependencies:
 
 | Submodule                        | Installed package                               |
