@@ -1,7 +1,8 @@
 name: xense-taccap
 channels:
   - conda-forge
-  - nvidia
+  # The `nvidia` channel went with the cuda-toolkit/cudnn entries below; nothing
+  # in this file resolves from it any more, and dropping it shortens the solve.
   - nodefaults
 dependencies:
   - python=3.12
@@ -23,9 +24,25 @@ dependencies:
   - spdlog=1.14.1
   - pkg-config
   - make
-  # ── CUDA (xensesdk 2.1.1 / onnxruntime-gpu) ────────────────────────────────
-  - nvidia::cuda-toolkit=12.8
-  - nvidia::cudnn
+  # ── CUDA ───────────────────────────────────────────────────────────────────
+  # Deliberately absent. `nvidia::cuda-toolkit=12.8` + `nvidia::cudnn` used to
+  # live here for onnxruntime-gpu, which xensesdk declares only as an optional
+  # extra (`xensesdk[onnx]`) — and setup_env.sh installs xensesdk with
+  # --no-deps, so onnxruntime was never in the environment. Nothing else used
+  # them: torch/torchvision/torchcodec come from pip and bundle their own CUDA
+  # runtime under site-packages/nvidia (torch reports cuDNN 9.10.2, not the
+  # 9.14.0 conda installed), none of the three C++ SDK builds reference CUDA,
+  # and nvcc is never invoked. Together they cost 4.7 GB — 2.7 GB of that being
+  # headers and static libs nothing links against.
+  #
+  # None of this affects recording. NVENC video encoding uses
+  # libnvidia-encode from the host driver (injected by nvidia-container-toolkit
+  # in Docker), and torch's CUDA comes from its own wheels.
+  #
+  # If you ever want GPU tactile inference (the FORCE / DEPTH output types),
+  # install `xensesdk[onnx]` and add `nvidia::cuda-runtime=12.8` +
+  # `nvidia::cudnn` back — cuda-runtime, not cuda-toolkit: the compiler and
+  # headers in the full toolkit are not needed to *run* anything.
   # ── Video (torchcodec / av) ────────────────────────────────────────────────
   # PyAV/torchcodec are installed from wheels later in setup_env.sh; ffmpeg is
   # kept out of the conda solve to avoid ICU/libxml2 conflicts.

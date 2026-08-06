@@ -109,9 +109,17 @@ COPY . /opt/lerobot
 
 # Reuse the canonical installer so Docker and bare-metal environments receive
 # exactly the same version checks, native bindings and vendor runtime fixes.
+# The XenseVR-PC-Service checkout is build-time only, and it is 756 MB of Qt
+# service sources, a Unity demo and duplicate SDK binaries. What survives the
+# build lives elsewhere: the daemon is installed by the .deb under
+# /opt/apps/roboticsservice, and the C SDK the Python bindings load is copied
+# into xensevr-pc-service-pybind/lib, which the extension records as its RPATH.
+# taccap-gripper stays: it is an editable install, so its sources are its
+# package.
 RUN bash ./setup_env.sh --install \
     && mamba clean -afy \
-    && rm -rf /root/.cache/pip /root/.cache/uv
+    && rm -rf /root/.cache/pip /root/.cache/uv \
+    && rm -rf third_party/XenseVR-PC-Service
 
 RUN install -m 0755 docker/entrypoint.sh /usr/local/bin/lerobot-entrypoint \
     && mkdir -p /data /root/.xensesdk "${HF_HOME}" "${TORCH_HOME}" "${TRITON_CACHE_DIR}" "${XDG_RUNTIME_DIR}" \
