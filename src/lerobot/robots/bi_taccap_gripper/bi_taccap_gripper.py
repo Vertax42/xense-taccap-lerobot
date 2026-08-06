@@ -20,7 +20,7 @@ through the standard ``cameras`` framework.
 Devices are **auto-discovered by serial rule** (``serial_discovery.py``): the two
 grippers, four tactile sensors and two wrist cameras are scanned from the
 connected hardware and assigned to ``left``/``right`` by serial (odd → left, even
-→ right) and role (Master/Leader vs Slave/Follower). No serials are listed in the
+→ right) and role (leader vs follower). No serials are listed in the
 config; a non-conforming or missing/duplicated device raises a clear error.
 
 Observation features (per side ``{s}`` in left/right):

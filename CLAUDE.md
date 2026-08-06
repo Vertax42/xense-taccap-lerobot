@@ -17,7 +17,7 @@ topology rules — **no serials are hand-listed**. Source of truth:
 - Gripper : `TCGU01<batch><line><seq><m|s>` — e.g. `TCGU01A24Z0002m`
 - Tactile : `GSPS01<batch><line><seq>` — e.g. `GSPS01A25Z0011`
 - Camera : `XC<batch><line><seq><m|s>` — e.g. `XCA24Z0007m`
-- `<seq>` is 4 digits; patch `m` → Master/Leader, `s` → Slave/Follower.
+- `<seq>` is 4 digits; patch `m` → leader, `s` → follower.
 
 ### Side rule — 单左双右 (`side_of_sequence`)
 

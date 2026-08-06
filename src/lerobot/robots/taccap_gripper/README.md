@@ -278,10 +278,11 @@ SDK ships the released images, so flashing no longer needs the firmware source:
 
 ```bash
 # Which role is this unit?  The LAST character of the firmware SN decides —
-# 'm' = master image, 's' = slave.  NOT which hand it is on: two grippers on
-# opposite sides of a rig are routinely both masters.
+# 'm' = the leader image, 's' = the follower one.  NOT which hand it is on:
+# two grippers on opposite sides of a rig are routinely both leaders.
+# (The image FILES keep the vendor's master/slave names — see below.)
 python -c "from xense.taccap import scan_grippers
-for g in scan_grippers(): print(g.firmware_sn, '->', 'master' if g.firmware_sn.endswith('m') else 'slave')"
+for g in scan_grippers(): print(g.firmware_sn, '->', 'leader' if g.firmware_sn.endswith('m') else 'follower')"
 
 python third_party/taccap-gripper/python/examples/ota_update.py \
     tc-gu-01-master.bin --side left --target-version 1.2.0.0
@@ -465,7 +466,7 @@ at connect). Leave it unset (default) to keep auto-discovery.
   **one headset**, so this is the same view the bimanual robot records — running two
   single-arm processes does not give two independent head views. Details:
   [`bi_taccap_gripper`](../bi_taccap_gripper/README.md).
-- **Role**: `--robot.role=follower` binds the Slave units (default `leader`).
+- **Role**: `--robot.role=follower` binds the follower units (default `leader`).
 
 ### Streaming video encoding & encoder warmup
 

@@ -27,7 +27,7 @@ Usage:
     python -m lerobot.robots.taccap_gripper.taccap_gripper_example \\
         --side left --tracker --tracker-sn PC2310MLL3200496G
 
-    # Bind the Slave/Follower units instead of the Master/Leader ones:
+    # Bind the follower units instead of the leader ones:
     python -m lerobot.robots.taccap_gripper.taccap_gripper_example --role follower
 
 The jaw closed position is fixed at 0 rad by the SDK's ``Encoder.set_zero()``;
@@ -55,7 +55,7 @@ def main() -> None:
         "--side", default=None, choices=["left", "right"], help="Which gripper (only needed when both are connected)."
     )
     parser.add_argument(
-        "--role", default="leader", choices=["leader", "follower"], help="Device role to bind (default leader/Master)."
+        "--role", default="leader", choices=["leader", "follower"], help="Device role to bind (default leader)."
     )
     parser.add_argument("--tracker", action="store_true", help="Enable the Pico4 motion tracker.")
     parser.add_argument(

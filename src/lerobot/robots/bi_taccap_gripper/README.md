@@ -57,7 +57,7 @@ cameras are scanned from the connected hardware and assigned to `left`/`right` b
 Xense serial rule:
 
 - **Side** — last sequence digit odd → left, even → right (单左双右).
-- **Role** — patch `m` → Master/Leader, `s` → Slave/Follower (`--robot.role`, default
+- **Role** — patch `m` → leader, `s` → follower (`--robot.role`, default
   `leader`).
 
 **Tactile left/right** (`{side}_tactile_{left,right}`) is resolved by **USB hub**,

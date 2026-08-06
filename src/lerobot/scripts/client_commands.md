@@ -54,14 +54,15 @@ lerobot-teleoperate \
     --robot.type=bi_taccap_gripper \
     --fps=30 \
     --display_data=true \
-    --robot.enable_tracker=true
+    --robot.enable_tracker=true \
+    --robot.enable_head_camera=false
 ```
 
 ['PC2310MLL4150713G', 'PC2310MLL4150387G']
 
 Both leader grippers, all four tactiles, both wrist cameras **and both Pico4 trackers**
 are discovered automatically. Sides are assigned by serial: Xense devices by the last
-sequence digit (odd → left, even → right) plus the role patch (`m`=Master, `s`=Slave);
+sequence digit (odd → left, even → right) plus the role patch (`m`=leader, `s`=follower);
 Pico4 trackers by the **second-to-last digit** (e.g. `PC2310MLL3200496G` → `6` → right).
 A bimanual rig needs one tracker per side. To record tactile + gripper only (no Pico4 /
 PC service), add:
@@ -80,7 +81,7 @@ enumeration), pin serials directly — bimanual takes one per side, single takes
 ```
 
 A pinned side is used verbatim (no enumeration, no rule check); un-pinned sides still
-auto-discover. Other knobs: `--robot.role=follower` (bind Slave units), `--robot.gripper_open_rad`,
+auto-discover. Other knobs: `--robot.role=follower` (bind follower units), `--robot.gripper_open_rad`,
 `--robot.tactile_fps`, `--robot.wrist_camera_width/height/fps`.
 
 The bimanual rig can add the Pico headset camera with:

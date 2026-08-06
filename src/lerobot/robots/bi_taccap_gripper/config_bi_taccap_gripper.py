@@ -18,8 +18,7 @@ IMU, plus a Pico4 Ultra motion tracker mounted on top for 6-DoF pose.
 **Serial auto-discovery.** You no longer list device serials. The robot scans the
 connected hardware at construct/connect time and assigns each gripper, tactile
 sensor and wrist camera to ``left``/``right`` by the Xense serial rule (odd
-sequence → left, even → right; patch ``m`` → Master/Leader, ``s`` → Slave/
-Follower). See ``serial_discovery.py``. A serial that does not conform, or a side
+sequence → left, even → right; patch ``m`` → leader, ``s`` → follower). See ``serial_discovery.py``. A serial that does not conform, or a side
 whose hardware is missing/duplicated, raises a clear error so the config and the
 physical serials can never drift out of alignment.
 
@@ -66,8 +65,8 @@ class BiTaccapGripperConfig(RobotConfig):
 
     # ---- Discovery --------------------------------------------------------
     role: str = "leader"
-    """Which device role to bind for the handheld rig: ``leader`` (Master, patch
-    ``m``) or ``follower`` (Slave, patch ``s``). Discovery binds only this role
+    """Which device role to bind for the handheld rig: ``leader`` (patch ``m``)
+    or ``follower`` (patch ``s``). Discovery binds only this role
     and errors if a side resolves to the other."""
 
     expected_tactiles_per_side: int = 2
@@ -200,7 +199,7 @@ class BiTaccapGripperConfig(RobotConfig):
             "follower",
             "slave",
         ):
-            raise ValueError(f"role must be leader/master or follower/slave, got {self.role!r}.")
+            raise ValueError(f"role must be leader or follower, got {self.role!r}.")
         if self.enable_head_camera:
             # Delegate to the camera config so there is one definition of what
             # a valid mode is, rather than a copy here that can drift from it.

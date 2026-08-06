@@ -11,8 +11,8 @@
 """
 Serial-rule auto-discovery for TacCap-Gripper devices.
 
-Xense device serials encode *side* (left/right) and *role* (master/leader vs
-slave/follower) by rule, so a rig's grippers, tactile sensors and wrist cameras
+Xense device serials encode *side* (left/right) and *role* (leader vs
+follower) by rule, so a rig's grippers, tactile sensors and wrist cameras
 can be discovered and assigned automatically instead of hand-listed per side.
 
 Serial grammar
@@ -23,7 +23,7 @@ Serial grammar
 - Camera  ``XCA24Z0001m``     : ``XC`` + batch + line + sequence + patch(``m``|``s``)
 
 Rule: the **last digit of the 4-digit sequence is odd → left, even → right**
-(``单左双右``); patch ``m`` → Master/Leader, ``s`` → Slave/Follower. A wrist
+(``单左双右``); patch ``m`` → leader, ``s`` → follower. A wrist
 camera's sequence matches the gripper it is mounted on.
 
 Tactile left/right assignment (the four GSPS sensors → ``{side}_tactile_{finger}``)
@@ -90,6 +90,12 @@ _TACTILE_BYID_RE = re.compile(r"(GSPS01[A-Z]\d{2}[ZA]\d{4})")
 _CAMERA_BYID_RE = re.compile(r"(XC[A-Z]\d{2}[ZA]\d{4}[ms])")
 
 _PATCH_ROLE = {"m": "leader", "s": "follower"}
+# ``master``/``slave`` are legacy spellings, still accepted so existing scripts
+# and customer command lines keep working. Everything user-facing — docs,
+# docstrings, error messages — says leader/follower, which is also what the
+# xense.taccap SDK itself uses (LeaderGripper / Role.Leader). Only the serial
+# patch letters ``m``/``s`` and the vendor firmware image names still carry the
+# old vocabulary, and those are burned into hardware.
 _ROLE_ALIASES = {
     "leader": "leader",
     "master": "leader",
@@ -104,7 +110,7 @@ def normalize_role(role: str) -> str:
     """Map a user-facing role string to canonical ``leader``/``follower``."""
     key = str(role).strip().lower()
     if key not in _ROLE_ALIASES:
-        raise ValueError(f"Unknown role {role!r}; expected one of: leader/master or follower/slave.")
+        raise ValueError(f"Unknown role {role!r}; expected leader or follower.")
     return _ROLE_ALIASES[key]
 
 

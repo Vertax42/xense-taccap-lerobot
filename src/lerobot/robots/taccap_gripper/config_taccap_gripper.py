@@ -20,8 +20,8 @@ Hardware:
 
 **Serial auto-discovery.** The gripper, its two tactile sensors and its wrist
 camera are scanned from the connected hardware and matched by the Xense serial
-rule (odd sequence → left, even → right; patch ``m`` → Master/Leader, ``s`` →
-Slave/Follower) — no serials are listed here (see ``serial_discovery.py``). With
+rule (odd sequence → left, even → right; patch ``m`` → leader, ``s`` →
+follower) — no serials are listed here (see ``serial_discovery.py``). With
 both grippers connected, set ``side`` to pick one; otherwise the single connected
 gripper is used. A non-conforming serial raises a clear error.
 
@@ -54,8 +54,7 @@ class TaccapGripperConfig(RobotConfig):
 
     # ---- Discovery --------------------------------------------------------
     role: str = "leader"
-    """Device role to bind: ``leader`` (Master, patch ``m``) or ``follower``
-    (Slave, patch ``s``)."""
+    """Device role to bind: ``leader`` (patch ``m``) or ``follower`` (patch ``s``)."""
 
     side: str | None = None
     """Which gripper to use, ``left`` or ``right``. ``None`` = auto when exactly
@@ -202,7 +201,9 @@ class TaccapGripperConfig(RobotConfig):
             build_head_camera_configs(self)
 
         if self.role.strip().lower() not in ("leader", "master", "follower", "slave"):
-            raise ValueError(f"role must be leader/master or follower/slave, got {self.role!r}.")
+            # master/slave are legacy spellings kept for compatibility; see
+            # serial_discovery._ROLE_ALIASES.
+            raise ValueError(f"role must be leader or follower, got {self.role!r}.")
         if self.side is not None and self.side.strip().lower() not in ("left", "right"):
             raise ValueError(f"side must be left, right, or None, got {self.side!r}.")
 

@@ -92,7 +92,7 @@ MIRROR_XZ = np.diag([1.0, -1.0, 1.0])
 # coordinate systems "Tracker frame" and "EE frame"). Metres, and quaternions in
 # this repo's scalar-first [qw, qx, qy, qz].
 #
-# These are LEADER (Master, patch `m`) grippers. The follower body is a different
+# These are LEADER (patch `m`) grippers. The follower body is a different
 # design — different joint origins, flipped jaw axis, fingertips 21 mm further
 # out — so these values do not carry over; see `tracker_to_tcp`.
 TRACKER_TO_EE_POS_M: dict[str, tuple[float, float, float]] = {
