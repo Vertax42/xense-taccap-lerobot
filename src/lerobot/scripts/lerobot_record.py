@@ -260,8 +260,18 @@ class RecordConfig:
     display_ip: str | None = None
     # Port of the remote Rerun server
     display_port: int | None = None
-    # Whether to display compressed images in Rerun (JPEG) to lower memory/IPC load. Set False for lossless display.
-    display_compressed_images: bool = True
+    # JPEG-encode images before sending them to Rerun. Off by default: the encode
+    # runs inline on the record loop, and on a bimanual rig with a head camera it
+    # measures ~13 ms per frame against a 33 ms budget at 30 fps (~3 ms without),
+    # which is enough on its own to produce [slow_frame] overruns. Turn it on when
+    # the viewer is on another machine (--display_ip), where the bandwidth it
+    # saves is worth more than the loop time it costs.
+    display_compressed_images: bool = False
+    # Log camera images to Rerun every N-th frame (1 = every frame). Scalars are
+    # always logged at full rate, so raising this thins the camera tiles without
+    # making the tcp.* / gripper.pos plots sparse. The last resort if the loop
+    # still overruns after turning compression off.
+    display_image_every_n: int = 1
     # Overlay the 3D pose + breadcrumb trajectory view in Rerun (when display_data
     # is on and the device emits tcp.* poses). Auto-skips if enable_tracker=false.
     show_trajectory: bool = True
@@ -271,6 +281,8 @@ class RecordConfig:
     resume: bool = False
 
     def __post_init__(self):
+        if self.display_image_every_n < 1:
+            raise ValueError(f"display_image_every_n must be >= 1 (1 = every frame), got {self.display_image_every_n}.")
         # Robots that act as both observation source and action source
         # (i.e. "self-driven" data-collection devices like handheld grippers)
         # do not require a separate teleoperator (e.g. ``taccap_gripper``).
@@ -289,6 +301,8 @@ def self_driven_record_loop(
     display_data: bool = False,
     traj_viz: TaccapTrajectoryViz | None = None,
     display_features: dict | None = None,
+    display_compressed_images: bool = False,
+    display_image_every_n: int = 1,
 ):
     """Record loop for self-driven handheld devices (e.g. TacCap-Gripper).
 
@@ -321,8 +335,10 @@ def self_driven_record_loop(
     timestamp = 0
     start_episode_t = time.perf_counter()
     prev_observation_frame = None  # shifted-frame: pair obs[t-1] with pose[t]
+    loop_iteration = -1
 
     while timestamp < control_time_s:
+        loop_iteration += 1
         start_loop_t = time.perf_counter()
         refresh_listener_events(events)
 
@@ -374,7 +390,14 @@ def self_driven_record_loop(
 
         if display_data and observation is not None:
             display_observation = select_display_observation(observation, display_features)
-            log_rerun_data(observation=display_observation, action=action or {})
+            log_rerun_data(
+                observation=display_observation,
+                action=action or {},
+                compress_images=display_compressed_images,
+                # Counts loop iterations, not recorded frames, so the viewer keeps
+                # a steady image cadence through the reset phase too.
+                log_images=display_image_every_n <= 1 or loop_iteration % display_image_every_n == 0,
+            )
             if traj_viz is not None:
                 traj_viz.log(display_observation)
 
@@ -496,6 +519,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     display_data=cfg.display_data,
                     traj_viz=traj_viz,
                     display_features=display_features,
+                    display_compressed_images=cfg.display_compressed_images,
+                    display_image_every_n=cfg.display_image_every_n,
                 )
 
                 # Execute a few seconds without recording to give time to manually reset the environment
@@ -515,6 +540,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         display_data=cfg.display_data,
                         traj_viz=traj_viz,
                         display_features=display_features,
+                        display_compressed_images=cfg.display_compressed_images,
+                        display_image_every_n=cfg.display_image_every_n,
                     )
 
                 if events["rerecord_episode"]:

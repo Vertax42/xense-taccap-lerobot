@@ -100,7 +100,7 @@ class TeleoperateConfig:
     # Port of the remote Rerun server
     display_port: int | None = None
     # Whether to display compressed images in Rerun (JPEG) to lower memory/IPC load. Set False for lossless display.
-    display_compressed_images: bool = True
+    display_compressed_images: bool = False
     # Overlay the 3D pose + breadcrumb trajectory view in Rerun (when display_data
     # is on and the device emits tcp.* poses). Auto-skips if enable_tracker=false.
     show_trajectory: bool = True
@@ -221,7 +221,7 @@ def self_driven_teleop_loop(
     fps: int,
     display_data: bool = False,
     duration: float | None = None,
-    display_compressed_images: bool = True,
+    display_compressed_images: bool = False,
     debug_timing: bool = False,
     traj_viz: TaccapTrajectoryViz | None = None,
     display_features: dict | None = None,

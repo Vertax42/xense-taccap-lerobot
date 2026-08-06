@@ -251,3 +251,61 @@ def test_log_rerun_data_kwargs_only(mock_rerun):
     a = _obj_for(calls, "action.a")
     assert type(a).__name__ == "DummyScalar"
     assert a.value == pytest.approx(1.0)
+
+
+def test_images_are_not_compressed_by_default(mock_rerun):
+    """JPEG encoding runs inline on the caller's thread. Measured on a bimanual
+    rig with a head camera (4 tactile + 2 wrist + 2 eyes) it costs ~13 ms per
+    frame against a 33 ms budget at 30 fps, versus ~3 ms uncompressed — enough
+    on its own to produce [slow_frame] overruns while recording."""
+    vu, calls = mock_rerun
+
+    vu.log_rerun_data(observation={"observation.cam": np.zeros((4, 6, 3), dtype=np.uint8)})
+
+    img = _obj_for(calls, "observation.cam")
+    assert type(img).__name__ == "DummyImage"
+    assert not getattr(img, "compressed", False)
+
+
+def test_compression_can_be_turned_back_on(mock_rerun):
+    """Worth its loop time when the viewer is on another machine."""
+    vu, calls = mock_rerun
+
+    vu.log_rerun_data(
+        observation={"observation.cam": np.zeros((4, 6, 3), dtype=np.uint8)},
+        compress_images=True,
+    )
+
+    assert _obj_for(calls, "observation.cam").compressed is True
+
+
+def test_log_images_false_drops_images_but_keeps_scalars(mock_rerun):
+    """The point of the knob: thinning the camera tiles must not make the
+    tcp.* / gripper.pos plots sparse."""
+    vu, calls = mock_rerun
+
+    vu.log_rerun_data(
+        observation={
+            "observation.temp": 1.5,
+            "observation.cam": np.zeros((4, 6, 3), dtype=np.uint8),
+        },
+        action={"action.a": 0.5},
+        log_images=False,
+    )
+
+    keys = _keys(calls)
+    assert "observation.cam" not in keys
+    assert "observation.temp" in keys
+    assert "action.a" in keys
+
+
+def test_log_images_false_still_logs_1d_arrays_as_scalars(mock_rerun):
+    """A 1-D array is a vector of scalars, not an image — it must survive."""
+    vu, calls = mock_rerun
+
+    vu.log_rerun_data(
+        observation={"observation.vec": np.array([1.0, 2.0], dtype=np.float32)},
+        log_images=False,
+    )
+
+    assert set(_keys(calls)) == {"observation.vec_0", "observation.vec_1"}

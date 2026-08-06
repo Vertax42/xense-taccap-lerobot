@@ -72,7 +72,8 @@ def _is_scalar(x):
 def log_rerun_data(
     observation: RobotObservation | None = None,
     action: RobotAction | None = None,
-    compress_images: bool = True,
+    compress_images: bool = False,
+    log_images: bool = True,
 ) -> None:
     """
     Logs observation and action data to Rerun for real-time visualization.
@@ -90,9 +91,18 @@ def log_rerun_data(
     Args:
         observation: An optional dictionary containing observation data to log.
         action: An optional dictionary containing action data to log.
-        compress_images: Whether to compress images to JPEG before logging (default True).
-                         Reduces rerun memory usage and IPC bandwidth significantly.
-                         Set to False only when lossless quality is required.
+        compress_images: JPEG-encode images before logging. Off by default,
+                         because the encode runs inline on the caller's thread —
+                         on a bimanual rig with a head camera (four tactile, two
+                         wrist, two eyes) it measures ~13 ms per frame against a
+                         33 ms budget at 30 fps, versus ~3 ms uncompressed. It
+                         buys lower viewer memory and IPC bandwidth, which is
+                         worth having when the viewer is on another machine
+                         (``--display_ip``) and not much otherwise.
+        log_images:      Log image entities at all. Scalars are always logged, so
+                         turning this off thins the camera tiles without making
+                         the pose and jaw plots sparse — the way to spend less
+                         time here while keeping every curve at full rate.
     """
     if observation:
         for k, v in observation.items():
@@ -110,7 +120,7 @@ def log_rerun_data(
                 if arr.ndim == 1:
                     for i, vi in enumerate(arr):
                         rr.log(f"{key}_{i}", rr.Scalars(float(vi)))
-                else:
+                elif log_images:
                     img_entity = rr.Image(arr).compress() if compress_images else rr.Image(arr)
                     rr.log(key, entity=img_entity)
 
