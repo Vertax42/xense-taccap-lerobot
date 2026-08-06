@@ -272,9 +272,10 @@ pre-V2.1 units, and for followers (`Cmd::EncoderMaxCal` is leader-only).
 
 #### If the gripper reports pre-V2.1 firmware
 
-`calibrate.py` exits without changing anything when the unit is older than V2.1
-(leader 1.2.0) — the encoder-max command does not exist there. Since 0.1.7 the
-SDK ships the released images, so flashing no longer needs the firmware source:
+`calibrate.py` exits without changing anything when the unit's command set is
+older than V2.1 (i.e. leader < 1.2.0) — the encoder-max command does not exist
+there. Since 0.1.7 the SDK ships the released images, so flashing no longer
+needs the firmware source:
 
 ```bash
 # Which role is this unit?  The LAST character of the firmware SN decides —
@@ -285,7 +286,7 @@ python -c "from xense.taccap import scan_grippers
 for g in scan_grippers(): print(g.firmware_sn, '->', 'leader' if g.firmware_sn.endswith('m') else 'follower')"
 
 python third_party/taccap-gripper/python/examples/ota_update.py \
-    tc-gu-01-master.bin --side left --target-version 1.2.0.0
+    tc-gu-01-master.bin --side left --target-version 1.2.1
 ```
 
 Naming the image is enough — `ota_update.py` finds it in the SDK's own
