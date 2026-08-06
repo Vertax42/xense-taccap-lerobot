@@ -119,6 +119,21 @@ lerobot-teleoperate \
 Recording is self-driven (`self_driven_record_loop`, shifted-frame: `action[t]` paired with
 `obs[t-1]`) — **no `--teleop`**. Same robot flags as teleop, plus `--dataset.*`.
 
+### Recording with the viewer on — `[slow_frame]`
+
+`--display_data=true` costs loop time, and a bimanual rig with the head camera is
+eight images per frame. The defaults below are already the fast ones; reach for
+them only if the log shows `[slow_frame] ... overrun=`.
+
+| Flag                          | Default | What it costs                                                                                                                                                                                                                                                                         |
+| ----------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--display_compressed_images` | `false` | `true` JPEG-encodes every image inline on the record loop — measured at 13.2 ms/frame against a 33.3 ms budget at 30 fps, versus 3.1 ms off. Turn it on only when the viewer is on **another machine** (`--display_ip`), where saving IPC bandwidth is worth more than the loop time. |
+| `--display_image_every_n`     | `1`     | Log camera images every N-th frame. Scalars stay at full rate, so `tcp.*` and `gripper.pos` curves are unaffected — only the camera tiles get sparser. Every 3rd frame brings the image cost to ~1 ms. Last resort: it is the only one of these that changes what you see.            |
+
+The `[slow_frame]` line carries a `top_obs=` suffix naming the slowest cameras of
+that frame, so check it before reaching for either flag — a single slow sensor is
+a different problem from the viewer being expensive.
+
 ### Bimanual (`bi_taccap_gripper`)
 
 ```bash
