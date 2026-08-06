@@ -58,8 +58,10 @@ class BiTaccapGripperConfig(RobotConfig):
 
     Grippers, tactile sensors and wrist cameras are auto-discovered by serial
     rule — no serials are listed here. Gripper position is normalised via
-    ``clip(position_rad / {side}_gripper_open_rad, 0, 1)`` (0 = closed, fixed by
-    the SDK's ``Encoder.set_zero()``; 1 = mechanical max).
+    ``clip(position_rad / {side}_gripper_open_rad, 0, 1)`` for followers (0 =
+    closed, fixed by the SDK's ``Encoder.set_zero()``; 1 = mechanical max).
+    Leaders use their own firmware-stored travel span and refuse to connect
+    without one.
     """
 
     # ---- Discovery --------------------------------------------------------
@@ -87,6 +89,11 @@ class BiTaccapGripperConfig(RobotConfig):
     left_enable_gripper: bool = True
     left_enable_imu: bool = False
     left_gripper_open_rad: float = 1.7
+    """Encoder reading (rad) at which the left jaw counts as fully open.
+    **Followers only** — a leader normalises from its own stored travel span,
+    and connect() refuses a leader that has none rather than falling back to
+    this constant (see ``common.open_gripper``). Calibrate with
+    ``examples/calibrate.py left``."""
 
     left_tracker_serial: str | None = None
     """Manually pin the left Pico4 tracker serial, bypassing the
@@ -105,6 +112,11 @@ class BiTaccapGripperConfig(RobotConfig):
     right_enable_gripper: bool = True
     right_enable_imu: bool = False
     right_gripper_open_rad: float = 1.7
+    """Encoder reading (rad) at which the right jaw counts as fully open.
+    **Followers only** — a leader normalises from its own stored travel span,
+    and connect() refuses a leader that has none rather than falling back to
+    this constant (see ``common.open_gripper``). Calibrate with
+    ``examples/calibrate.py right``."""
 
     right_tracker_serial: str | None = None
     """Manually pin the right Pico4 tracker serial, bypassing the

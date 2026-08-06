@@ -74,9 +74,16 @@ class TaccapGripperConfig(RobotConfig):
 
     gripper_open_rad: float = 1.7
     """Encoder reading (rad) when the jaw is fully open (gripper.pos = 1).
-    Default 1.7 ~= TC-GU-01 mechanical limit (~97 deg). Override per unit
-    if your sample varies. Closed (gripper.pos = 0) is always 0 rad --
-    set via the SDK's Encoder.set_zero() (run calibrate.py once)."""
+    Default 1.7 ~= TC-GU-01 mechanical limit (~97 deg). Closed (gripper.pos = 0)
+    is always 0 rad -- set via the SDK's Encoder.set_zero().
+
+    **Followers only.** A leader normalises from its own stored travel span, and
+    connect() now refuses a leader that has none rather than falling back to
+    this constant: one number cannot describe every unit ever built, and a jaw
+    scaled by the wrong one produces a dataset nothing downstream can tell from
+    a jaw that was never opened fully. Run
+    ``third_party/taccap-gripper/python/examples/calibrate.py <left|right>``
+    once per leader instead."""
 
     # ---- Pico4 Ultra tracker ---------------------------------------------
     enable_tracker: bool = True

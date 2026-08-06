@@ -504,17 +504,24 @@ def open_gripper(
     is one number for every gripper ever built: a unit whose real travel is
     1.30 rad would only ever read 0.76 at fully open.
 
-    Two things fall back to ``open_rad`` instead:
+    A leader whose travel span the firmware cannot supply is a **hard error**.
+    We used to fall back to ``open_rad`` and warn, but a warning at connect
+    scrolls past and the session then records a whole dataset of ``gripper.pos``
+    values scaled by the wrong constant — one number for every gripper ever
+    built, where a unit whose real travel is 1.30 rad reads 0.76 at fully open.
+    Nothing downstream can tell that apart from a jaw that was never opened all
+    the way, so the damage is silent and only visible once someone trains on it.
+    Refusing to start costs one calibration run; not refusing costs the data.
 
-    * **Followers** — ``EncoderMaxCal`` is leader-only, and the follower
-      class does not take the flag at all.
-    * **Uncalibrated or pre-V2.1 leaders** — the constructor raises. Rather
-      than fail the session we re-open with ``encoder_max_rad`` supplied from
-      the host, which is the same arithmetic as before, and say so once. Run
-      ``calibrate.py <side>`` to move a unit onto the firmware value.
+    **Followers** still normalise from ``open_rad``: ``EncoderMaxCal`` is
+    leader-only and the follower class does not take the flag at all.
 
     Returns ``(gripper, norm_source)`` where ``norm_source`` is ``"firmware"``
-    or ``"config"`` — which of the two paths above the unit ended up on.
+    for leaders and ``"config"`` for followers.
+
+    Raises:
+        RuntimeError: the leader's encoder-max calibration is unavailable —
+            never stored, or firmware older than V2.1.
     """
     if not is_leader:
         logger.info(f"  {label}Jaw normalised by config gripper_open_rad={open_rad} (follower)")
@@ -523,13 +530,22 @@ def open_gripper(
     try:
         gripper = gripper_cls(mcu_device, normalize_position=True)
     except Exception as e:
-        logger.warn(
-            f"  {label}Firmware encoder-max calibration unavailable ({e}); falling back to "
-            f"gripper_open_rad={open_rad}. gripper.pos will not reach 1.0 if this unit's "
-            "real travel differs. Fix with: python "
-            "third_party/taccap-gripper/python/examples/calibrate.py <left|right>"
-        )
-        return gripper_cls(mcu_device, normalize_position=True, encoder_max_rad=open_rad), "config"
+        raise RuntimeError(
+            f"{label}This leader gripper has no encoder-max calibration, so its jaw travel "
+            f"is unknown and gripper.pos cannot be computed ({type(e).__name__}: {e}).\n"
+            "\n"
+            "Calibrate it once, then re-run:\n"
+            "\n"
+            "    python third_party/taccap-gripper/python/examples/calibrate.py <left|right>\n"
+            "\n"
+            "That walks you through latching the closed pose as the encoder zero and then "
+            "storing the fully-open angle as the travel span (Cmd::EncoderMaxCal), which is "
+            "what the firmware divides by. Until it is stored the firmware cannot report a "
+            "normalised position at all.\n"
+            "\n"
+            "If this unit's firmware is older than V2.1 it does not implement EncoderMaxCal "
+            "and needs an OTA update first (examples/ota_update.py)."
+        ) from e
 
     logger.info(f"  {label}Jaw normalised by the firmware's encoder-max calibration")
     return gripper, "firmware"
@@ -540,9 +556,9 @@ def read_gripper_normalized(gripper: Any, open_rad: float, logger: Any, label: s
 
     Prefers the SDK's ``position``, which the firmware's own encoder-max
     calibration produces (see :func:`open_gripper`). It is ``nan`` when no
-    converter is installed — a follower, or a leader that fell back — so the
-    radians path stays as the backstop rather than letting a nan reach the
-    dataset.
+    converter is installed, which since :func:`open_gripper` started refusing
+    uncalibrated leaders means a **follower** — so the radians path stays as
+    the backstop rather than letting a nan reach the dataset.
     """
     try:
         sample = gripper.encoder.read_once()

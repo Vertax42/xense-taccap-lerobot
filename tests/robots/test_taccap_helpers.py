@@ -16,6 +16,8 @@ here moves both at once — which is the point, and the reason they are worth
 pinning. Nothing below touches hardware or either vendor SDK.
 """
 
+import functools
+
 import numpy as np
 import pytest
 
@@ -26,6 +28,7 @@ from lerobot.robots.taccap_gripper.common import (
     HeadSkewMonitor,
     build_head_camera_configs,
     build_tactile_camera_configs,
+    open_gripper,
     read_head_camera_skew,
     split_camera_read,
     swap_tactile_display_features,
@@ -150,12 +153,16 @@ class FakeHeadCamera:
 class FakeLogger:
     def __init__(self):
         self.warnings = []
+        self.infos = []
 
     def warn(self, msg):
         self.warnings.append(msg)
 
+    def info(self, msg):
+        self.infos.append(msg)
+
     def __getattr__(self, name):
-        if name in ("info", "debug", "error"):
+        if name in ("debug", "error"):
             return lambda *a, **k: None
         raise AttributeError(name)
 
@@ -453,3 +460,88 @@ class TestResolveTrackerToEe:
         pos, quat = resolve_tracker_to_ee("right", [0.1, 0.2, 0.3], [1, 0, 0, 0])
         assert pos.dtype == np.float64
         assert quat.dtype == np.float64
+
+
+class FakeGripper:
+    """Stands in for LeaderGripper / FollowerGripper.
+
+    ``normalize_position=True`` is what asks the firmware for its stored travel
+    span; ``has_encoder_max=False`` reproduces a unit that never had one stored
+    (or firmware older than V2.1), where the real SDK constructor raises.
+    """
+
+    def __init__(self, mcu_device, normalize_position=False, encoder_max_rad=None, *, has_encoder_max=True):
+        if normalize_position and not has_encoder_max and encoder_max_rad is None:
+            raise ValueError("Cmd::EncoderMaxCal returned no calibration")
+        self.mcu_device = mcu_device
+        self.normalize_position = normalize_position
+        self.encoder_max_rad = encoder_max_rad
+
+    @classmethod
+    def uncalibrated(cls):
+        """A constructor that refuses `normalize_position=True`, as the SDK does."""
+        return functools.partial(cls, has_encoder_max=False)
+
+
+class TestOpenGripper:
+    """A leader with no stored travel span must stop the session.
+
+    It used to warn and divide by the config constant instead. That number is
+    one value for every unit ever built, so a gripper whose real travel differs
+    records a `gripper.pos` that never reaches 1.0 — indistinguishable
+    downstream from a jaw the operator never opened all the way. The failure is
+    silent and only shows up once someone trains on the data, which is why it
+    is worth refusing to start.
+    """
+
+    def test_calibrated_leader_normalises_from_firmware(self):
+        logger = FakeLogger()
+        gripper, source = open_gripper(FakeGripper, "/dev/ttyACM0", is_leader=True, open_rad=1.7, logger=logger)
+        assert source == "firmware"
+        assert gripper.normalize_position is True
+        # the host constant must not be handed to a calibrated leader
+        assert gripper.encoder_max_rad is None
+
+    def test_uncalibrated_leader_raises(self):
+        logger = FakeLogger()
+        with pytest.raises(RuntimeError) as excinfo:
+            open_gripper(FakeGripper.uncalibrated(), "/dev/ttyACM0", is_leader=True, open_rad=1.7, logger=logger)
+        assert "no encoder-max calibration" in str(excinfo.value)
+
+    def test_the_error_names_the_calibration_command(self):
+        """The operator has to be able to act on it without reading the source."""
+        with pytest.raises(RuntimeError) as excinfo:
+            open_gripper(FakeGripper.uncalibrated(), "/dev/ttyACM0", is_leader=True, open_rad=1.7, logger=FakeLogger())
+        message = str(excinfo.value)
+        assert "calibrate.py <left|right>" in message
+        assert "EncoderMaxCal" in message
+        assert "V2.1" in message  # the pre-V2.1 firmware case needs an OTA first
+
+    def test_the_error_carries_the_side_label_and_the_original_cause(self):
+        with pytest.raises(RuntimeError) as excinfo:
+            open_gripper(
+                FakeGripper.uncalibrated(),
+                "/dev/ttyACM0",
+                is_leader=True,
+                open_rad=1.7,
+                logger=FakeLogger(),
+                label="[left] ",
+            )
+        assert str(excinfo.value).startswith("[left] ")
+        # chained, so the SDK's own message is not lost
+        assert isinstance(excinfo.value.__cause__, ValueError)
+        assert "EncoderMaxCal" in str(excinfo.value.__cause__)
+
+    def test_it_does_not_silently_fall_back_to_the_config_constant(self):
+        """Guards the specific regression: re-opening with encoder_max_rad set."""
+        with pytest.raises(RuntimeError):
+            open_gripper(FakeGripper.uncalibrated(), "/dev/ttyACM0", is_leader=True, open_rad=1.7, logger=FakeLogger())
+
+    def test_follower_still_normalises_from_the_config_constant(self):
+        """EncoderMaxCal is leader-only and the follower class does not take the
+        flag, so followers are unaffected by the stricter leader path."""
+        logger = FakeLogger()
+        gripper, source = open_gripper(FakeGripper, "/dev/ttyACM0", is_leader=False, open_rad=1.7, logger=logger)
+        assert source == "config"
+        assert gripper.normalize_position is False
+        assert any("gripper_open_rad=1.7" in m for m in logger.infos)
