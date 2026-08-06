@@ -35,6 +35,7 @@ Observation features:
                                         (if enable_head_camera; head_camera_eyes
                                         can select a single eye)
     head_camera.x/y/z/r1..r6         -- headset pose, same world frame as tcp.*
+                                        (also an action -- see action_features)
 
 Display-only keys (present in ``get_observation()`` and in ``display_features``,
 absent from ``observation_features``, so Rerun shows them but the dataset never
@@ -300,8 +301,17 @@ class TaccapGripper(Robot):
     def action_features(self) -> dict[str, type]:
         """The 'demonstration' action this device emits when used as a teleop.
 
-        Pose (tcp.x/y/z, tcp.r1-r6) + gripper.pos.
-        No camera data — that lives in observation only.
+        Pose (tcp.x/y/z, tcp.r1-r6) + gripper.pos, and the headset pose
+        (head_camera.x/y/z/r1..r6) when the head camera is on.
+
+        The head pose is an action, not just context: what the operator looked at
+        while demonstrating is something a policy is meant to reproduce, and it
+        is in the same world frame and the same position + 6D rotation layout as
+        ``tcp.*``, so it can be commanded the same way. Recording it only as an
+        observation would leave it out of the shifted-frame pairing that makes
+        the rest of the row a "where to move next" target.
+
+        Still no image data — that lives in observation only.
         """
         features: dict[str, type] = {}
         if self._tracker_sn is not None:
@@ -309,6 +319,9 @@ class TaccapGripper(Robot):
                 features[f"tcp.{k}"] = float
         if self.config.enable_gripper:
             features["gripper.pos"] = float
+        if self.config.enable_head_camera:
+            for k in HEAD_POSE_KEYS:
+                features[f"head_camera.{k}"] = float
         return features
 
     @property
@@ -488,7 +501,13 @@ class TaccapGripper(Robot):
 
     def get_action(self) -> dict[str, Any]:
         """Return the same pose + gripper dict that the device emits as a
-        teleoperator (used when recording demonstrations)."""
+        teleoperator, i.e. exactly the keys in :attr:`action_features`.
+
+        The record loop does not call this — it takes the ``action_features``
+        subset of the observation it already sampled, so the row costs one
+        hardware read. This exists for the teleoperator role, and reads the
+        headset pose again rather than sharing that sample.
+        """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected")
         action: dict[str, Any] = {}
@@ -496,6 +515,9 @@ class TaccapGripper(Robot):
             action.update(self._tracker.get_action())
         if self.config.enable_gripper and self._gripper is not None:
             action["gripper.pos"] = read_gripper_normalized(self._gripper, self.config.gripper_open_rad, self.logger)
+        if self.config.enable_head_camera:
+            head, self._head_pose_warned = read_head_pose(self.logger, self._head_pose_warned)
+            action.update(head)
         return action
 
     # ------------------------------------------------------------------ helpers
