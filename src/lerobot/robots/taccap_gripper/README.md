@@ -133,7 +133,7 @@ If the EE ever lands somewhere unrelated to the fingers, flip
 Verify a mount with the pivot check — no extra hardware needed:
 
 ```bash
-python -m lerobot.robots.taccap_gripper.calibrate_tracker --side right
+python -m lerobot.robots.taccap_gripper.check_tracker --side right
 ```
 
 Rest the two-finger midpoint on a fixed point and sweep the handle through as
@@ -358,9 +358,9 @@ re-enumeration).
 ### 2. Sanity-check the Pico4 tracker
 
 ```bash
-python -m lerobot.robots.taccap_gripper.calibrate_tracker
+python -m lerobot.robots.taccap_gripper.check_tracker
 # or, pin to a specific tracker SN:
-python -m lerobot.robots.taccap_gripper.calibrate_tracker PC2310MLL3200496G
+python -m lerobot.robots.taccap_gripper.check_tracker PC2310MLL3200496G
 ```
 
 Watch the `raw xyz` move smoothly when you wave the gripper. The
@@ -578,7 +578,7 @@ second column.
   `get_action()` both surface pose + gripper + optional IMU + cameras.
 - `config_taccap_gripper.py` — `RobotConfig` dataclass.
 - `taccap_gripper_example.py` — standalone smoke test (above).
-- `calibrate_tracker.py` — sanity-check the Pico4 tracker.
+- `check_tracker.py` — sanity-check the Pico4 tracker (read-only; it calibrates nothing).
 
 Encoder zero calibration lives in the SDK itself
 (`third_party/taccap-gripper/python/examples/calibrate.py`) — we no

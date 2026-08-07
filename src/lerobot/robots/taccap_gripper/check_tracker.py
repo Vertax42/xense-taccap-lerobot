@@ -11,6 +11,11 @@
 """
 Sanity-check helper for the Pico4 motion tracker.
 
+Read-only, despite what this file used to be called: the tracker needs no
+calibration. Its mount transform is built in (``ee_transform.tracker_to_tcp``)
+and its side comes from the serial, so there is nothing here to solve for and
+nothing to write out.
+
 Prints raw + EE pose at 10 Hz so you can:
     - confirm the tracker is alive and the SN matches what you expect,
     - eyeball the ``tracker_to_ee_pos`` / ``tracker_to_ee_quat`` rigid
@@ -19,9 +24,9 @@ Prints raw + EE pose at 10 Hz so you can:
       a continuity fix; if you still see sign jumps, file a bug).
 
 Usage:
-    python -m lerobot.robots.taccap_gripper.calibrate_tracker
-    python -m lerobot.robots.taccap_gripper.calibrate_tracker <tracker_sn>
-    python -m lerobot.robots.taccap_gripper.calibrate_tracker --side right
+    python -m lerobot.robots.taccap_gripper.check_tracker
+    python -m lerobot.robots.taccap_gripper.check_tracker <tracker_sn>
+    python -m lerobot.robots.taccap_gripper.check_tracker --side right
 
 Pivot check (verifies the tracker→TCP transform without any extra hardware):
 rest the gripper's two-finger midpoint on a fixed point and sweep the handle
@@ -56,16 +61,16 @@ def main() -> None:
 
     if args.side is None:
         ee_pos, ee_quat = np.zeros(3), np.array([1.0, 0.0, 0.0, 0.0])
-        print("[calibrate] no --side: transform is identity, 'ee' will track 'raw'.")
+        print("[check] no --side: transform is identity, 'ee' will track 'raw'.")
     else:
         ee_pos, ee_quat = tracker_to_tcp(args.side)
         offset_mm = float(np.linalg.norm(ee_pos)) * 1e3
-        print(f"[calibrate] side={args.side} tracker→TCP pos={ee_pos.tolist()} quat={ee_quat.tolist()}")
-        print(f"[calibrate] TCP sits {offset_mm:.2f} mm from the tracker origin.")
+        print(f"[check] side={args.side} tracker→TCP pos={ee_pos.tolist()} quat={ee_quat.tolist()}")
+        print(f"[check] TCP sits {offset_mm:.2f} mm from the tracker origin.")
 
     reader = Pico4TrackerReader(tracker_sn=args.tracker_sn, tracker_to_ee_pos=ee_pos, tracker_to_ee_quat=ee_quat)
     reader.connect()
-    print("[calibrate] tracker connected. Press Ctrl+C to stop.")
+    print("[check] tracker connected. Press Ctrl+C to stop.")
 
     t_start = time.monotonic()
     try:
@@ -86,7 +91,7 @@ def main() -> None:
                 )
             if args.duration > 0 and t >= args.duration:
                 print()
-                print(f"[calibrate] reached duration={args.duration}s")
+                print(f"[check] reached duration={args.duration}s")
                 break
             time.sleep(0.1)
     except KeyboardInterrupt:
