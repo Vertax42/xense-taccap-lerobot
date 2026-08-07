@@ -94,8 +94,9 @@ xhost -si:localuser:root
 ghcr.io/vertax42/xense-taccap-lerobot
 ```
 
-该包是 **private** 的。镜像内含 XenseSDK、XenseVR-PC-Service、TacCap-Gripper 的
-二进制产物，仓库开源不代表这些可以公开再分发，所以拉取和推送都需要凭据。
+该包是 **public** 的，拉取不需要登录 —— 与仓库本身一致：镜像里的 XenseSDK 来自公开
+PyPI，XenseVR-PC-Service 的 `.deb` 来自公开 GitHub release，两个 SDK submodule 也都是
+公开仓库，没有一样是靠镜像才拿得到的。只有**推送**需要凭据。
 
 第 2 节的 tar 交付方式**继续保留**：客户机完全离线时仍然只能走 tar。GHCR 的价值在
 后续升级 —— 21 GB 里绝大部分是 conda 层和 SDK 层，版本迭代时客户只需要拉变动的
@@ -103,14 +104,7 @@ ghcr.io/vertax42/xense-taccap-lerobot
 
 ### 客户侧拉取
 
-先用一个仅有 `read:packages` 权限的 classic PAT 登录（在
-<https://github.com/settings/tokens> 创建）：
-
-```bash
-echo "$GHCR_TOKEN" | docker login ghcr.io -u <你的 GitHub 用户名> --password-stdin
-```
-
-然后在交付目录（或仓库根目录）的 `.env` 里指向 GHCR：
+在交付目录（或仓库根目录）的 `.env` 里指向 GHCR：
 
 ```dotenv
 LEROBOT_IMAGE=ghcr.io/vertax42/xense-taccap-lerobot
@@ -243,8 +237,8 @@ START_XENSEVR_SERVICE=0 docker compose run --rm xense-taccap
 - 找不到 GSPS，但宿主机存在：确认容器通过 Compose 启动，并检查
   `ls /dev/v4l/by-id/*GSPS*`；必要时重新插拔 USB Hub 后执行
   `sudo udevadm settle --timeout=20`。
-- `docker compose pull` 报 `denied` 或 `unauthorized`：GHCR 上的包是 private，
-  确认已 `docker login ghcr.io`，且 PAT 带 `read:packages`（推送需要 `write:packages`）。
+- `docker push` 报 `denied`：包是公开的，拉取不需要登录，但推送要 —— 确认已
+  `docker login ghcr.io`，且 PAT 带 `write:packages`。
 - 构建需要离线/定制的 vendor wheel 或 `.deb`：先按 `setup_env.sh` 支持的
   `XENSESDK_WHEEL` / `XENSEVR_DEB` 方式将安装物纳入构建上下文，再定制 Dockerfile；
   默认镜像从项目规定的公开发布地址下载。
