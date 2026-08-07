@@ -46,10 +46,14 @@ jobs:
       packages: write
     steps:
       - name: Free up disk space
-        # A standard hosted runner documents ~14 GB of free SSD on /, and this
-        # image is 21.4 GB unpacked. Two things buy the room: deleting the
-        # preinstalled toolchains nothing here uses, and moving the Docker /
-        # BuildKit state onto /mnt, the runner's large ephemeral disk.
+        # Insurance, not a fix for a measured shortage. GitHub documents ~14 GB
+        # of free SSD, which would not hold this 21.4 GB image, but the first
+        # real run reported `/dev/root 145G 37G 109G 26% /` — and /mnt on the
+        # same device, i.e. no separate ephemeral disk to move onto. So the
+        # data-root move is a no-op today and the deletions are headroom we did
+        # not need. Kept because runner specs change without notice and the
+        # failure mode is a wasted hour; `df -h` is the point of the step, so
+        # read it before assuming a future out-of-space failure is impossible.
         run: |
           set -euxo pipefail
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache
