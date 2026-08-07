@@ -1,0 +1,163 @@
+# Copyright 2026 The XenseRobotics Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+# Builds docker/Dockerfile.user and publishes it to GHCR.
+#
+# Never on pull_request: the image is ~21 GB and takes the better part of an
+# hour to build, and publishing needs `packages: write`, which a fork PR must
+# not get. Releases go through the `v*` tag push; everything else is manual.
+name: Docker Publish
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag (default: the fork version from pyproject.toml)'
+        required: false
+        type: string
+      push_latest:
+        description: 'Also move the `latest` tag to this build'
+        required: false
+        default: true
+        type: boolean
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  # Not cancel-in-progress: a cancelled build wastes up to an hour and can
+  # leave the registry cache half-written.
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  build-and-push:
+    name: Build and push to GHCR
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Free up disk space
+        # A standard hosted runner documents ~14 GB of free SSD on /, and this
+        # image is 21.4 GB unpacked. Two things buy the room: deleting the
+        # preinstalled toolchains nothing here uses, and moving the Docker /
+        # BuildKit state onto /mnt, the runner's large ephemeral disk.
+        run: |
+          set -euxo pipefail
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache
+          sudo systemctl stop docker.socket docker
+          sudo mkdir -p /mnt/docker
+          printf '{\n  "data-root": "/mnt/docker"\n}\n' | sudo tee /etc/docker/daemon.json
+          sudo systemctl start docker
+          docker info --format 'Docker root dir: {{.DockerRootDir}}'
+          df -h / /mnt
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          # Unlike tests.yml, which skips them on purpose, the image build needs
+          # the vendor SDKs: Dockerfile.user bind-mounts the build context and
+          # fails immediately if third_party/taccap-gripper and
+          # third_party/XenseVR-PC-Service are absent, and setup_env.sh compiles
+          # both from source. Both submodules are public HTTPS checkouts, so
+          # they clone without credentials.
+          submodules: recursive
+
+      - name: Resolve image name and tag
+        id: resolve
+        env:
+          # Passed through env rather than interpolated into the script: a
+          # `${{ inputs.tag }}` inside run: is a shell injection site.
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${INPUT_TAG}" ]]; then
+              tag="${INPUT_TAG}"
+          elif [[ "${REF_TYPE}" == "tag" ]]; then
+              tag="${REF_NAME#v}"
+          else
+              # pyproject.toml carries `version = "0.5.1+xtac.<fork version>"`.
+              # A Docker tag cannot contain `+`, so take the fork version alone.
+              # docker/push_ghcr.sh derives it the same way — keep them in step.
+              tag="$(sed -n 's/^version *= *".*+xtac\.\([^"]*\)"/\1/p' pyproject.toml)"
+          fi
+          [[ -n "${tag}" ]] || { echo "Could not resolve an image tag" >&2; exit 1; }
+          # A registry reference has to be lowercase and the account is
+          # `Vertax42`. metadata-action lowercases its own `images` input, but
+          # the buildcache refs below are passed to buildx verbatim.
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/xense-taccap-lerobot"
+          {
+              echo "tag=${tag}"
+              echo "image=${image}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "Publishing ${image}:${tag}"
+
+      - name: Collect image metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ steps.resolve.outputs.image }}
+          tags: |
+            type=raw,value=${{ steps.resolve.outputs.tag }}
+            type=raw,value=latest,enable=${{ github.event_name != 'workflow_dispatch' || inputs.push_latest }}
+            type=sha,format=long
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: docker/Dockerfile.user
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Keep the published artifact a plain single-architecture manifest.
+          # With provenance on, buildx pushes an image index instead, and the
+          # delivery path (docker save -> docker load -> compose) has no use for
+          # the attestation while some tooling mishandles the extra layer of
+          # indirection.
+          provenance: false
+          # Registry cache, not type=gha: the GitHub Actions cache is capped at
+          # 10 GB per repository and the setup_env.sh layer alone is 9.47 GB.
+          # This mostly buys back the apt and conda layers, which only change
+          # when conda_environment.yaml does.
+          cache-from: type=registry,ref=${{ steps.resolve.outputs.image }}:buildcache
+          cache-to: type=registry,ref=${{ steps.resolve.outputs.image }}:buildcache,mode=min
+
+      - name: Summarize
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          {
+              echo "### Pushed to GHCR"
+              echo
+              echo "Digest: \`${DIGEST}\`"
+              echo
+              echo '```'
+              echo "${TAGS}"
+              echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"

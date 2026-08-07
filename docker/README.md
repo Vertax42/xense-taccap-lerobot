@@ -86,7 +86,64 @@ xhost +si:localuser:root
 xhost -si:localuser:root
 ```
 
-## 3. 初始化源码并构建
+## 3. 从 GHCR 拉取镜像（在线交付）
+
+镜像同时发布在 GitHub Container Registry：
+
+```text
+ghcr.io/vertax42/xense-taccap-lerobot
+```
+
+该包是 **private** 的。镜像内含 XenseSDK、XenseVR-PC-Service、TacCap-Gripper 的
+二进制产物，仓库开源不代表这些可以公开再分发，所以拉取和推送都需要凭据。
+
+第 2 节的 tar 交付方式**继续保留**：客户机完全离线时仍然只能走 tar。GHCR 的价值在
+后续升级 —— 21 GB 里绝大部分是 conda 层和 SDK 层，版本迭代时客户只需要拉变动的
+几层，而不是重新搬一遍整包。
+
+### 客户侧拉取
+
+先用一个仅有 `read:packages` 权限的 classic PAT 登录（在
+<https://github.com/settings/tokens> 创建）：
+
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u <你的 GitHub 用户名> --password-stdin
+```
+
+然后在交付目录（或仓库根目录）的 `.env` 里指向 GHCR：
+
+```dotenv
+LEROBOT_IMAGE=ghcr.io/vertax42/xense-taccap-lerobot
+LEROBOT_IMAGE_TAG=0.0.3
+```
+
+`compose.yaml` 默认仍是本地构建的 `xense-taccap-lerobot`，只有设置了
+`LEROBOT_IMAGE` 才改为从 GHCR 拉取。之后照常：
+
+```bash
+docker compose pull
+docker compose run --rm xense-taccap
+```
+
+### 维护者侧推送
+
+推荐走 GitHub Actions（在托管 runner 上构建并推送，不占用本机上行带宽）：
+
+- 仓库 Actions 页面手动触发 **Docker Publish**（`workflow_dispatch`），
+  tag 留空则取 `pyproject.toml` 里 `+xtac.` 之后的版本号；
+- 或推一个 `v*` git tag 自动触发。
+
+需要推送**本机已经构建并验证过**的镜像时，用脚本：
+
+```bash
+export GHCR_TOKEN=<classic PAT，需要 write:packages>
+./docker/push_ghcr.sh 0.0.3
+```
+
+不传参数时同样从 `pyproject.toml` 推导 tag；默认连带推 `latest`，用 `--no-latest`
+关闭。镜像很大，脚本内置了推送重试 —— `docker push` 按层续传，重试不会从头再来。
+
+## 4. 初始化源码并构建
 
 镜像会编译三个硬件 SDK，因此构建前必须拉取 git submodule：
 
@@ -100,7 +157,7 @@ docker compose build
 Dockerfile 已包含 apt/curl 自动重试、CUDA 12.8 构建期覆盖和 flexible channel
 priority，不再需要使用临时 `sed` 命令修改构建过程。
 
-## 4. 启动与验证
+## 5. 启动与验证
 
 进入容器：
 
@@ -130,7 +187,7 @@ lerobot-info
 docker compose run --rm xense-taccap lerobot-info
 ```
 
-## 5. 数据、缓存与 GUI
+## 6. 数据、缓存与 GUI
 
 LeRobot 数据根目录 `HF_LEROBOT_HOME` 已设为 `/data/lerobot`，Hugging Face
 和 Torch 缓存也使用 Docker volume，删除容器不会丢失：
@@ -172,7 +229,7 @@ START_XENSEVR_SERVICE=0 docker compose run --rm xense-taccap
 
 服务日志默认位于容器内 `/tmp/xensevr-service.log`。
 
-## 6. 常见问题
+## 7. 常见问题
 
 - `Missing git submodules`：在仓库根目录执行
   `git submodule update --init --recursive` 后重新构建。
@@ -186,6 +243,8 @@ START_XENSEVR_SERVICE=0 docker compose run --rm xense-taccap
 - 找不到 GSPS，但宿主机存在：确认容器通过 Compose 启动，并检查
   `ls /dev/v4l/by-id/*GSPS*`；必要时重新插拔 USB Hub 后执行
   `sudo udevadm settle --timeout=20`。
+- `docker compose pull` 报 `denied` 或 `unauthorized`：GHCR 上的包是 private，
+  确认已 `docker login ghcr.io`，且 PAT 带 `read:packages`（推送需要 `write:packages`）。
 - 构建需要离线/定制的 vendor wheel 或 `.deb`：先按 `setup_env.sh` 支持的
   `XENSESDK_WHEEL` / `XENSEVR_DEB` 方式将安装物纳入构建上下文，再定制 Dockerfile；
   默认镜像从项目规定的公开发布地址下载。
