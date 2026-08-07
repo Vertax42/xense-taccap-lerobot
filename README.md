@@ -20,7 +20,10 @@ training scripts) refer to the
 > **Docker users:** a complete GPU + hardware-SDK image and Compose setup are
 > available in [`docker/README.md`](docker/README.md). It is the quickest way to
 > give an end user a reproducible environment; the host still needs NVIDIA
-> Container Toolkit and the udev rules documented below.
+> Container Toolkit and the udev rules documented below. The image is published
+> to `ghcr.io/vertax42/xense-taccap-lerobot` as a **private** package — see
+> [the GHCR section](docker/README.md#3-从-ghcr-拉取镜像在线交付) for how to log
+> in and pull it.
 
 Tested on Ubuntu 22.04, NVIDIA driver ≥ 570.144. Use
 [`Mamba`](https://github.com/conda-forge/miniforge?tab=readme-ov-file#install)

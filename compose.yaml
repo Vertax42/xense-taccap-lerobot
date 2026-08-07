@@ -2,7 +2,10 @@ name: xense-taccap-lerobot
 
 services:
   xense-taccap:
-    image: xense-taccap-lerobot:${LEROBOT_IMAGE_TAG:-latest}
+    # The default is the local build, so `docker compose build` and
+    # docker/package_customer_delivery.sh keep matching. Set LEROBOT_IMAGE to
+    # ghcr.io/<owner>/xense-taccap-lerobot in .env to pull from GHCR instead.
+    image: ${LEROBOT_IMAGE:-xense-taccap-lerobot}:${LEROBOT_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.user
