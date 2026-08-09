@@ -198,16 +198,28 @@ class TestHubOfBypath:
     def test_gripper_and_tactile_on_one_hub_agree(self):
         gripper = disco._hub_of_bypath("pci-0000:00:14.0-usb-0:6.1:1.0")
         tactile = disco._hub_of_bypath("pci-0000:00:14.0-usb-0:6.4:1.0-video-index0")
-        assert gripper == tactile == "0:6"
+        assert gripper == tactile == "pci-0000:00:14.0-usb-0:6"
 
     def test_a_different_hub_does_not_collide(self):
-        assert disco._hub_of_bypath("pci-0000:00:14.0-usb-0:7.1:1.0") == "0:7"
+        assert disco._hub_of_bypath("pci-0000:00:14.0-usb-0:7.1:1.0") == "pci-0000:00:14.0-usb-0:7"
+
+    def test_two_controllers_at_the_same_port_are_two_hubs(self):
+        """A host can carry several xHCI controllers of one root port each, so
+        both gripper hubs sit at port 1 and differ only by PCI address. Keying on
+        the port path alone merged them and failed a correctly cabled rig."""
+        left = disco._hub_of_bypath("pci-0000:80:14.0-usb-0:1.1:1.0")
+        right = disco._hub_of_bypath("pci-0000:00:14.0-usb-0:1.1:1.0")
+        assert left != right
 
     def test_device_directly_on_a_root_port(self):
-        assert disco._hub_of_bypath("pci-0000:00:14.0-usb-0:6:1.0") == "0:6"
+        assert disco._hub_of_bypath("pci-0000:00:14.0-usb-0:6:1.0") == "pci-0000:00:14.0-usb-0:6"
 
     def test_deeper_chain_keeps_the_full_parent_path(self):
-        assert disco._hub_of_bypath("pci-0000:00:14.0-usb-0:6.4.2:1.0") == "0:6.4"
+        assert disco._hub_of_bypath("pci-0000:00:14.0-usb-0:6.4.2:1.0") == "pci-0000:00:14.0-usb-0:6.4"
+
+    def test_platform_controller_path(self):
+        """Not every host is PCI — an ARM SBC's controller is a platform device."""
+        assert disco._hub_of_bypath("platform-xhci-hcd.0.auto-usb-0:1.2:1.0") == "platform-xhci-hcd.0.auto-usb-0:1"
 
     def test_non_usb_path_gives_none(self):
         assert disco._hub_of_bypath("pci-0000:00:14.0-scsi-0:0:0:0") is None

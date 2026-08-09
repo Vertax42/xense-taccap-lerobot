@@ -78,7 +78,7 @@ _SERIAL_BYPATH_DIR = "/dev/serial/by-path"
 
 # USB topology: a by-path name embeds ``usb-<bus>:<port>.<port>…:<config>``; the
 # hub a device hangs off is that port path minus its own (last) port number.
-_USB_PORT_RE = re.compile(r"usb-(\d+):([\d.]+):")
+_USB_PORT_RE = re.compile(r"^(.*)-usb-(\d+):([\d.]+):")
 
 # Full-grammar validators (the documented rule).
 _GRIPPER_RE = re.compile(r"^TCGU01[A-Z]\d{2}[ZA](\d{4})([ms])$")
@@ -122,15 +122,27 @@ def side_of_sequence(sequence: str) -> str:
 
 
 def _hub_of_bypath(link: str) -> str | None:
-    """The USB hub a device hangs off, as ``"<bus>:<parent-ports>"``, parsed from
-    a ``/dev/.../by-path`` name. E.g. both ``…usb-0:6.1:1.0`` (a gripper) and
-    ``…usb-0:6.4:1.0`` (a tactile) → ``"0:6"``. ``None`` if it isn't a USB path."""
+    """The USB hub a device hangs off, parsed from a ``/dev/.../by-path`` name:
+    the **host-controller prefix** plus the port path minus the device's own
+    port. E.g. both ``pci-0000:00:14.0-usb-0:6.1:1.0`` (a gripper) and
+    ``pci-0000:00:14.0-usb-0:6.4:1.0-video-index0`` (a tactile) →
+    ``"pci-0000:00:14.0-usb-0:6"``. ``None`` if it isn't a USB path.
+
+    The controller prefix is part of the key, not decoration. The ``0`` in
+    ``usb-0:`` is a fixed literal — every by-path on every machine carries it —
+    so the port numbers alone are only unique *within one controller*. A host
+    with several xHCI controllers of one root port each (laptops and docks are
+    built this way) gives every hub port path ``1``, and two grippers on two
+    controllers collided as one hub: discovery then rejected a correctly cabled
+    rig with "Two leader grippers resolve to the same USB hub". The PCI address
+    is what separates them.
+    """
     m = _USB_PORT_RE.search(link)
     if not m:
         return None
-    bus, ports = m.group(1), m.group(2)
+    controller, bus, ports = m.group(1), m.group(2), m.group(3)
     parent = ports.rsplit(".", 1)[0] if "." in ports else ports
-    return f"{bus}:{parent}"
+    return f"{controller}-usb-{bus}:{parent}"
 
 
 def _device_hub(node_or_symlink: str, bypath_dir: str) -> str | None:
