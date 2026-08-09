@@ -17,6 +17,7 @@ pinning. Nothing below touches hardware or either vendor SDK.
 """
 
 import functools
+import time
 
 import numpy as np
 import pytest
@@ -25,6 +26,7 @@ from lerobot.robots.taccap_gripper.common import (
     HEAD_CAMERA_KEYS,
     HEAD_POSE_KEYS,
     POSE_KEYS,
+    GripperReadGuard,
     HeadSkewMonitor,
     build_head_camera_configs,
     build_tactile_camera_configs,
@@ -155,6 +157,7 @@ class FakeLogger:
     def __init__(self):
         self.warnings = []
         self.infos = []
+        self.errors = []
 
     def warn(self, msg):
         self.warnings.append(msg)
@@ -162,8 +165,11 @@ class FakeLogger:
     def info(self, msg):
         self.infos.append(msg)
 
+    def error(self, msg):
+        self.errors.append(msg)
+
     def __getattr__(self, name):
-        if name in ("debug", "error"):
+        if name == "debug":
             return lambda *a, **k: None
         raise AttributeError(name)
 
@@ -225,6 +231,110 @@ class TestConnectCamerasParallelRollsBack:
         connect_cameras_parallel(cameras, FakeLogger())
         assert all(cam.is_connected for cam in cameras.values())
         assert all(cam.disconnect_calls == 0 for cam in cameras.values())
+
+
+class FakeEncoderSample:
+    def __init__(self, position: float):
+        self.position = position
+
+
+class FakeEncoderGripper:
+    """A gripper whose encoder can be told to start failing."""
+
+    def __init__(self, position: float = 0.5):
+        self.position = position
+        self.failing = False
+        self.encoder = self
+
+    def read_once(self):
+        if self.failing:
+            raise OSError("SerialBus::write: Input/output error")
+        return FakeEncoderSample(self.position)
+
+
+class TestGripperReadGuard:
+    """A jaw encoder that dies mid-episode must not keep reporting a jaw value.
+
+    The old behaviour answered 0.0 on any failure — indistinguishable from a
+    closed gripper — as both an observation and an action, for every remaining
+    frame of the recording.
+    """
+
+    def test_reads_through_when_healthy(self):
+        guard = GripperReadGuard(FakeLogger())
+        assert guard.read("left", FakeEncoderGripper(0.75), 1.0) == pytest.approx(0.75)
+        assert not guard.lost
+
+    def test_a_single_failure_holds_the_last_value(self):
+        guard = GripperReadGuard(FakeLogger())
+        gripper = FakeEncoderGripper(0.75)
+        guard.read("left", gripper, 1.0)
+
+        gripper.failing = True
+        held = guard.read("left", gripper, 1.0)
+
+        assert held == pytest.approx(0.75), "a blip must not be reported as a closed jaw"
+        assert not guard.lost, "one failed round-trip is not evidence of loss"
+
+    def test_continuous_failure_trips_loss(self):
+        guard = GripperReadGuard(FakeLogger(), timeout_s=0.05)
+        gripper = FakeEncoderGripper(0.75)
+        guard.read("left", gripper, 1.0)
+
+        gripper.failing = True
+        guard.read("left", gripper, 1.0)
+        time.sleep(0.06)
+        guard.read("left", gripper, 1.0)
+
+        assert guard.lost
+        assert guard.lost_grippers == frozenset({"left"})
+
+    def test_failing_before_any_good_read_is_lost_at_once(self):
+        """No last good value to hold, so there is nothing worth recording."""
+        guard = GripperReadGuard(FakeLogger())
+        gripper = FakeEncoderGripper()
+        gripper.failing = True
+
+        assert guard.read("left", gripper, 1.0) == 0.0
+        assert guard.lost
+
+    def test_recovery_clears_the_failure_window(self):
+        guard = GripperReadGuard(FakeLogger(), timeout_s=0.05)
+        gripper = FakeEncoderGripper(0.75)
+        guard.read("left", gripper, 1.0)
+
+        gripper.failing = True
+        guard.read("left", gripper, 1.0)
+        gripper.failing = False
+        guard.read("left", gripper, 1.0)
+
+        gripper.failing = True
+        guard.read("left", gripper, 1.0)  # window restarts here, not at the earlier blip
+        assert not guard.lost
+
+    def test_loss_is_logged_once_not_every_frame(self):
+        """The old per-frame warning interleaved with the observation table and
+        made the terminal unreadable exactly when it mattered."""
+        logger = FakeLogger()
+        guard = GripperReadGuard(logger, timeout_s=0.0)
+        gripper = FakeEncoderGripper()
+        gripper.failing = True
+
+        for _ in range(50):
+            guard.read("left", gripper, 1.0)
+
+        assert len(logger.errors) == 1
+
+    def test_reset_clears_loss(self):
+        guard = GripperReadGuard(FakeLogger(), timeout_s=0.0)
+        gripper = FakeEncoderGripper()
+        gripper.failing = True
+        guard.read("left", gripper, 1.0)
+        assert guard.lost
+
+        guard.reset()
+        assert not guard.lost
+        assert guard.lost_grippers == frozenset()
 
 
 class TestReadHeadCameraSkew:

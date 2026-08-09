@@ -58,6 +58,7 @@ from ..taccap_gripper.camera_health import CameraReadGuard
 from ..taccap_gripper.common import (
     HEAD_POSE_KEYS,
     POSE_KEYS,
+    GripperReadGuard,
     HeadSkewMonitor,
     build_head_camera_configs,
     build_tactile_camera_configs,
@@ -66,7 +67,6 @@ from ..taccap_gripper.common import (
     disconnect_cameras_parallel,
     open_gripper,
     prewarm_tactile_config_cache,
-    read_gripper_normalized,
     read_head_pose,
     split_camera_read,
     swap_tactile_display_features,
@@ -171,6 +171,7 @@ class BiTaccapGripper(Robot):
         # substitutes the last good frame and trips ``device_lost`` so the caller
         # can stop cleanly and save what was recorded. See ``camera_health``.
         self._cam_guard = CameraReadGuard(self._camera_configs, self.logger)
+        self._enc_guard = GripperReadGuard(self.logger)
 
     # ------------------------------------------------------------------ discovery
 
@@ -315,10 +316,16 @@ class BiTaccapGripper(Robot):
 
     @property
     def device_lost(self) -> bool:
-        """True once any camera has been detected as physically lost mid-episode
-        (hot-unplug / hub drop). The record loop polls this to stop cleanly and
-        save the in-progress episode instead of crashing on the next read."""
-        return self._cam_guard.lost
+        """True once a camera **or a jaw encoder** has been detected as
+        physically lost mid-episode (hot-unplug / hub drop / brown-out). The
+        record loop polls this to stop cleanly and save the in-progress episode
+        instead of recording through the loss.
+
+        The encoder half matters as much as the camera half: a dead encoder used
+        to report ``0.0``, an ordinary "closed" reading, into both the
+        observation and the action for every remaining frame — a loss that left
+        no trace in the data at all, unlike a frozen image."""
+        return self._cam_guard.lost or self._enc_guard.lost
 
     @property
     def is_calibrated(self) -> bool:
@@ -357,6 +364,7 @@ class BiTaccapGripper(Robot):
         method body needs, which is why this move is verbatim.
         """
         self._cam_guard.reset()  # a reconnect must not inherit the last session's losses
+        self._enc_guard.reset()
 
         # 1. Grippers — auto-discovered by serial (side + role) on the bus.
         enabled_gripper_sides = tuple(s for s in _SIDES if getattr(self.config, f"{s}_enable_gripper"))
@@ -481,8 +489,8 @@ class BiTaccapGripper(Robot):
                 obs.update(self._tracker[side].get_tracker_display(prefix=f"{side}_"))
 
             if getattr(self.config, f"{side}_enable_gripper") and self._gripper[side] is not None:
-                obs[f"{side}_gripper.pos"] = read_gripper_normalized(
-                    self._gripper[side], getattr(self.config, f"{side}_gripper_open_rad"), self.logger, f"[{side}] "
+                obs[f"{side}_gripper.pos"] = self._enc_guard.read(
+                    side, self._gripper[side], getattr(self.config, f"{side}_gripper_open_rad"), f"[{side}] "
                 )
 
             if getattr(self.config, f"{side}_enable_imu") and self._gripper[side] is not None:
@@ -537,8 +545,8 @@ class BiTaccapGripper(Robot):
                 for k, v in self._tracker[side].get_action().items():
                     action[f"{side}_{k}"] = v
             if getattr(self.config, f"{side}_enable_gripper") and self._gripper[side] is not None:
-                action[f"{side}_gripper.pos"] = read_gripper_normalized(
-                    self._gripper[side], getattr(self.config, f"{side}_gripper_open_rad"), self.logger, f"[{side}] "
+                action[f"{side}_gripper.pos"] = self._enc_guard.read(
+                    side, self._gripper[side], getattr(self.config, f"{side}_gripper_open_rad"), f"[{side}] "
                 )
         if self.config.enable_head_camera:
             head, self._head_pose_warned = read_head_pose(self.logger, self._head_pose_warned)

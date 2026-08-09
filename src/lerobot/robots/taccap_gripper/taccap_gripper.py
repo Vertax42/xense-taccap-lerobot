@@ -59,6 +59,7 @@ from .camera_health import CameraReadGuard
 from .common import (
     HEAD_POSE_KEYS,
     POSE_KEYS,
+    GripperReadGuard,
     HeadSkewMonitor,
     build_head_camera_configs,
     build_tactile_camera_configs,
@@ -67,7 +68,6 @@ from .common import (
     disconnect_cameras_parallel,
     open_gripper,
     prewarm_tactile_config_cache,
-    read_gripper_normalized,
     read_head_pose,
     split_camera_read,
     swap_tactile_display_features,
@@ -178,6 +178,7 @@ class TaccapGripper(Robot):
         # substitutes the last good frame and trips ``device_lost`` so the caller
         # can stop cleanly and save what was recorded. See ``camera_health``.
         self._cam_guard = CameraReadGuard(self._camera_configs, self.logger)
+        self._enc_guard = GripperReadGuard(self.logger)
 
     # ------------------------------------------------------------------ discovery
 
@@ -330,10 +331,16 @@ class TaccapGripper(Robot):
 
     @property
     def device_lost(self) -> bool:
-        """True once any camera has been detected as physically lost mid-episode
-        (hot-unplug / hub drop). The record loop polls this to stop cleanly and
-        save the in-progress episode instead of crashing on the next read."""
-        return self._cam_guard.lost
+        """True once a camera **or a jaw encoder** has been detected as
+        physically lost mid-episode (hot-unplug / hub drop / brown-out). The
+        record loop polls this to stop cleanly and save the in-progress episode
+        instead of recording through the loss.
+
+        The encoder half matters as much as the camera half: a dead encoder used
+        to report ``0.0``, an ordinary "closed" reading, into both the
+        observation and the action for every remaining frame — a loss that left
+        no trace in the data at all, unlike a frozen image."""
+        return self._cam_guard.lost or self._enc_guard.lost
 
     @property
     def is_calibrated(self) -> bool:
@@ -349,6 +356,7 @@ class TaccapGripper(Robot):
 
         self.logger.info(f"Connecting TacCap-Gripper ({self._side})...")
         self._cam_guard.reset()  # a reconnect must not inherit the last session's losses
+        self._enc_guard.reset()
 
         try:
             self._connect_devices()
@@ -487,7 +495,7 @@ class TaccapGripper(Robot):
             obs.update(self._tracker.get_tracker_display())
 
         if self.config.enable_gripper and self._gripper is not None:
-            obs["gripper.pos"] = read_gripper_normalized(self._gripper, self.config.gripper_open_rad, self.logger)
+            obs["gripper.pos"] = self._enc_guard.read("gripper", self._gripper, self.config.gripper_open_rad)
 
         if self.config.enable_imu and self._gripper is not None:
             try:
@@ -545,7 +553,7 @@ class TaccapGripper(Robot):
         if self._tracker is not None:
             action.update(self._tracker.get_action())
         if self.config.enable_gripper and self._gripper is not None:
-            action["gripper.pos"] = read_gripper_normalized(self._gripper, self.config.gripper_open_rad, self.logger)
+            action["gripper.pos"] = self._enc_guard.read("gripper", self._gripper, self.config.gripper_open_rad)
         if self.config.enable_head_camera:
             head, self._head_pose_warned = read_head_pose(self.logger, self._head_pose_warned)
             action.update(head)

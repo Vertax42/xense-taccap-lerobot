@@ -52,6 +52,7 @@ __all__ = [
     "POSE_KEYS",
     "HEAD_POSE_KEYS",
     "HEAD_CAMERA_KEYS",
+    "GripperReadGuard",
     "HeadSkewMonitor",
     "build_head_camera_configs",
     "build_tactile_camera_configs",
@@ -602,7 +603,99 @@ def open_gripper(
     return gripper, "firmware"
 
 
-def read_gripper_normalized(gripper: Any, open_rad: float, logger: Any, label: str = "") -> float:
+#: How long the jaw encoder may fail continuously before the gripper counts as
+#: physically lost. Shorter than :data:`camera_health.CAM_FREEZE_TIMEOUT_S`
+#: because an encoder read is one serial round-trip with nothing to buffer, and
+#: every extra second of tolerance is another ~30 frames of stale jaw in the
+#: dataset.
+ENCODER_LOSS_TIMEOUT_S = 1.0
+
+
+class GripperReadGuard:
+    """Reads jaw encoders on behalf of a robot, degrading gracefully on loss.
+
+    The counterpart of :class:`camera_health.CameraReadGuard`, and deliberately
+    the same shape: hold the per-gripper state the detection needs, expose
+    ``lost`` for the robot's ``device_lost``, and let the robot call
+    :meth:`read` instead of reasoning about failures itself.
+
+    Without it a gripper whose USB hub browned out mid-episode kept feeding
+    ``0.0`` — a legal, unremarkable "closed" value — into both the observation
+    and the action for the rest of the recording, while the record loop, which
+    stops cleanly for a lost *camera*, had no idea anything was wrong.
+
+    Args:
+        logger: robot logger. Loss is reported once per gripper, not once per
+            frame: the old per-frame warning interleaved with the observation
+            table and made the terminal unreadable exactly when an operator
+            most needed to see what was happening.
+        timeout_s: see :data:`ENCODER_LOSS_TIMEOUT_S`.
+    """
+
+    def __init__(self, logger: Any, timeout_s: float = ENCODER_LOSS_TIMEOUT_S) -> None:
+        self._logger = logger
+        self._timeout_s = timeout_s
+        self._last_good: dict[str, float] = {}
+        self._failing_since: dict[str, float] = {}
+        self._lost: set[str] = set()
+
+    @property
+    def lost(self) -> bool:
+        """True once any gripper has been detected as physically lost."""
+        return bool(self._lost)
+
+    @property
+    def lost_grippers(self) -> frozenset[str]:
+        """Keys of the grippers detected as lost, for reporting."""
+        return frozenset(self._lost)
+
+    def reset(self) -> None:
+        """Drop all per-gripper state. Call on ``connect()`` so a reconnect does
+        not start out already flagged as lost by the previous session."""
+        self._last_good.clear()
+        self._failing_since.clear()
+        self._lost.clear()
+
+    def read(self, key: str, gripper: Any, open_rad: float, label: str = "") -> float:
+        """Read one jaw encoder, holding the last good value across a blip.
+
+        A single failed round-trip is not evidence of anything — the bus is
+        shared and the device is polled twice per frame — so it degrades to the
+        last good reading. Only continuous failure for ``timeout_s`` counts as
+        loss, at which point ``lost`` trips and the record loop stops the
+        episode instead of recording through it.
+
+        The first read failing is different: there is no last good value to hold
+        and nothing sensible to record, so that trips loss immediately.
+        """
+        try:
+            value = read_gripper_normalized(gripper, open_rad)
+        except Exception as e:
+            return self._degrade(key, label, e)
+
+        self._last_good[key] = value
+        self._failing_since.pop(key, None)
+        return value
+
+    def _degrade(self, key: str, label: str, exc: Exception) -> float:
+        now = time.monotonic()
+        started = self._failing_since.setdefault(key, now)
+        last_good = self._last_good.get(key)
+
+        if last_good is None or now - started >= self._timeout_s:
+            if key not in self._lost:
+                self._lost.add(key)
+                reason = "never read successfully" if last_good is None else f"failing for {now - started:.1f}s"
+                self._logger.error(f"  {label}Gripper encoder lost ({reason}): {exc}")
+        elif started == now:
+            # First failure of this episode of trouble — say so once, then stay
+            # quiet until it either recovers or is declared lost.
+            self._logger.warn(f"  {label}Encoder read failed, holding the last value: {exc}")
+
+        return 0.0 if last_good is None else last_good
+
+
+def read_gripper_normalized(gripper: Any, open_rad: float) -> float:
     """Jaw opening in [0, 1] — 0 closed (the encoder zero), 1 fully open.
 
     Prefers the SDK's ``position``, which the firmware's own encoder-max
@@ -610,12 +703,15 @@ def read_gripper_normalized(gripper: Any, open_rad: float, logger: Any, label: s
     converter is installed, which since :func:`open_gripper` started refusing
     uncalibrated leaders means a **follower** — so the radians path stays as
     the backstop rather than letting a nan reach the dataset.
+
+    Raises whatever the bus raises. It used to answer ``0.0`` on any failure,
+    which is a perfectly ordinary "jaw closed" reading — so a gripper that
+    dropped off the bus mid-episode wrote a plausible lie into every remaining
+    frame, as an observation *and* as an action, with nothing in the data to
+    show for it afterwards. Deciding what a failed read means is
+    :class:`GripperReadGuard`'s job; this function only converts.
     """
-    try:
-        sample = gripper.encoder.read_once()
-    except Exception as e:
-        logger.warn(f"  {label}Encoder read failed: {e}")
-        return 0.0
+    sample = gripper.encoder.read_once()
 
     normalised = float(getattr(sample, "position", float("nan")))
     if np.isfinite(normalised):
