@@ -99,6 +99,49 @@ class TestSingleArmActionFeatures:
         assert not any(isinstance(v, tuple) for v in robot.action_features.values())
 
 
+class TestEnableTactile:
+    """``enable_tactile=False`` must remove the sensors from the schema, not just
+    skip opening them.
+
+    The switch exists so a rig whose cameras will not all open can be bisected
+    against the USB isochronous budget — take the four tactile streams out, see
+    whether the rest fits. That only answers the question if the sensors are
+    genuinely absent from the run.
+    """
+
+    def _single(self, **kwargs):
+        return build(TaccapGripper, TaccapGripperConfig(side="left", **kwargs), {"left": "PC1"})
+
+    def _bimanual(self, **kwargs):
+        return build(BiTaccapGripper, BiTaccapGripperConfig(**kwargs), {"left": "PC1", "right": "PC2"})
+
+    @staticmethod
+    def _tactile_keys(features):
+        return {k for k in features if "tactile" in k}
+
+    def test_single_arm_drops_every_tactile_key(self):
+        assert self._tactile_keys(self._single(enable_tactile=False).observation_features) == set()
+
+    def test_bimanual_drops_every_tactile_key(self):
+        assert self._tactile_keys(self._bimanual(enable_tactile=False).observation_features) == set()
+
+    def test_tactile_is_on_by_default(self):
+        assert self._tactile_keys(self._bimanual().observation_features)
+
+    def test_disabling_leaves_the_rest_of_the_schema_alone(self):
+        """Only the tactile keys go; wrist, jaw and pose are untouched."""
+        with_tactile = self._bimanual().observation_features
+        without = self._bimanual(enable_tactile=False).observation_features
+        assert set(with_tactile) - set(without) == self._tactile_keys(with_tactile)
+
+    def test_the_count_still_applies_when_enabled(self):
+        """enable_tactile gates; expected_tactiles_per_side still says how many
+        a gripper carries, and discovery still validates against it."""
+        cfg = BiTaccapGripperConfig(expected_tactiles_per_side=2)
+        assert cfg.tactiles_per_side == 2
+        assert BiTaccapGripperConfig(enable_tactile=False, expected_tactiles_per_side=2).tactiles_per_side == 0
+
+
 class TestBimanualActionFeatures:
     def _robot(self, **kwargs):
         return build(BiTaccapGripper, BiTaccapGripperConfig(**kwargs), {"left": "PC1", "right": "PC2"})

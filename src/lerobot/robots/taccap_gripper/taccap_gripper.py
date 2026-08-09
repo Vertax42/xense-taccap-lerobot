@@ -121,7 +121,7 @@ class TaccapGripper(Robot):
 
         # Tactile discovery now pairs sensors to a gripper by USB hub, so it also
         # needs the SDK (scan_grippers) to resolve the hub's side.
-        needs_sdk = config.enable_gripper or config.expected_tactiles_per_side > 0
+        needs_sdk = config.enable_gripper or config.tactiles_per_side > 0
         if needs_sdk and not TACCAP_SDK_AVAILABLE:
             raise ImportError(
                 "xense.taccap SDK not available. Build it from the vendored "
@@ -142,9 +142,7 @@ class TaccapGripper(Robot):
         # tactile + wrist camera configs. Tactiles are paired to a gripper by USB
         # hub (scans the serial bus); wrist cameras are filesystem-only.
         self._disc_tactiles = (
-            disco.discover_tactiles_by_hub(self._role)
-            if config.expected_tactiles_per_side
-            else {"left": {}, "right": {}}
+            disco.discover_tactiles_by_hub(self._role) if config.tactiles_per_side else {"left": {}, "right": {}}
         )
         self._disc_cameras = disco.discover_wrist_cameras(self._role) if config.enable_wrist_camera else {}
         self._side = self._resolve_side()
@@ -189,8 +187,8 @@ class TaccapGripper(Robot):
             return self.config.side.strip().lower()
         if self.config.enable_wrist_camera:
             present = set(self._disc_cameras.keys())
-        elif self.config.expected_tactiles_per_side:
-            n = self.config.expected_tactiles_per_side
+        elif self.config.tactiles_per_side:
+            n = self.config.tactiles_per_side
             present = {s for s in disco.SIDES if len(self._disc_tactiles.get(s, {})) == n}
         else:
             present = set()
@@ -212,7 +210,7 @@ class TaccapGripper(Robot):
         parity = "odd" if side == "left" else "even"
         configs: dict[str, Any] = {}
         self._tactile_display_keys: dict[str, dict[str, str]] = {}
-        n_exp = self.config.expected_tactiles_per_side
+        n_exp = self.config.tactiles_per_side
         if n_exp:
             tactile_configs, self._tactile_display_keys = build_tactile_camera_configs(
                 self._disc_tactiles.get(side, {}),

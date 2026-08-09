@@ -535,6 +535,8 @@ at connect). Leave it unset (default) to keep auto-discovery.
   stops the image clipping, but scales signal down with it — raise it if light contact
   becomes invisible, set it to `None` to keep whatever the sensor was flashed with.
   Tune `--robot.tactile_fps`; `--robot.expected_tactiles_per_side` validates the count.
+  `--robot.enable_tactile=false` takes the sensors out of the run altogether — a way to
+  bisect a USB bandwidth problem (see the troubleshooting section), not a way to record.
   The two sensors are paired to this unit's gripper by **USB hub**; `left`/`right` finger
   comes from the GSPS serial's **last digit** (odd → `left`, even → `right`, 单左双右).
 

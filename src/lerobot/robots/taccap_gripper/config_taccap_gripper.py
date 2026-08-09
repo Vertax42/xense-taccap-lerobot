@@ -60,11 +60,30 @@ class TaccapGripperConfig(RobotConfig):
     """Which gripper to use, ``left`` or ``right``. ``None`` = auto when exactly
     one matching gripper/camera is connected; required when both sides are present."""
 
+    enable_tactile: bool = True
+    """Wire the tactile sensors at all. ``False`` skips discovery, the camera
+    configs and the observation keys entirely — the sensors are simply not part
+    of the rig for this run.
+
+    Off is a diagnostic, not a way to operate: tactile data is the reason this
+    gripper exists. It is here because a rig whose cameras will not all open is
+    hard to reason about, and being able to take the four tactile streams out
+    (or, with the wrist flags, take the wrist streams out) turns "something
+    fails" into an arithmetic question about USB isochronous budget — one
+    bus, 480 Mbit/s, ~384 of it available. See the README's troubleshooting
+    section.
+
+    Prefer this over setting ``expected_tactiles_per_side`` to 0: the count says
+    how many sensors a gripper *carries*, and discovery errors when it finds a
+    different number, so it is the wrong knob for "not this time"."""
+
     expected_tactiles_per_side: int = 2
     """How many tactile sensors the gripper carries (obs keys ``tactile_left`` /
     ``tactile_right``). Sensors are paired to the gripper by USB hub; ``left`` /
     ``right`` finger comes from the GSPS serial's last digit (odd→left sensor,
-    even→right). Discovery errors on a different count."""
+    even→right). Discovery errors on a different count — which is the point, and
+    why ``enable_tactile`` rather than a count of 0 is how you take the sensors
+    out of a run."""
 
     # ---- TacCap gripper ---------------------------------------------------
     enable_gripper: bool = True
@@ -199,6 +218,18 @@ class TaccapGripperConfig(RobotConfig):
     head_camera_pair_max_skew_ms: float = 20.0
     """How far apart the two eyes' timestamps may be and still count as one
     stereo capture, when their sequence numbers differ."""
+
+    @property
+    def tactiles_per_side(self) -> int:
+        """How many tactile sensors to actually look for: the configured count,
+        or 0 when ``enable_tactile`` is off.
+
+        One accessor so the two fields cannot be read inconsistently — every
+        site that used to ask for ``expected_tactiles_per_side`` (discovery, the
+        SDK-required check, side resolution, the camera-config builder) means
+        this instead.
+        """
+        return self.expected_tactiles_per_side if self.enable_tactile else 0
 
     def __post_init__(self):
         super().__post_init__()

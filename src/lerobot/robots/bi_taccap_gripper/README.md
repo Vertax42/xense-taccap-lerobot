@@ -80,7 +80,7 @@ missing/duplicate/malformed tracker raises a clear error. Set `--robot.enable_tr
 to record tactile + gripper only (no PC service needed). Other knobs: `--robot.role`,
 `--robot.{side}_gripper_open_rad` (fallback only — see below), `--robot.tactile_fps`,
 `--robot.wrist_camera_{width,height,fps}`,
-`--robot.expected_tactiles_per_side`.
+`--robot.expected_tactiles_per_side`, `--robot.enable_tactile`.
 
 **Jaw normalisation.** `{side}_gripper.pos` comes from each leader's own encoder-max
 calibration in MCU flash (firmware ≥ V2.1), so 1.0 is _that_ unit's real full-open rather

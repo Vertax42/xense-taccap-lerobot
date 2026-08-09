@@ -122,7 +122,7 @@ class BiTaccapGripper(Robot):
         any_gripper = any(getattr(config, f"{s}_enable_gripper") for s in _SIDES)
         # Tactile discovery now pairs sensors to a gripper by USB hub, so it also
         # needs the SDK (scan_grippers) to resolve each hub's side.
-        needs_sdk = any_gripper or config.expected_tactiles_per_side > 0
+        needs_sdk = any_gripper or config.tactiles_per_side > 0
         if needs_sdk and not TACCAP_SDK_AVAILABLE:
             raise ImportError(
                 "xense.taccap SDK not available. Build it from the vendored "
@@ -188,7 +188,7 @@ class BiTaccapGripper(Robot):
         display-only observation key}), the map ``get_observation`` and
         ``display_features`` use to route the extra, unrecorded views.
         """
-        n_exp = self.config.expected_tactiles_per_side
+        n_exp = self.config.tactiles_per_side
         tactiles = disco.discover_tactiles_by_hub(self._role) if n_exp else {"left": {}, "right": {}}
         want_wrist = any(getattr(self.config, f"{s}_enable_wrist_camera") for s in _SIDES)
         cameras = disco.discover_wrist_cameras(self._role) if want_wrist else {}
