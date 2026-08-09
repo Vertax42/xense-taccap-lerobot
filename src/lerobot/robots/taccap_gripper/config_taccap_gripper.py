@@ -167,6 +167,14 @@ class TaccapGripperConfig(RobotConfig):
     wrist_camera_height: int = 480
     wrist_camera_fps: int = 30
 
+    wrist_camera_fourcc: str | None = "MJPG"
+    """Pixel format to negotiate with the wrist camera. Defaults to MJPEG
+    because the alternative OpenCV would pick on its own (YUYV) reserves enough
+    USB isochronous bandwidth to starve the tactile sensors sharing this
+    gripper's hub — see ``build_wrist_camera_config``. ``None`` leaves the choice
+    to OpenCV; ``"YUYV"`` forces the uncompressed stream, which is lossless but
+    only fits when few enough cameras share the USB root port."""
+
     # ---- Pico head camera ---------------------------------------------------
     enable_head_camera: bool = False
     """Stream the headset's stereo camera as ``left_head`` /

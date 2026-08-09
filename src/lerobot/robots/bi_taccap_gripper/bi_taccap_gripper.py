@@ -48,7 +48,6 @@ from __future__ import annotations
 from functools import cached_property
 from typing import Any
 
-from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.utils.robot_utils import get_logger
@@ -62,13 +61,13 @@ from ..taccap_gripper.common import (
     HeadSkewMonitor,
     build_head_camera_configs,
     build_tactile_camera_configs,
+    build_wrist_camera_config,
     connect_cameras_parallel,
     disconnect_cameras_parallel,
     open_gripper,
     prewarm_tactile_config_cache,
     read_gripper_normalized,
     read_head_pose,
-    resolve_wrist_camera_path,
     split_camera_read,
     swap_tactile_display_features,
     tactile_camera_output_types,
@@ -219,11 +218,12 @@ class BiTaccapGripper(Robot):
                     raise ValueError(
                         f"No {self._role} wrist camera found for the {side} side (rule: {side} == {parity} sequence)."
                     )
-                configs[f"{side}_wrist"] = OpenCVCameraConfig(
-                    index_or_path=resolve_wrist_camera_path(sn),
+                configs[f"{side}_wrist"] = build_wrist_camera_config(
+                    sn,
                     width=self.config.wrist_camera_width,
                     height=self.config.wrist_camera_height,
                     fps=self.config.wrist_camera_fps,
+                    fourcc=self.config.wrist_camera_fourcc,
                 )
 
         if self.config.enable_head_camera:

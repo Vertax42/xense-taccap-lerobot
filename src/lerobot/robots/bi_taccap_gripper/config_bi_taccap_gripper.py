@@ -168,6 +168,14 @@ class BiTaccapGripperConfig(RobotConfig):
     wrist_camera_height: int = 480
     wrist_camera_fps: int = 30
 
+    wrist_camera_fourcc: str | None = "MJPG"
+    """Pixel format to negotiate with both wrist cameras. Defaults to MJPEG
+    because the alternative OpenCV would pick on its own (YUYV) reserves enough
+    USB isochronous bandwidth to starve the tactile sensors sharing that
+    gripper's hub — see ``build_wrist_camera_config``. Doubly so here: a bimanual
+    rig runs six UVC devices, three per gripper hub. ``None`` leaves the choice
+    to OpenCV; ``"YUYV"`` forces the uncompressed stream."""
+
     # ---- Pico head camera ---------------------------------------------------
     enable_head_camera: bool = False
     """Stream the headset's stereo camera as ``left_head`` /
