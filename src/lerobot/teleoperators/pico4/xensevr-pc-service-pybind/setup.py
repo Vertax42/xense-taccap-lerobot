@@ -9,6 +9,42 @@ from distutils.version import LooseVersion
 from setuptools import Command, Extension, find_packages, setup  # Added Command
 from setuptools.command.build_ext import build_ext
 
+#: Fallback when the submodule tag cannot be read — see :func:`sdk_version`.
+FALLBACK_VERSION = "0.2.0"
+
+
+def sdk_version():
+    """Version of the XenseVR-PC-Service SDK these bindings were built against.
+
+    Derived, not declared. The native side of this package is not its own
+    artifact: setup_env.sh compiles the C SDK out of
+    ``third_party/XenseVR-PC-Service`` and copies the header and .so in here
+    before this build runs, so the only thing that decides what the extension
+    can do is which commit that submodule sits on. A hand-written string here
+    duplicates that fact and drifts from it — it sat at 0.1.0 through the
+    v0.2.0 bump that added the Pico camera calls, so `pip list` denied a
+    capability the module had.
+
+    Docker is fine: the image deletes the submodule checkout *after*
+    setup_env.sh runs, by which point this has already been baked into the
+    installed distribution.
+    """
+    # This file is <root>/src/lerobot/teleoperators/pico4/xensevr-pc-service-pybind/setup.py
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), *[os.pardir] * 5))
+    submodule = os.path.join(repo_root, "third_party", "XenseVR-PC-Service")
+    try:
+        described = subprocess.check_output(  # nosec B607
+            ["git", "-C", submodule, "describe", "--tags", "--abbrev=0"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        # No git, no submodule (a source tree copied without it), or no tag
+        # reachable. Better a stale-but-plausible version than a failed build.
+        print(f"[pybind] cannot read {submodule} tag; version falls back to {FALLBACK_VERSION}")
+        return FALLBACK_VERSION
+    return described.lstrip("v") or FALLBACK_VERSION
+
 
 class CMakeExtension(Extension):
     def __init__(self, name, sourcedir=""):
@@ -127,7 +163,7 @@ class UninstallCommand(Command):
 
 setup(
     name="xensevr_pc_service_sdk",
-    version="0.1.0",
+    version=sdk_version(),
     author="Vertax",
     author_email="yangxincheng@xenserobotics.com",
     description="A Python binding for XenseVR PC Service SDK using pybind11 and CMake",
