@@ -116,13 +116,20 @@ class TeleoperateConfig:
 
 
 def _safe_disconnect(obj, name: str) -> None:
+    """Disconnect one device, absorbing whatever it throws.
+
+    ``BaseException``, not ``Exception``: an impatient second Ctrl+C during
+    shutdown used to escape here and skip every remaining device — and a
+    hardware rig has several, so the one that got skipped kept holding its
+    /dev node. Teardown must run to completion on the way out.
+    """
     if obj is None:
         return
     try:
         if obj.is_connected:
             obj.disconnect()
             logger.info(f"{name} disconnected")
-    except Exception as e:
+    except BaseException as e:
         logger.error(f"Error disconnecting {name}: {e}\n{traceback.format_exc()}")
 
 

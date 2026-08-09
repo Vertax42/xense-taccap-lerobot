@@ -477,20 +477,39 @@ def read_head_pose(logger: Any, warned: bool) -> tuple[dict[str, float], bool]:
 
 def connect_cameras_parallel(cameras: dict[str, Any], logger: Any) -> None:
     """Open all cameras concurrently — each camera's V4L2 open + warmup
-    overlaps in time instead of summing (cf. v0.4.4 bi_arx5)."""
+    overlaps in time instead of summing (cf. v0.4.4 bi_arx5).
+
+    All or nothing: if any camera fails, the ones that opened are closed again
+    before the error propagates. Leaving them open is what made a single
+    failure sticky — the ``with ThreadPoolExecutor`` block waits for the
+    remaining submissions on the way out, so a raise here abandoned up to
+    ``n-1`` *successfully opened* devices with nothing holding a reference. A
+    process that then failed to exit cleanly kept ``/dev/video*`` busy, and the
+    next run failed on a different camera with ``VIDIOC_REQBUFS: Device or
+    resource busy`` — which reads like new hardware trouble rather than the
+    wreckage of the previous attempt.
+
+    Catches ``BaseException`` on purpose: Ctrl+C during startup is the most
+    likely way to land here, and it must roll back like any other failure.
+    """
     if not cameras:
         return
     n = len(cameras)
     logger.info(f"  Connecting {n} camera(s) in parallel...")
-    with ThreadPoolExecutor(max_workers=min(n, 8)) as executor:
-        futures = {executor.submit(cam.connect): name for name, cam in cameras.items()}
-        for fut in as_completed(futures):
-            name = futures[fut]
-            try:
-                fut.result()
-            except Exception as e:
-                logger.error(f"  Camera '{name}' connect failed: {e}")
-                raise
+    try:
+        with ThreadPoolExecutor(max_workers=min(n, 8)) as executor:
+            futures = {executor.submit(cam.connect): name for name, cam in cameras.items()}
+            for fut in as_completed(futures):
+                name = futures[fut]
+                try:
+                    fut.result()
+                except Exception as e:
+                    logger.error(f"  Camera '{name}' connect failed: {e}")
+                    raise
+    except BaseException:
+        logger.error("  Rolling back: closing the cameras that did open")
+        disconnect_cameras_parallel(cameras, logger)
+        raise
     logger.info(f"  ✅ {n} camera(s) connected")
 
 

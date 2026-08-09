@@ -39,6 +39,7 @@ lerobot-record \
 
 import contextlib
 import time
+import traceback
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from pprint import pformat
@@ -559,10 +560,18 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         if dataset:
             dataset.finalize()
 
-        if robot.is_connected:
-            robot.disconnect()
-        if teleop and teleop.is_connected:
-            teleop.disconnect()
+        # Each device gets its own guard, and it catches BaseException: an
+        # unguarded throw here — or an impatient second Ctrl+C — skipped every
+        # device after it, and a skipped device keeps holding its /dev node, so
+        # the next run fails to open hardware that is physically fine.
+        for name, device in (("robot", robot), ("teleop", teleop)):
+            if device is None:
+                continue
+            try:
+                if device.is_connected:
+                    device.disconnect()
+            except BaseException as e:
+                logger.error(f"Error disconnecting {name}: {e}\n{traceback.format_exc()}")
 
         if not is_headless() and listener:
             listener.stop()

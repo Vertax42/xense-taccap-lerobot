@@ -333,6 +333,29 @@ class BiTaccapGripper(Robot):
             raise DeviceAlreadyConnectedError(f"{self} already connected")
 
         self.logger.info("Connecting BiTacCap-Gripper...")
+
+        try:
+            self._connect_devices()
+        except BaseException:
+            # Includes KeyboardInterrupt: Ctrl+C during a slow startup is the
+            # most likely way to land here, and it must release like any other
+            # failure. Without this the gripper serial ports, the xrt session
+            # and every camera that did open stayed held by a process that then
+            # often failed to exit cleanly, so the next run met a busy device.
+            self.logger.error("Connect failed part-way; releasing what was already open")
+            self._release()
+            raise
+
+        self._is_connected = True
+        self.logger.info(f"✅ {self} connected.")
+
+    def _connect_devices(self) -> None:
+        """Bring up gripper(s), tracker(s) and cameras.
+
+        Split out of ``connect`` so a failure anywhere in here unwinds through
+        one place. The body is unchanged; it sits at the same indentation a
+        method body needs, which is why this move is verbatim.
+        """
         self._cam_guard.reset()  # a reconnect must not inherit the last session's losses
 
         # 1. Grippers — auto-discovered by serial (side + role) on the bus.
@@ -393,15 +416,24 @@ class BiTaccapGripper(Robot):
         #    from the cache (no flash read), so no device reset during connect.
         connect_cameras_parallel(self.cameras, self.logger)
 
-        self._is_connected = True
-        self.logger.info(f"✅ {self} connected.")
-
     def disconnect(self) -> None:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected")
 
         self.logger.info(f"Disconnecting {self}...")
+        self._release()
+        self.logger.info(f"✅ {self} disconnected.")
 
+    def _release(self) -> None:
+        """Release everything currently held, tolerating a partial hold.
+
+        Split out of ``disconnect`` so ``connect`` can call it when it fails
+        part-way. It cannot go through ``disconnect``: that refuses on a robot
+        whose ``_is_connected`` was never set, which is exactly the state a
+        failed connect leaves behind — and the same reason ``_safe_disconnect``
+        in the teleop script skipped such a robot entirely, leaking the gripper
+        serial ports and the xrt session along with the cameras.
+        """
         disconnect_cameras_parallel(self.cameras, self.logger)
 
         for side in _SIDES:
@@ -425,7 +457,6 @@ class BiTaccapGripper(Robot):
             self._endpoints[side] = None
 
         self._is_connected = False
-        self.logger.info(f"✅ {self} disconnected.")
 
     def calibrate(self) -> None:
         """Encoder zero is set out-of-band per unit via the SDK's calibrate.py."""

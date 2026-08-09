@@ -28,6 +28,7 @@ from lerobot.robots.taccap_gripper.common import (
     HeadSkewMonitor,
     build_head_camera_configs,
     build_tactile_camera_configs,
+    connect_cameras_parallel,
     open_gripper,
     read_head_camera_skew,
     split_camera_read,
@@ -165,6 +166,65 @@ class FakeLogger:
         if name in ("debug", "error"):
             return lambda *a, **k: None
         raise AttributeError(name)
+
+
+class FakeCamera:
+    """A camera that opens (or refuses to) and remembers whether it was closed."""
+
+    def __init__(self, fail: BaseException | None = None):
+        self.fail = fail
+        self.is_connected = False
+        self.disconnect_calls = 0
+
+    def connect(self):
+        if self.fail is not None:
+            raise self.fail
+        self.is_connected = True
+
+    def disconnect(self):
+        self.disconnect_calls += 1
+        self.is_connected = False
+
+
+class TestConnectCamerasParallelRollsBack:
+    """One camera failing must not leave the others open.
+
+    This is the failure that made a bad rig get worse the more you retried: the
+    cameras that opened stayed open with nothing referencing them, and a process
+    that then did not exit cleanly held their /dev nodes, so the next run died on
+    ``VIDIOC_REQBUFS: Device or resource busy`` on a *different*, healthy camera.
+    """
+
+    def test_all_or_nothing_on_failure(self):
+        good_a, good_b = FakeCamera(), FakeCamera()
+        bad = FakeCamera(fail=ConnectionError("cannot open"))
+        cameras = {"good_a": good_a, "bad": bad, "good_b": good_b}
+
+        with pytest.raises(ConnectionError):
+            connect_cameras_parallel(cameras, FakeLogger())
+
+        assert not good_a.is_connected
+        assert not good_b.is_connected
+        assert good_a.disconnect_calls == 1
+        assert good_b.disconnect_calls == 1
+
+    def test_keyboard_interrupt_rolls_back_too(self):
+        """Ctrl+C during startup is the most common way to hit this."""
+        good = FakeCamera()
+        interrupted = FakeCamera(fail=KeyboardInterrupt())
+        cameras = {"good": good, "interrupted": interrupted}
+
+        with pytest.raises(KeyboardInterrupt):
+            connect_cameras_parallel(cameras, FakeLogger())
+
+        assert not good.is_connected
+        assert good.disconnect_calls == 1
+
+    def test_success_leaves_every_camera_open(self):
+        cameras = {"a": FakeCamera(), "b": FakeCamera()}
+        connect_cameras_parallel(cameras, FakeLogger())
+        assert all(cam.is_connected for cam in cameras.values())
+        assert all(cam.disconnect_calls == 0 for cam in cameras.values())
 
 
 class TestReadHeadCameraSkew:
