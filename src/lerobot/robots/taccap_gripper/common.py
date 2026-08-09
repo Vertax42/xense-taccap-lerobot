@@ -35,6 +35,7 @@ from typing import Any
 
 import numpy as np
 
+from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.cameras.xense.configuration_xense import XenseTactileCameraConfig
 
 # 6D rotation convention (matches ``vive_tracker``): r1..r3 is the first column
@@ -54,6 +55,7 @@ __all__ = [
     "HeadSkewMonitor",
     "build_head_camera_configs",
     "build_tactile_camera_configs",
+    "build_wrist_camera_config",
     "connect_cameras_parallel",
     "disconnect_cameras_parallel",
     "open_gripper",
@@ -88,6 +90,36 @@ def resolve_wrist_camera_path(serial: str) -> str:
     if len(matches) > 1:
         raise RuntimeError(f"Multiple wrist cameras match serial {serial!r}: {matches}. Use a more specific serial.")
     return matches[0]
+
+
+def build_wrist_camera_config(
+    serial: str, *, width: int, height: int, fps: int, fourcc: str | None
+) -> OpenCVCameraConfig:
+    """``OpenCVCameraConfig`` for one gripper's wrist UVC camera.
+
+    Lives here for the same reason the tactile and head builders do: the single
+    and bimanual robots differ only in the observation key they file the result
+    under (``wrist_cam`` vs ``{side}_wrist``), and this was the one camera whose
+    construction they each carried a copy of.
+
+    ``fourcc`` matters more than it looks. Left at ``None``, OpenCV's V4L2
+    backend picks the format itself, and its preference order puts YUYV ahead of
+    MJPEG — so a 640x480@30 wrist camera negotiates ~147 Mbit/s of *uncompressed*
+    video and the UVC driver reserves a top isochronous altsetting (~196 Mbit/s)
+    to carry it. A gripper's hub carries three UVC devices (two tactile sensors
+    plus this camera) behind one xHCI root port, and a root port only has ~384
+    Mbit/s of isochronous budget, so three uncompressed streams overrun it: the
+    third ``open()`` fails with ``Not enough bandwidth for altsetting N`` in dmesg,
+    surfacing as a camera that "cannot be opened" even though its ``/dev/video*``
+    node is right there. MJPEG is what buys the headroom back.
+    """
+    return OpenCVCameraConfig(
+        index_or_path=resolve_wrist_camera_path(serial),
+        width=width,
+        height=height,
+        fps=fps,
+        fourcc=fourcc,
+    )
 
 
 # ------------------------------------------------------------ tactile pre-warm

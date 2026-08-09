@@ -223,6 +223,38 @@ twice.
 > Revert by deleting the rule file and reloading. (Alternatively, on a dedicated
 > robot PC with no cellular modem: `sudo systemctl disable --now ModemManager`.)
 
+> **`Cannot open camera N` on one tactile sensor (USB bandwidth).** One gripper
+> hub carries **three** UVC devices — two tactile sensors plus the wrist camera —
+> behind a single xHCI root port, and a root port has only ~384 Mbit/s of
+> isochronous budget. An uncompressed YUYV 640x480@30 stream is ~147 Mbit/s of
+> data and reserves a top altsetting (~196 Mbit/s), so three of them overrun the
+> port: whichever camera opens last dies with
+> `ConnectionError: Failed to connect to XenseTactileCamera(GSPS…). Error: Cannot
+open camera N`, even though its `/dev/video*` node is present and
+> `find_cameras()` lists it. Which sensor loses is a race, so the failure moves
+> between runs. The tell is in `dmesg`:
+>
+> ```
+> usb 1-11.2: Not enough bandwidth for new device state.
+> usb 1-11.2: Not enough bandwidth for altsetting 6
+> ```
+>
+> This is **not** the ModemManager problem above (that one is the gripper's
+> serial port, not a camera) and not a bad cable. The wrist camera defaults to
+> `wrist_camera_fourcc="MJPG"` for exactly this reason — left to itself OpenCV's
+> V4L2 backend prefers YUYV. If a rig still overruns after that, measure before
+> changing anything else: run it and read the negotiated endpoints with
+>
+> ```bash
+> sudo grep -E "^(T:|I:.*Video|E:.*Isoc)" /sys/kernel/debug/usb/devices
+> ```
+>
+> Each video interface's `Alt=` and its `E:` line's `MxPS=` give the reservation
+> (`MxPS × 8000 × 8` bit/s); sum them per root port and compare against ~384
+> Mbit/s. The next lever is the tactile side — `raw_size` down to `(320, 240)`
+> quarters its bandwidth, but the sensor's rectify calibration is made at
+> 640x480, so verify the tactile output before recording with it.
+
 ## Calibration workflow (do once per device)
 
 ### 0. What state is a unit already in?
