@@ -234,9 +234,9 @@ class TaccapGripperConfig(RobotConfig):
     def __post_init__(self):
         super().__post_init__()
 
-        # Required here, not left optional as upstream has it — see
-        # ``validate_robot_id``.
-        self.id = validate_robot_id(self.id)
+        # Required here, not left optional as upstream has it, and a bare
+        # number is expanded to ``taccap_<n>`` — see ``validate_robot_id``.
+        self.id = validate_robot_id(self.id, self.type)
 
         if self.enable_head_camera:
             # Delegate to the camera config so there is one definition of what

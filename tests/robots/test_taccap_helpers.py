@@ -562,28 +562,59 @@ class TestValidateRobotId:
     rig it came from."""
 
     def test_a_station_label_passes_through(self):
-        assert validate_robot_id("taccap_0") == "taccap_0"
+        assert validate_robot_id("taccap_0", "taccap_gripper") == "taccap_0"
 
     def test_missing_id_names_the_flag_and_the_convention(self):
         with pytest.raises(ValueError, match="--robot.id is required"):
-            validate_robot_id(None)
+            validate_robot_id(None, "taccap_gripper")
 
     @pytest.mark.parametrize("blank", ["", "   ", "\t"])
     def test_blank_is_as_absent_as_none(self, blank):
         """``--robot.id=""`` would otherwise satisfy a bare None check and then
         name a rig nothing at all."""
         with pytest.raises(ValueError, match="--robot.id is required"):
-            validate_robot_id(blank)
+            validate_robot_id(blank, "taccap_gripper")
 
     def test_surrounding_whitespace_is_stripped(self):
         """It reaches a calibration filename and the manifest; ``taccap_0 `` and
         ``taccap_0`` must not be two stations."""
-        assert validate_robot_id("  taccap_0  ") == "taccap_0"
+        assert validate_robot_id("  taccap_0  ", "taccap_gripper") == "taccap_0"
 
     def test_the_format_itself_is_not_policed(self):
         """The convention is taccap_<n>, but identity lives in the serials, so a
         rig named after a room is allowed."""
-        assert validate_robot_id("lab-b-bench-3") == "lab-b-bench-3"
+        assert validate_robot_id("lab-b-bench-3", "taccap_gripper") == "lab-b-bench-3"
+
+    @pytest.mark.parametrize(
+        ("raw", "robot_type", "expected"),
+        [
+            ("0", "taccap_gripper", "taccap_0"),
+            ("1", "taccap_gripper", "taccap_1"),
+            ("12", "taccap_gripper", "taccap_12"),
+            ("0", "bi_taccap_gripper", "bi_taccap_0"),
+            ("3", "bi_taccap_gripper", "bi_taccap_3"),
+        ],
+    )
+    def test_a_bare_number_is_expanded_against_the_type(self, raw, robot_type, expected):
+        """``--robot.id=0`` is the whole point: the prefix repeats what
+        ``--robot.type`` already said, and typing it by hand is how you end up
+        with ``--robot.type=bi_taccap_gripper --robot.id=taccap_0``."""
+        assert validate_robot_id(raw, robot_type) == expected
+
+    def test_the_expansion_drops_gripper(self):
+        """The label names a station, and a station is not a gripper — the
+        gripper is one of the parts you swap out of it."""
+        assert "gripper" not in validate_robot_id("0", "taccap_gripper")
+        assert "gripper" not in validate_robot_id("0", "bi_taccap_gripper")
+
+    def test_a_number_is_stripped_before_it_is_expanded(self):
+        assert validate_robot_id("  2  ", "taccap_gripper") == "taccap_2"
+
+    @pytest.mark.parametrize("raw", ["taccap_0", "bi_taccap_7", "lab-b-bench-3", "0a", "rig-0"])
+    def test_anything_not_all_digits_is_taken_verbatim(self, raw):
+        """Existing rigs pass the full label, and it reaches a calibration
+        filename — expanding those would orphan every calibration on disk."""
+        assert validate_robot_id(raw, "bi_taccap_gripper") == raw
 
 
 class FakeEndpoints:

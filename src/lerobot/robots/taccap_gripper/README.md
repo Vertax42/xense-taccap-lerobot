@@ -577,7 +577,7 @@ are connected, set `--robot.side=left|right`:
 ```bash
 lerobot-record \
     --robot.type=taccap_gripper \
-    --robot.id=taccap_0 \
+    --robot.id=0 \
     --robot.side=right \
     --dataset.repo_id=<your_org>/<your_dataset> \
     --dataset.num_episodes=1 \
@@ -657,20 +657,31 @@ defensive fallback for callers that don't pre-warm.
 
 Two different things, and they answer two different questions.
 
-**`--robot.id` is the station label**, `taccap_0` / `taccap_1` / …, one per rig (a
-bimanual rig is one rig, one id). It names the _seat_, not the hardware in it, so
-it stays put when a gripper is swapped. It reaches the log prefix, the
-calibration filename, `str(robot)` and the manifest below, but **not a dataset
-column** — `LeRobotDataset.create()` is handed `robot_type` and nothing else.
+**`--robot.id` is the station label**, one per rig (a bimanual rig is one rig,
+one id). It names the _seat_, not the hardware in it, so it stays put when a
+gripper is swapped. It reaches the log prefix, the calibration filename,
+`str(robot)` and the manifest below, but **not a dataset column** —
+`LeRobotDataset.create()` is handed `robot_type` and nothing else.
+
+**Pass a number.** `--robot.id=0` is stored as `taccap_0` here and as
+`bi_taccap_0` on a bimanual rig: a bare number is expanded against
+`--robot.type`, minus its `_gripper` suffix, because the label names a station
+and a station is not a gripper. Typing the prefix by hand only repeated what
+`--robot.type` already said, and got it wrong often enough to matter —
+`--robot.type=bi_taccap_gripper --robot.id=taccap_0` parses fine and then
+labels a bimanual rig as a single one.
+
+Anything that is not all digits is taken verbatim, so an existing
+`--robot.id=taccap_0` keeps working — along with the calibration file named
+after it — and a rig can still be named after a room.
 
 **It is required**, unlike upstream's optional `RobotConfig.id`. Both TacCap
 configs put it through `validate_robot_id()` in `__post_init__`, so a missing or
 blank id fails at CLI-parse time — before any device is touched — instead of a
 rig spinning up and recording anonymously. That `None` default is also why
-terminal output used to read `None TaccapGripper`. The format itself is not
-policed: the convention is `taccap_<n>`, but identity lives in the serials below,
-so a rig named after a room is allowed. The smoke test takes `--id` and defaults
-it to `taccap_0`.
+terminal output used to read `None TaccapGripper`. Identity itself still lives
+in the serials below, not in this string. The smoke test takes `--id` and
+defaults it to `taccap_0`.
 
 **The hardware manifest is the identity.** `lerobot-record` writes
 `meta/hardware.json` into the dataset right after `robot.connect()`:

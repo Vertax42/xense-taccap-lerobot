@@ -56,7 +56,7 @@ drops that view only, leaving the rest of the layout in place, and it auto-skips
 ```bash
 lerobot-teleoperate \
     --robot.type=bi_taccap_gripper \
-    --robot.id=taccap_0 \
+    --robot.id=0 \
     --fps=30 \
     --display_data=true \
     --robot.enable_tracker=false \
@@ -112,7 +112,7 @@ stored. `--robot.head_camera_eyes=left` (or `right`) records a single eye.
 ```bash
 lerobot-teleoperate \
     --robot.type=taccap_gripper \
-    --robot.id=taccap_0 \
+    --robot.id=0 \
     --robot.side=left \
     --fps=30 \
     --display_data=true
@@ -127,14 +127,21 @@ Recording is self-driven (`self_driven_record_loop`, shifted-frame: `action[t]` 
 
 ### `--robot.id` (required) and the hardware manifest
 
-`--robot.id` is a **required station label** — `taccap_0`, `taccap_1`, … one per rig,
-and a bimanual rig is one rig. It names the seat, not the hardware in it, so it
-survives a gripper swap. Upstream leaves it optional; both TacCap configs reject a
+`--robot.id` is a **required station label** — one per rig, and a bimanual rig is
+one rig. It names the seat, not the hardware in it, so it survives a gripper swap.
+
+**Pass a number.** `--robot.id=0` is stored as `taccap_0` on a single rig and
+`bi_taccap_0` on a bimanual one: a bare number is expanded against `--robot.type`
+minus its `_gripper` suffix, so the label cannot disagree with the rig it names.
+Anything not all digits is taken verbatim, so an existing `--robot.id=taccap_0`
+keeps working.
+
+Upstream leaves it optional; both TacCap configs reject a
 missing or blank one in `__post_init__`, so the run stops at CLI-parse time rather
 than a rig spinning up and recording anonymously:
 
 ```
-ValueError: --robot.id is required: the station label for this rig, e.g. --robot.id=taccap_0 …
+ValueError: --robot.id is required: the station label for this rig, e.g. --robot.id=0 …
 ```
 
 It reaches the log prefix, the calibration filename and `str(robot)`, and it is copied
@@ -197,7 +204,7 @@ a different problem from the viewer being expensive.
 ```bash
 lerobot-record \
     --robot.type=bi_taccap_gripper \
-    --robot.id=taccap_0 \
+    --robot.id=0 \
     --robot.enable_head_camera=true \
     --dataset.repo_id=Xense/taccap-g1-test-0722 \
     --dataset.single_task="Pick up the cube" \
@@ -227,7 +234,7 @@ digit). Add `--robot.enable_tracker=false` to record tactile + gripper only — 
 ```bash
 lerobot-record \
     --robot.type=taccap_gripper \
-    --robot.id=taccap_0 \
+    --robot.id=0 \
     --robot.side=left \
     --dataset.repo_id=Xense/<dataset_name> \
     --dataset.single_task="Pick up the cube" \
