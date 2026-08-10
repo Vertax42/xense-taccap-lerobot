@@ -4,6 +4,39 @@
 LeRobot-Xense、XenseSDK、TacCap-Gripper SDK、Pico4 Python 绑定，
 并在容器启动时默认启动 XenseVR PC Service。
 
+## 0. 镜像里有什么
+
+当前发布版本 **0.0.4**（`ghcr.io/vertax42/xense-taccap-lerobot:0.0.4`，`latest` 指向同一镜像）。
+
+| 组成                      | 版本 / 来源                                                        |
+| ------------------------- | ------------------------------------------------------------------ |
+| Conda 环境                | `xense-taccap`，Python 3.12                                        |
+| CUDA 用户态               | 12.8（`CONDA_OVERRIDE_CUDA=12.8`）                                 |
+| XenseVR PC Service daemon | `.deb` **v0.2.1**，装在 `/opt/apps/roboticsservice`                |
+| `xensevr_pc_service_sdk`  | 仓库内 pybind 编译；链接的 C SDK 取自上面那个 `.deb`，版本号也随它 |
+| `xense.taccap`            | 由 `third_party/taccap-gripper` submodule 在镜像内从源码编译       |
+| `xensesdk`                | PyPI 预编译 wheel                                                  |
+
+镜像的 tag 由 `pyproject.toml` 的 `version = "0.5.1+xtac.<版本>"` 推导（Docker tag 不能含
+`+`，故只取 `+xtac.` 之后的部分）。每次发布同时打一个 `sha-<commit>` tag，可以精确追溯
+镜像是从哪个源码提交构建的。
+
+### 0.0.3 → 0.0.4 的变化
+
+对**已有使用方式**有影响的只有一条：
+
+- **`--robot.id` 现在接受纯数字**，并按 `--robot.type` 展开：`--robot.id=0` 在单臂上存为
+  `taccap_0`、在双臂上存为 `bi_taccap_0`。**旧写法不受影响** —— 非纯数字一律原样保留，
+  所以 `--robot.id=taccap_0` 和按它命名的标定文件都照常工作。
+
+其余是内部变化，不改变命令行：
+
+- daemon 升到 v0.2.1（修掉了 Pico 相机每帧刷屏、把调用方控制台冲垮的问题）
+- 镜像不再需要 `XenseVR-PC-Service` submodule：pico4 的 C SDK 直接取自 `.deb`，
+  构建时少一次 cmake + 静态 gRPC 链接
+- `--dataset.vcodec=auto` 现在会真正打开一次编码器再判定，无 GPU 的机器上会正确
+  回退到 `libsvtav1`，而不是选中 nvenc 后在第一帧崩掉
+
 ## 1. 宿主机要求
 
 - Ubuntu 22.04/24.04，`linux/amd64`
@@ -119,6 +152,16 @@ docker compose pull
 docker compose run --rm xense-taccap
 ```
 
+`latest` 是浮动的，出问题时先确认手上这个到底是哪一个镜像：
+
+```bash
+docker image inspect --format '{{index .RepoDigests 0}}' \
+    ghcr.io/vertax42/xense-taccap-lerobot:0.0.4
+```
+
+发布时 `0.0.4` 和 `latest` 指向同一镜像，两者 digest 应当一致。想在**拉之前**看远端的，
+用 `docker manifest inspect <image>:<tag>`，不必先下载 21 GB。
+
 ### 维护者侧推送
 
 推荐走 GitHub Actions（在托管 runner 上构建并推送，不占用本机上行带宽）：
@@ -169,8 +212,13 @@ docker compose run --rm xense-taccap
 python -c 'import torch; print(torch.__version__, torch.cuda.is_available())'
 python -c 'import xensesdk; print("xensesdk ->", xensesdk.__file__)'
 python -c 'import xense.taccap; print("taccap ->", xense.taccap.__file__)'
-python -c 'import xensevr_pc_service_sdk; print("pico4 ->", xensevr_pc_service_sdk.__file__)'
+python -c 'import importlib.metadata as M; print("pico4 ->", M.version("xensevr_pc_service_sdk"))'
+dpkg-query -W -f='daemon -> ${Version}\n' xensevr-pc-service
 ```
+
+后两行应当**打印同一个版本号**（0.0.4 镜像里是 `0.2.1`）。这不是巧合：pico4 绑定链接的
+C SDK 就是从那个 `.deb` 里取的，它的包版本也由 `dpkg-query` 推导。两者不一致，说明镜像
+是半新不旧的构建，不要拿它录数据。
 
 发现相机和串口：
 
