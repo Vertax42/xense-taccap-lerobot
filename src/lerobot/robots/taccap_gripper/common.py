@@ -732,8 +732,8 @@ def read_gripper_normalized(gripper: Any, open_rad: float) -> float:
 # -------------------------------------------------------------------- robot id
 
 
-def validate_robot_id(robot_id: str | None) -> str:
-    """Require ``--robot.id`` and return it stripped.
+def validate_robot_id(robot_id: str | None, robot_type: str) -> str:
+    """Require ``--robot.id``, expand a bare number, and return it stripped.
 
     Upstream leaves ``RobotConfig.id`` optional, defaulting to ``None`` — which
     is how terminal output came to read ``None BiTaccapGripper`` and how a run
@@ -742,19 +742,36 @@ def validate_robot_id(robot_id: str | None) -> str:
     configured. Enforced in each config's ``__post_init__`` rather than by
     changing the base dataclass, which belongs to upstream.
 
-    Free-form on purpose: the convention is ``taccap_0`` / ``taccap_1`` / …, but
-    the *identity* of the hardware is the serials in ``meta/hardware.json``, so
-    pinning a format here would buy nothing and would break the first rig named
-    after a room.
+    **A bare number is expanded against the robot type**, so ``--robot.id=0``
+    stores ``taccap_0`` on a single rig and ``bi_taccap_0`` on a bimanual one.
+    Typing the prefix was pure ceremony — it repeats what ``--robot.type``
+    already said, and getting it wrong (``--robot.type=bi_taccap_gripper
+    --robot.id=taccap_0``) produced a label that quietly disagreed with the
+    rig. The ``_gripper`` suffix is dropped: the label names a station, and a
+    station is not a gripper — the gripper is one of the parts you swap out of
+    it.
+
+    Anything that is not all digits is taken verbatim, which keeps every
+    existing ``--robot.id=taccap_0`` working — and its calibration file, which
+    is named after this value — and leaves room for a rig named after a room.
+    The *identity* of the hardware is still the serials in
+    ``meta/hardware.json``, not this string.
     """
     if robot_id is None or not robot_id.strip():
         raise ValueError(
             "--robot.id is required: the station label for this rig, e.g. "
-            "--robot.id=taccap_0 (taccap_0 / taccap_1 / …, one per rig — a bimanual rig is one rig). "
-            "It names the seat, not the hardware in it, so it stays put when a gripper is swapped; "
-            "the device serials go into the recorded dataset's meta/hardware.json instead."
+            "--robot.id=0 (0 / 1 / …, one per rig — a bimanual rig is one rig). "
+            "A bare number is expanded against --robot.type, so 0 becomes "
+            f"{robot_type.removesuffix('_gripper')}_0; pass a full string to name a rig "
+            "something else. It names the seat, not the hardware in it, so it stays put "
+            "when a gripper is swapped; the device serials go into the recorded dataset's "
+            "meta/hardware.json instead."
         )
-    return robot_id.strip()
+
+    stripped = robot_id.strip()
+    if stripped.isdigit():
+        return f"{robot_type.removesuffix('_gripper')}_{stripped}"
+    return stripped
 
 
 # ------------------------------------------------------------ hardware manifest
