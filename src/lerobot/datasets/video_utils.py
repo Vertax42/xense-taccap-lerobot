@@ -14,8 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import contextlib
+import functools
 import glob
 import importlib
+import io
 import logging
 import queue
 import shutil
@@ -87,16 +89,91 @@ def _get_codec_options(
     return options
 
 
-def detect_available_hw_encoders() -> list[str]:
-    """Probe PyAV/FFmpeg for available hardware video encoders."""
+# Probe frames must clear nvenc's minimum dimensions or a working encoder is
+# reported as broken: on an RTX PRO 6000, 128x96 is rejected while 160x120
+# encodes fine (NVIDIA documents 145x49 for H.264). 320x240 sits above every
+# generation's floor, is even in both axes for yuv420p, and encodes in
+# microseconds.
+_ENCODER_PROBE_SIZE = (320, 240)
+
+
+def _encoder_session_opens(codec_name: str) -> bool:
+    """Whether an encode session can actually be created for ``codec_name``.
+
+    ``av.codec.Codec(name, "w")`` cannot answer this. It is
+    ``avcodec_find_encoder_by_name`` — a static lookup in the codec table FFmpeg
+    was *built* with, which never touches a driver and never allocates a session.
+    PyAV ships with nvenc compiled in, so on a host with no NVIDIA driver that
+    lookup still succeeds; ``auto`` then picks ``h264_nvenc`` and recording dies
+    at ``avcodec_open2`` on the first frame instead of falling back to software.
+
+    Opening one is the only question worth asking, and it is cheap: one frame
+    into an in-memory container, thrown away.
+    """
+    width, height = _ENCODER_PROBE_SIZE
+    try:
+        container = av.open(io.BytesIO(), "w", format="mp4")
+    except Exception:
+        return False
+
+    opened = False
+    try:
+        stream = container.add_stream(codec_name, rate=30)
+        stream.width = width
+        stream.height = height
+        stream.pix_fmt = "yuv420p"
+        # Contents are irrelevant — avcodec_open2 has already happened or failed
+        # by the time the first packet comes back.
+        for _ in stream.encode(av.VideoFrame(width, height, "yuv420p")):
+            pass
+        opened = True
+    except Exception:  # nosec B110
+        pass  # nosec B110
+    finally:
+        # Muxing a trailer for a stream that never opened raises; that says
+        # nothing more than the encode already did.
+        with contextlib.suppress(Exception):
+            container.close()
+
+    return opened
+
+
+@functools.lru_cache(maxsize=1)
+def detect_available_hw_encoders() -> tuple[str, ...]:
+    """Probe PyAV/FFmpeg for hardware video encoders that actually work here.
+
+    Two stages: the cheap static lookup rules out encoders FFmpeg was not built
+    with, then :func:`_encoder_session_opens` rules out the ones whose driver or
+    device is missing. Both are needed — see that function for why the static
+    lookup alone silently selects nvenc on machines that have no GPU.
+
+    Cached for the process, and worth caching: opening an nvenc session costs
+    ~450 ms, so probing both nvenc entries takes ~900 ms on a GPU host.
+    ``resolve_vcodec`` is called per dataset and per streaming encoder, and the
+    answer cannot change under a running process. Call ``cache_clear()`` if a
+    test needs to re-probe.
+    """
     available = []
-    for codec_name in HW_ENCODERS:
-        try:
-            av.codec.Codec(codec_name, "w")
-            available.append(codec_name)
-        except Exception:  # nosec B110
-            pass  # nosec B110
-    return available
+    # A failing hardware encoder logs at ERROR through libav ("Cannot load
+    # libnvidia-encode.so.1"), which is noise when we are only asking whether it
+    # works and are about to fall back on purpose.
+    previous_level = av.logging.get_level()
+    av.logging.set_level(av.logging.CRITICAL)
+    try:
+        for codec_name in HW_ENCODERS:
+            try:
+                av.codec.Codec(codec_name, "w")
+            except Exception:  # nosec B110
+                continue  # not in this FFmpeg build
+            if _encoder_session_opens(codec_name):
+                available.append(codec_name)
+            else:
+                logging.debug(f"Hardware encoder '{codec_name}' is present in FFmpeg but will not open here")
+    finally:
+        av.logging.set_level(previous_level)
+    # A tuple because lru_cache hands the same object to every caller, and a
+    # list would let one of them mutate what the next one sees.
+    return tuple(available)
 
 
 def resolve_vcodec(vcodec: str) -> str:

@@ -201,32 +201,31 @@ a different problem from the viewer being expensive.
 
 ### Recording on a machine with no GPU
 
-The defaults assume an NVIDIA card. On a GPU-less host — a CPU-only server, a VM,
-a laptop with no discrete GPU — say so explicitly:
+On a GPU-less host — a CPU-only server, a VM, a laptop with no discrete GPU —
+turn streaming encoding off:
 
 ```bash
 lerobot-record \
     ... \
-    --dataset.vcodec=libsvtav1 \
     --dataset.streaming_encoding=false
 ```
 
-**`--dataset.vcodec=libsvtav1`.** The default is `auto`, and **`auto` does not
-detect this case.** It probes with `av.codec.Codec(name, "w")`, which is
-`avcodec_find_encoder_by_name` — a static lookup in the FFmpeg build's codec
-table. PyAV ships with `h264_nvenc` compiled in, so that lookup succeeds on a
-machine with no NVIDIA driver at all, `auto` selects it, and the failure surfaces
-later, at the first frame, as something like:
+**The codec you can leave alone.** `--dataset.vcodec=auto` (the default) probes
+by opening a real encode session, so on a host with no NVIDIA driver it reports
+no hardware encoder and falls back to `libsvtav1` — AV1 on the CPU, which is what
+the offline dataset tools already default to. Measured with
+`libnvidia-encode.so.1` masked out: `auto` resolves to `libsvtav1` in 2 ms.
 
-```
-UnknownError: [Errno 1313558101] Unknown error occurred: 'avcodec_open2(h264_nvenc)'
-```
+Passing `--dataset.vcodec=libsvtav1` explicitly is still fine, and worth doing if
+you want the recording command to be self-documenting about where it can run.
 
-Measured with the GPU masked off (`CUDA_VISIBLE_DEVICES=-1`): the probe still
-returns `h264_nvenc` and only `avcodec_open2` fails. The `libsvtav1` fallback in
-`resolve_vcodec()` is therefore only reached on a host whose FFmpeg was built
-without nvenc, which is not the build we install. `libsvtav1` is AV1 on the CPU
-and is what the offline dataset tools already default to.
+> This did not use to work. The probe was `av.codec.Codec(name, "w")` —
+> `avcodec_find_encoder_by_name`, a static lookup in the codec table FFmpeg was
+> _built_ with, which never touches a driver. PyAV ships with nvenc compiled in,
+> so the lookup succeeded on machines with no GPU at all, `auto` selected
+> `h264_nvenc`, and recording died at the first frame with
+> `avcodec_open2(h264_nvenc)`. If you are on a build from before that fix, pass
+> `--dataset.vcodec=libsvtav1` by hand.
 
 **`--dataset.streaming_encoding=false`.** Streaming encoding runs the encoder
 inline with capture, which is a win when the encoder is a dedicated ASIC on the
@@ -270,10 +269,9 @@ lerobot-record \
 ```
 
 > `--dataset.streaming_encoding=true` is the default and assumes an NVIDIA card.
-> On a GPU-less host, use `--dataset.vcodec=libsvtav1` with
-> `--dataset.streaming_encoding=false` instead — see
-> [Recording on a machine with no GPU](#recording-on-a-machine-with-no-gpu),
-> which also explains why `--dataset.vcodec=auto` does not work that out for you.
+> On a GPU-less host, pass `--dataset.streaming_encoding=false` instead — the
+> codec picks itself. See
+> [Recording on a machine with no GPU](#recording-on-a-machine-with-no-gpu).
 
 ### Single (`taccap_gripper`)
 
