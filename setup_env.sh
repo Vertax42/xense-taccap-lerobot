@@ -301,6 +301,25 @@ install_xensevr_service() {
 
     DEB_URL="${XENSEVR_DEB_URL:-https://github.com/Vertax42/XenseVR-PC-Service/releases/download/v${DEB_VER}/XenseVR-PC-Service_${DEB_VER}_${ARCH}.deb}"
 
+    local WANT INSTALLED STATUS
+    # Check the status, not just the version. `dpkg -r` leaves the package in
+    # `deinstall ok config-files`, and dpkg-query still reports its version
+    # there — so matching on the version alone declares a daemon installed
+    # when /opt/apps/roboticsservice is gone, skips the install, and fails
+    # later somewhere far less obvious.
+    STATUS="$(dpkg-query -W -f='${Status}' xensevr-pc-service 2>/dev/null || true)"
+    INSTALLED="$(dpkg-query -W -f='${Version}' xensevr-pc-service 2>/dev/null || true)"
+
+    # Decide before downloading. DEB_VER already names the version this script
+    # would install, so fetching 116 MB only to read the same number back out of
+    # the package is waste on every re-run of --install. An explicit override is
+    # exempt: it can be a different build carrying the same version, and only
+    # the file itself can say.
+    if [[ -z "${XENSEVR_DEB:-}${XENSEVR_DEB_URL:-}" && "$STATUS" == "install ok installed" && "$INSTALLED" == "$DEB_VER" ]]; then
+        echo "  xensevr-pc-service $INSTALLED already installed — skipping."
+        return 0
+    fi
+
     DEB="${XENSEVR_DEB:-}"
     if [[ -n "$DEB" ]]; then
         if [[ ! -f "$DEB" ]]; then
@@ -311,33 +330,38 @@ install_xensevr_service() {
         echo "  Using explicit .deb override: $DEB"
     else
         DEB="${TMPDIR:-/tmp}/XenseVR-PC-Service_${DEB_VER}_${ARCH}.deb"
-        echo "  Downloading ${ARCH} asset from:"
-        echo "    $DEB_URL"
-        # ~116 MB. Retry and resume rather than losing the whole transfer to one
-        # dropped connection — and this package is now the only source of the
-        # client SDK the Python bindings link against, so a failure here is no
-        # longer something a local build can paper over.
-        local RETRY=(--retry 5 --retry-delay 2)
-        if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
-            RETRY+=(--retry-all-errors)   # curl >= 7.71; covers a mid-transfer drop
-        fi
-        if ! curl -fL "${RETRY[@]}" -C - "$DEB_URL" -o "$DEB"; then
-            echo "  WARN: download failed — skipping service install."
-            echo "  Get it manually from https://github.com/Vertax42/XenseVR-PC-Service/releases"
-            echo "  then: sudo dpkg -i XenseVR-PC-Service_*_${ARCH}.deb"
-            return 0
+        if [[ -f "$DEB" ]] && dpkg-deb -f "$DEB" Version >/dev/null 2>&1; then
+            echo "  Reusing previously downloaded $DEB"
+        else
+            # An unreadable leftover is worth less than the bandwidth to replace it.
+            rm -f "$DEB"
+            echo "  Downloading ${ARCH} asset from:"
+            echo "    $DEB_URL"
+            # ~116 MB. Retry and resume rather than losing the whole transfer to
+            # one dropped connection — this package is now the only source of the
+            # client SDK the Python bindings link against, so a failure here is
+            # not something a local build can paper over.
+            #
+            # Staged through .part deliberately: handing a *complete* file to
+            # `curl -C -` asks for a range that starts at EOF, the server answers
+            # 416, and --retry-all-errors then retries that five times before
+            # giving up. Only a partial transfer is ever resumed.
+            local RETRY=(--retry 5 --retry-delay 2)
+            if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
+                RETRY+=(--retry-all-errors)   # curl >= 7.71; covers a mid-transfer drop
+            fi
+            if ! curl -fL "${RETRY[@]}" -C - "$DEB_URL" -o "$DEB.part"; then
+                echo "  WARN: download failed — skipping service install."
+                echo "  The partial file is kept at $DEB.part — re-run to resume it."
+                echo "  Or get it from https://github.com/Vertax42/XenseVR-PC-Service/releases"
+                echo "  then: sudo dpkg -i XenseVR-PC-Service_*_${ARCH}.deb"
+                return 0
+            fi
+            mv "$DEB.part" "$DEB"
         fi
     fi
 
-    local WANT INSTALLED STATUS
     WANT="$(dpkg-deb -f "$DEB" Version 2>/dev/null)"
-    # Check the status, not just the version. `dpkg -r` leaves the package in
-    # `deinstall ok config-files`, and dpkg-query still reports its version
-    # there — so matching on the version alone declares a daemon installed
-    # when /opt/apps/roboticsservice is gone, skips the install, and fails
-    # later somewhere far less obvious.
-    STATUS="$(dpkg-query -W -f='${Status}' xensevr-pc-service 2>/dev/null || true)"
-    INSTALLED="$(dpkg-query -W -f='${Version}' xensevr-pc-service 2>/dev/null || true)"
     if [[ "$STATUS" == "install ok installed" && "$INSTALLED" == "$WANT" ]]; then
         echo "  xensevr-pc-service $INSTALLED already installed — skipping."
         return 0
