@@ -199,6 +199,58 @@ The `[slow_frame]` line carries a `top_obs=` suffix naming the slowest cameras o
 that frame, so check it before reaching for either flag — a single slow sensor is
 a different problem from the viewer being expensive.
 
+### Recording on a machine with no GPU
+
+The defaults assume an NVIDIA card. On a GPU-less host — a CPU-only server, a VM,
+a laptop with no discrete GPU — say so explicitly:
+
+```bash
+lerobot-record \
+    ... \
+    --dataset.vcodec=libsvtav1 \
+    --dataset.streaming_encoding=false
+```
+
+**`--dataset.vcodec=libsvtav1`.** The default is `auto`, and **`auto` does not
+detect this case.** It probes with `av.codec.Codec(name, "w")`, which is
+`avcodec_find_encoder_by_name` — a static lookup in the FFmpeg build's codec
+table. PyAV ships with `h264_nvenc` compiled in, so that lookup succeeds on a
+machine with no NVIDIA driver at all, `auto` selects it, and the failure surfaces
+later, at the first frame, as something like:
+
+```
+UnknownError: [Errno 1313558101] Unknown error occurred: 'avcodec_open2(h264_nvenc)'
+```
+
+Measured with the GPU masked off (`CUDA_VISIBLE_DEVICES=-1`): the probe still
+returns `h264_nvenc` and only `avcodec_open2` fails. The `libsvtav1` fallback in
+`resolve_vcodec()` is therefore only reached on a host whose FFmpeg was built
+without nvenc, which is not the build we install. `libsvtav1` is AV1 on the CPU
+and is what the offline dataset tools already default to.
+
+**`--dataset.streaming_encoding=false`.** Streaming encoding runs the encoder
+inline with capture, which is a win when the encoder is a dedicated ASIC on the
+GPU and the CPU only hands it frames. With `libsvtav1` the encoder _is_ the CPU,
+and it competes with the capture loop for the same cores — on a bimanual rig
+that is six to eight images per frame inside a 33.3 ms budget at 30 fps, so the
+first thing you see is `[slow_frame] ... overrun=`. With it off, frames are
+written out during capture and encoded in a batch at `save_episode()` instead:
+episode saves become slow and visible, capture stays on time. That is the right
+trade — a late save costs you patience, a starved capture loop costs you data
+you cannot re-record.
+
+Two knobs worth knowing if you keep streaming encoding on anyway, e.g. on a
+many-core server:
+
+| Flag                              | Default | Why you would touch it                                                                                                                            |
+| --------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--dataset.encoder_threads`       | `None`  | `None` lets the codec pick, which on a big machine means libsvtav1 helping itself to cores the capture loop needs. `2` per encoder is a sane cap. |
+| `--dataset.encoder_queue_maxsize` | `30`    | ~1 s of buffer at 30 fps. It is the backpressure valve: when the encoder falls behind, capture blocks here rather than growing memory forever.    |
+
+`lerobot-record` prints a reminder when `streaming_encoding=false`, suggesting you
+turn it back on if the hardware is capable. On a GPU-less host it is not, so the
+suggestion does not apply — leaving it off is deliberate.
+
 ### Bimanual (`bi_taccap_gripper`)
 
 ```bash
@@ -216,6 +268,12 @@ lerobot-record \
     --dataset.push_to_hub=false \
     --display_data=false
 ```
+
+> `--dataset.streaming_encoding=true` is the default and assumes an NVIDIA card.
+> On a GPU-less host, use `--dataset.vcodec=libsvtav1` with
+> `--dataset.streaming_encoding=false` instead — see
+> [Recording on a machine with no GPU](#recording-on-a-machine-with-no-gpu),
+> which also explains why `--dataset.vcodec=auto` does not work that out for you.
 
 ### Single (`taccap_gripper`)
 
