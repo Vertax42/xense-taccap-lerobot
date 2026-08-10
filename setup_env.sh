@@ -74,12 +74,14 @@ check_system_packages() {
         command -v "$cmd" &>/dev/null || missing_recommended+=("$pkg")
     done
 
-    # Header-only packages expose no command; ask pkg-config, which is itself in
-    # the required list above so this is meaningful by the time we get here.
-    if command -v pkg-config &>/dev/null; then
-        pkg-config --exists libudev || missing_required+=("libudev-dev")
-        pkg-config --exists libusb-1.0 || missing_required+=("libusb-1.0-0-dev")
-    fi
+    # No libudev-dev / libusb-1.0-0-dev check. Nothing here compiles against
+    # either header: taccap-gripper's only find_package is Threads, the pico4
+    # bindings link the SDK from the .deb, and both libraries are reached at
+    # *runtime* through prebuilt wheels — pyrealsense2 NEEDs libudev.so.1 and
+    # libusb-1.0.so.0, and pyudev (under xensesdk) dlopens libudev by name,
+    # which cameras/xense/camera_xense.py already resolves via ldconfig.
+    # Those come from libudev1 and libusb-1.0-0, which are base packages, not
+    # the -dev ones this used to demand.
 
     # De-duplicate (build-essential is named twice above).
     local -a uniq_required=() uniq_recommended=()
