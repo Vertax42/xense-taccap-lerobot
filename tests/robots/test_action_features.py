@@ -77,7 +77,7 @@ def head_keys(features):
 
 class TestSingleArmActionFeatures:
     def _robot(self, **kwargs):
-        return build(TaccapGripper, TaccapGripperConfig(side="left", **kwargs), {"left": "PC1"})
+        return build(TaccapGripper, TaccapGripperConfig(id="taccap_0", side="left", **kwargs), {"left": "PC1"})
 
     def test_head_pose_is_absent_without_the_head_camera(self):
         assert head_keys(self._robot(enable_head_camera=False).action_features) == set()
@@ -110,10 +110,10 @@ class TestEnableTactile:
     """
 
     def _single(self, **kwargs):
-        return build(TaccapGripper, TaccapGripperConfig(side="left", **kwargs), {"left": "PC1"})
+        return build(TaccapGripper, TaccapGripperConfig(id="taccap_0", side="left", **kwargs), {"left": "PC1"})
 
     def _bimanual(self, **kwargs):
-        return build(BiTaccapGripper, BiTaccapGripperConfig(**kwargs), {"left": "PC1", "right": "PC2"})
+        return build(BiTaccapGripper, BiTaccapGripperConfig(id="taccap_0", **kwargs), {"left": "PC1", "right": "PC2"})
 
     @staticmethod
     def _tactile_keys(features):
@@ -137,14 +137,17 @@ class TestEnableTactile:
     def test_the_count_still_applies_when_enabled(self):
         """enable_tactile gates; expected_tactiles_per_side still says how many
         a gripper carries, and discovery still validates against it."""
-        cfg = BiTaccapGripperConfig(expected_tactiles_per_side=2)
+        cfg = BiTaccapGripperConfig(id="taccap_0", expected_tactiles_per_side=2)
         assert cfg.tactiles_per_side == 2
-        assert BiTaccapGripperConfig(enable_tactile=False, expected_tactiles_per_side=2).tactiles_per_side == 0
+        assert (
+            BiTaccapGripperConfig(id="taccap_0", enable_tactile=False, expected_tactiles_per_side=2).tactiles_per_side
+            == 0
+        )
 
 
 class TestBimanualActionFeatures:
     def _robot(self, **kwargs):
-        return build(BiTaccapGripper, BiTaccapGripperConfig(**kwargs), {"left": "PC1", "right": "PC2"})
+        return build(BiTaccapGripper, BiTaccapGripperConfig(id="taccap_0", **kwargs), {"left": "PC1", "right": "PC2"})
 
     def test_head_pose_is_absent_without_the_head_camera(self):
         assert head_keys(self._robot(enable_head_camera=False).action_features) == set()
@@ -168,6 +171,37 @@ class TestBimanualActionFeatures:
         assert sided == set(without)
 
 
+class TestRobotIdIsRequired:
+    """Both configs refuse to build without ``--robot.id``. It reaches the log
+    prefix, the calibration filename and the recorded hardware manifest, so an
+    unnamed rig means a run nothing identifies the station of."""
+
+    @pytest.mark.parametrize(
+        "make",
+        [
+            lambda **kw: TaccapGripperConfig(side="left", **kw),
+            lambda **kw: BiTaccapGripperConfig(**kw),
+        ],
+        ids=["single", "bimanual"],
+    )
+    def test_omitting_it_fails_at_config_time(self, make):
+        """At config time, i.e. before any device is touched — the CLI parse
+        raises rather than a rig spinning up and recording anonymously."""
+        with pytest.raises(ValueError, match="--robot.id is required"):
+            make()
+
+    @pytest.mark.parametrize(
+        "make",
+        [
+            lambda **kw: TaccapGripperConfig(side="left", **kw),
+            lambda **kw: BiTaccapGripperConfig(**kw),
+        ],
+        ids=["single", "bimanual"],
+    )
+    def test_it_is_stored_stripped(self, make):
+        assert make(id="  taccap_1 ").id == "taccap_1"
+
+
 @pytest.mark.parametrize("enable_head_camera", [False, True])
 def test_action_features_is_a_subset_of_observation_features(enable_head_camera):
     """The record loop builds the action by selecting action_features out of the
@@ -175,7 +209,7 @@ def test_action_features_is_a_subset_of_observation_features(enable_head_camera)
     carry would silently drop out of the dataset."""
     robot = build(
         BiTaccapGripper,
-        BiTaccapGripperConfig(enable_head_camera=enable_head_camera),
+        BiTaccapGripperConfig(id="taccap_0", enable_head_camera=enable_head_camera),
         {"left": "PC1", "right": "PC2"},
     )
     assert set(robot.action_features) <= set(robot.observation_features)

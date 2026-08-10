@@ -204,7 +204,8 @@ lsusb -t
 
 Each `480M` `root_hub` line is one budget. A bimanual rig puts **six** cameras
 (four tactile + two wrist) on it, plus the laptop's built-in webcam if it has
-one. Two `480M` root_hubs, three cameras each, is comfortable.
+one, and six is more than one bus can carry (measured below). Two `480M`
+root_hubs, three cameras each, is comfortable.
 
 Watch the kernel while you start, in a second terminal:
 
@@ -329,10 +330,11 @@ open camera N`, even though its `/dev/video*` node is present and
 >   compressed format has no meaningful bpp — so it has nothing to work with for
 >   the MJPEG wrist cameras, which are the biggest over-requesters.
 >
-> Until a second controller is fitted, record with the wrist cameras off:
-> tactile, pose and jaw are all still there, but the dataset then has no
-> `{side}_wrist` key, so decide before recording rather than mixing two
-> incompatible observation schemas.
+> The fix is a second USB host controller — see
+> [Step 2](#step-2--check-the-usb-bandwidth-budget). Until one is fitted, record
+> with the wrist cameras off: tactile, pose and jaw are all still there, but the
+> dataset then has no `{side}_wrist` key, so decide before recording rather than
+> mixing two incompatible observation schemas.
 
 ## Calibration workflow (do once per device)
 
@@ -535,7 +537,8 @@ record — same flags on `lerobot-record`.
 ## Standalone smoke test
 
 Verifies the robot stack independently of `lerobot-record`. Devices are
-auto-discovered; pass `--side` only when both grippers are connected:
+auto-discovered; pass `--side` only when both grippers are connected. The station
+label the config requires is `--id` here, defaulted to `taccap_0`:
 
 ```bash
 # Gripper + tactile + wrist, all auto-discovered (pick a side if both present):
@@ -574,7 +577,7 @@ are connected, set `--robot.side=left|right`:
 ```bash
 lerobot-record \
     --robot.type=taccap_gripper \
-    --robot.id=right \
+    --robot.id=taccap_0 \
     --robot.side=right \
     --dataset.repo_id=<your_org>/<your_dataset> \
     --dataset.num_episodes=1 \
@@ -650,6 +653,78 @@ reports ready. By the time the first frame is recorded the encoders are hot, so 
 `add_frame()` no longer pays the init cost. The lazy first-frame start remains as a
 defensive fallback for callers that don't pre-warm.
 
+### `--robot.id` (required) and the hardware manifest
+
+Two different things, and they answer two different questions.
+
+**`--robot.id` is the station label**, `taccap_0` / `taccap_1` / …, one per rig (a
+bimanual rig is one rig, one id). It names the _seat_, not the hardware in it, so
+it stays put when a gripper is swapped. It reaches the log prefix, the
+calibration filename, `str(robot)` and the manifest below, but **not a dataset
+column** — `LeRobotDataset.create()` is handed `robot_type` and nothing else.
+
+**It is required**, unlike upstream's optional `RobotConfig.id`. Both TacCap
+configs put it through `validate_robot_id()` in `__post_init__`, so a missing or
+blank id fails at CLI-parse time — before any device is touched — instead of a
+rig spinning up and recording anonymously. That `None` default is also why
+terminal output used to read `None TaccapGripper`. The format itself is not
+policed: the convention is `taccap_<n>`, but identity lives in the serials below,
+so a rig named after a room is allowed. The smoke test takes `--id` and defaults
+it to `taccap_0`.
+
+**The hardware manifest is the identity.** `lerobot-record` writes
+`meta/hardware.json` into the dataset right after `robot.connect()`:
+
+```json
+{
+  "robot_type": "bi_taccap_gripper",
+  "robot_id": "taccap_0",
+  "role": "leader",
+  "units": [
+    {
+      "side": "left",
+      "gripper_sn": "TCGU01A24Z0001m",
+      "tactile_sensors": [
+        {
+          "finger": "left",
+          "observation_key": "left_tactile_left",
+          "serial": "GSPS01A25Z0011"
+        },
+        {
+          "finger": "right",
+          "observation_key": "left_tactile_right",
+          "serial": "GSPS01A25Z0012"
+        }
+      ]
+    }
+  ]
+}
+```
+
+- `side` is which gripper; `finger` is which sensor on it. Both are called
+  left/right and they are **independent** — 单左双右 is applied once to the
+  gripper's own serial and again to each tactile's. Each sensor therefore also
+  carries the `observation_key` it feeds, so a dataset column traces back to a
+  physical sensor without re-deriving the naming rule.
+- `gripper_sn` is the **firmware** SN (`Cmd::GetSn`, read over the wire at
+  connect), never the CH343 `mcu_serial` — that one identifies the USB-serial
+  adapter and changes when the adapter does.
+- The single-arm robot writes the same shape with one entry in `units`, so
+  anything reading these datasets needs one code path, not two.
+- A side whose gripper is off records `"gripper_sn": null` rather than being
+  omitted; `enable_tactile=false` gives it an empty `tactile_sensors`.
+- It is a file of its own, **not** a key in `meta/info.json`: that schema is
+  upstream's and a fork-local key in it would collide on the next v5.x sync.
+- Resuming a dataset on _different_ hardware keeps the original file and warns.
+  The episodes already recorded came from the devices named there, and
+  overwriting would misattribute every one of them — the warning is the signal
+  that the dataset now spans two rigs.
+
+Trackers and wrist cameras are deliberately not in the manifest: they are
+mounted accessories, while the gripper + its two tactiles are the unit whose
+serials the data is about. `hardware_manifest_unit()` in `common.py` is where
+that would change.
+
 ## What gets recorded per frame
 
 Keys are **unprefixed** — unlike [`bi_taccap_gripper`](../bi_taccap_gripper/README.md),
@@ -690,6 +765,9 @@ second column.
 - `taccap_gripper.py` — the `Robot` subclass. `get_observation()` and
   `get_action()` both surface pose + gripper + optional IMU + cameras.
 - `config_taccap_gripper.py` — `RobotConfig` dataclass.
+- `common.py` — everything the single and bimanual robots share, including the
+  hardware-manifest helpers (`hardware_manifest_unit` / `build_hardware_manifest`
+  / `write_hardware_manifest`).
 - `taccap_gripper_example.py` — standalone smoke test (above).
 - `check_tracker.py` — sanity-check the Pico4 tracker (read-only; it calibrates nothing).
 

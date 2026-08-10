@@ -6,6 +6,10 @@ and Pico4 motion trackers — are **auto-discovered by serial rule**, so no devi
 are passed on the CLI. The one optional override is the Pico4 tracker serial
 (`--robot.tracker_serial` / `--robot.{left,right}_tracker_serial`); see Teleoperate below.
 
+`--robot.id` **is required** on every command below — the station label for the rig
+(`taccap_0`, `taccap_1`, … one per rig). See
+[`--robot.id` and the hardware manifest](#--robotid-required-and-the-hardware-manifest).
+
 ## Prerequisites
 
 ### Hugging Face CLI login
@@ -52,9 +56,10 @@ drops that view only, leaving the rest of the layout in place, and it auto-skips
 ```bash
 lerobot-teleoperate \
     --robot.type=bi_taccap_gripper \
+    --robot.id=taccap_0 \
     --fps=30 \
     --display_data=true \
-    --robot.enable_tracker=true \
+    --robot.enable_tracker=false \
     --robot.enable_head_camera=false
 ```
 
@@ -107,6 +112,7 @@ stored. `--robot.head_camera_eyes=left` (or `right`) records a single eye.
 ```bash
 lerobot-teleoperate \
     --robot.type=taccap_gripper \
+    --robot.id=taccap_0 \
     --robot.side=left \
     --fps=30 \
     --display_data=true
@@ -118,6 +124,58 @@ lerobot-teleoperate \
 
 Recording is self-driven (`self_driven_record_loop`, shifted-frame: `action[t]` paired with
 `obs[t-1]`) — **no `--teleop`**. Same robot flags as teleop, plus `--dataset.*`.
+
+### `--robot.id` (required) and the hardware manifest
+
+`--robot.id` is a **required station label** — `taccap_0`, `taccap_1`, … one per rig,
+and a bimanual rig is one rig. It names the seat, not the hardware in it, so it
+survives a gripper swap. Upstream leaves it optional; both TacCap configs reject a
+missing or blank one in `__post_init__`, so the run stops at CLI-parse time rather
+than a rig spinning up and recording anonymously:
+
+```
+ValueError: --robot.id is required: the station label for this rig, e.g. --robot.id=taccap_0 …
+```
+
+It reaches the log prefix, the calibration filename and `str(robot)`, and it is copied
+into the manifest below — but it is **not** a dataset column, and `meta/info.json`
+never sees it.
+
+Device identity is carried instead by `meta/hardware.json`, written into the dataset
+right after connect — gripper firmware SN plus the tactile sensors on that gripper,
+each tied to the observation key it feeds:
+
+```json
+{
+  "robot_type": "bi_taccap_gripper",
+  "robot_id": "taccap_0",
+  "role": "leader",
+  "units": [
+    {
+      "side": "left",
+      "gripper_sn": "TCGU01A24Z0001m",
+      "tactile_sensors": [
+        {
+          "finger": "left",
+          "observation_key": "left_tactile_left",
+          "serial": "GSPS01A25Z0011"
+        },
+        {
+          "finger": "right",
+          "observation_key": "left_tactile_right",
+          "serial": "GSPS01A25Z0012"
+        }
+      ]
+    }
+  ]
+}
+```
+
+`side` is which gripper, `finger` is which sensor on it — independent left/rights, hence
+the explicit `observation_key`. `gripper_sn` is the firmware SN read over the wire, not
+the CH343 `mcu_serial`. Single-arm writes the same shape with one entry. Resuming a
+dataset on different hardware keeps the original file and warns rather than overwriting
+it. Details: [`robots/taccap_gripper/README.md`](../robots/taccap_gripper/README.md).
 
 ### Recording with the viewer on — `[slow_frame]`
 
@@ -139,6 +197,7 @@ a different problem from the viewer being expensive.
 ```bash
 lerobot-record \
     --robot.type=bi_taccap_gripper \
+    --robot.id=taccap_0 \
     --robot.enable_head_camera=true \
     --dataset.repo_id=Xense/taccap-g1-test-0722 \
     --dataset.single_task="Pick up the cube" \
@@ -168,6 +227,7 @@ digit). Add `--robot.enable_tracker=false` to record tactile + gripper only — 
 ```bash
 lerobot-record \
     --robot.type=taccap_gripper \
+    --robot.id=taccap_0 \
     --robot.side=left \
     --dataset.repo_id=Xense/<dataset_name> \
     --dataset.single_task="Pick up the cube" \

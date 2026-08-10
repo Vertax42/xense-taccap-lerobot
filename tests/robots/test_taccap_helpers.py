@@ -17,26 +17,32 @@ pinning. Nothing below touches hardware or either vendor SDK.
 """
 
 import functools
+import json
 import time
 
 import numpy as np
 import pytest
 
 from lerobot.robots.taccap_gripper.common import (
+    HARDWARE_MANIFEST_PATH,
     HEAD_CAMERA_KEYS,
     HEAD_POSE_KEYS,
     POSE_KEYS,
     GripperReadGuard,
     HeadSkewMonitor,
+    build_hardware_manifest,
     build_head_camera_configs,
     build_tactile_camera_configs,
     connect_cameras_parallel,
+    hardware_manifest_unit,
     open_gripper,
     read_head_camera_skew,
     split_camera_read,
     swap_tactile_display_features,
     tactile_camera_output_types,
     tactile_display_key,
+    validate_robot_id,
+    write_hardware_manifest,
 )
 from lerobot.robots.taccap_gripper.ee_transform import resolve_tracker_to_ee, tracker_to_tcp
 
@@ -547,6 +553,165 @@ class TestBuildTactileCameraConfigs:
                 output_types=["rectify"],
                 diff_gain=1.0,
             )
+
+
+class TestValidateRobotId:
+    """``--robot.id`` is required on both TacCap configs. Upstream leaves it
+    optional, which is how terminal output came to read ``None
+    BiTaccapGripper`` and how a run could be recorded with nothing naming the
+    rig it came from."""
+
+    def test_a_station_label_passes_through(self):
+        assert validate_robot_id("taccap_0") == "taccap_0"
+
+    def test_missing_id_names_the_flag_and_the_convention(self):
+        with pytest.raises(ValueError, match="--robot.id is required"):
+            validate_robot_id(None)
+
+    @pytest.mark.parametrize("blank", ["", "   ", "\t"])
+    def test_blank_is_as_absent_as_none(self, blank):
+        """``--robot.id=""`` would otherwise satisfy a bare None check and then
+        name a rig nothing at all."""
+        with pytest.raises(ValueError, match="--robot.id is required"):
+            validate_robot_id(blank)
+
+    def test_surrounding_whitespace_is_stripped(self):
+        """It reaches a calibration filename and the manifest; ``taccap_0 `` and
+        ``taccap_0`` must not be two stations."""
+        assert validate_robot_id("  taccap_0  ") == "taccap_0"
+
+    def test_the_format_itself_is_not_policed(self):
+        """The convention is taccap_<n>, but identity lives in the serials, so a
+        rig named after a room is allowed."""
+        assert validate_robot_id("lab-b-bench-3") == "lab-b-bench-3"
+
+
+class FakeEndpoints:
+    """Stand-in for the SDK's ``GripperEndpoints``, which only connected
+    hardware produces."""
+
+    def __init__(self, firmware_sn):
+        self.firmware_sn = firmware_sn
+        self.mcu_serial = "0001"  # the CH343 adapter's — must never be recorded
+
+
+class TestHardwareManifestUnit:
+    """The dataset's only link back to the physical devices, so what goes in it
+    and what each field means are both worth pinning."""
+
+    TACTILES = {"left": "GSPS01A25Z0011", "right": "GSPS01A25Z0012"}
+
+    def test_gripper_serial_is_the_firmware_one(self):
+        """Not ``mcu_serial``: that identifies the USB-serial adapter and changes
+        when the adapter does, so it is not the device's identity."""
+        unit = hardware_manifest_unit(
+            "left",
+            endpoints=FakeEndpoints("TCGU01A24Z0001m"),
+            tactile_serials=self.TACTILES,
+            key_prefix="left_",
+        )
+        assert unit["gripper_sn"] == "TCGU01A24Z0001m"
+        assert "0001" not in str(unit).replace("TCGU01A24Z0001m", "")
+
+    def test_side_and_finger_are_recorded_separately(self):
+        """They are independent left/rights — 单左双右 applied to the gripper's
+        own serial and again to each tactile's — so a right-hand gripper carries
+        a left finger like any other."""
+        unit = hardware_manifest_unit(
+            "right",
+            endpoints=FakeEndpoints("TCGU01A24Z0002m"),
+            tactile_serials=self.TACTILES,
+            key_prefix="right_",
+        )
+        assert unit["side"] == "right"
+        assert [s["finger"] for s in unit["tactile_sensors"]] == ["left", "right"]
+
+    def test_each_tactile_carries_the_observation_key_it_feeds(self):
+        """So a dataset column traces back to a sensor without re-deriving the
+        naming rule."""
+        unit = hardware_manifest_unit(
+            "right",
+            endpoints=FakeEndpoints("TCGU01A24Z0002m"),
+            tactile_serials=self.TACTILES,
+            key_prefix="right_",
+        )
+        assert [(s["observation_key"], s["serial"]) for s in unit["tactile_sensors"]] == [
+            ("right_tactile_left", "GSPS01A25Z0011"),
+            ("right_tactile_right", "GSPS01A25Z0012"),
+        ]
+
+    def test_single_gripper_keys_are_unprefixed(self):
+        unit = hardware_manifest_unit(
+            "left",
+            endpoints=FakeEndpoints("TCGU01A24Z0001m"),
+            tactile_serials=self.TACTILES,
+            key_prefix="",
+        )
+        assert [s["observation_key"] for s in unit["tactile_sensors"]] == ["tactile_left", "tactile_right"]
+
+    def test_disabled_or_disconnected_gripper_records_null_not_a_guess(self):
+        """``_release()`` drops the endpoints, and ``enable_gripper=false`` never
+        creates them; either way the honest answer is "no serial"."""
+        unit = hardware_manifest_unit("left", endpoints=None, tactile_serials={}, key_prefix="left_")
+        assert unit == {"side": "left", "gripper_sn": None, "tactile_sensors": []}
+
+
+class TestWriteHardwareManifest:
+    MANIFEST = build_hardware_manifest(
+        robot_type="taccap_gripper",
+        robot_id="taccap_0",
+        role="leader",
+        units=[
+            hardware_manifest_unit(
+                "left",
+                endpoints=FakeEndpoints("TCGU01A24Z0001m"),
+                tactile_serials={"left": "GSPS01A25Z0011", "right": "GSPS01A25Z0012"},
+                key_prefix="",
+            )
+        ],
+    )
+
+    def test_written_under_meta_not_into_info_json(self, tmp_path):
+        """``meta/info.json`` is upstream's schema; a fork-local key there would
+        collide on the next v5.x sync."""
+        path = write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
+        assert path == tmp_path / HARDWARE_MANIFEST_PATH
+        assert json.loads(path.read_text()) == self.MANIFEST
+        assert not (tmp_path / "meta" / "info.json").exists()
+
+    def test_rewriting_the_same_hardware_is_a_silent_no_op(self, tmp_path):
+        write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
+        logger = FakeLogger()
+        write_hardware_manifest(tmp_path, self.MANIFEST, logger)
+        assert logger.warnings == []
+
+    def test_resuming_on_other_hardware_warns_and_keeps_the_original(self, tmp_path):
+        """The episodes already in the dataset came from the devices named in
+        the file; overwriting would misattribute every one of them."""
+        write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
+        swapped = json.loads(json.dumps(self.MANIFEST))
+        swapped["units"][0]["gripper_sn"] = "TCGU01A24Z0003m"
+
+        logger = FakeLogger()
+        write_hardware_manifest(tmp_path, swapped, logger)
+
+        on_disk = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())
+        assert on_disk == self.MANIFEST
+        assert len(logger.warnings) == 1
+        assert "TCGU01A24Z0003m" in logger.warnings[0]  # names what is connected now
+
+    def test_an_unreadable_manifest_is_left_alone(self, tmp_path):
+        """A truncated file is someone else's problem to fix; clobbering it would
+        destroy the provenance of whatever episodes are already there."""
+        path = tmp_path / HARDWARE_MANIFEST_PATH
+        path.parent.mkdir(parents=True)
+        path.write_text("{ truncated")
+
+        logger = FakeLogger()
+        write_hardware_manifest(tmp_path, self.MANIFEST, logger)
+
+        assert path.read_text() == "{ truncated"
+        assert len(logger.warnings) == 1
 
 
 class TestSwapTactileDisplayFeatures:

@@ -34,7 +34,7 @@ Unity-app launch time.
 from dataclasses import dataclass, field
 
 from ..config import RobotConfig
-from .common import build_head_camera_configs
+from .common import build_head_camera_configs, validate_robot_id
 
 
 @RobotConfig.register_subclass("taccap_gripper")
@@ -233,6 +233,10 @@ class TaccapGripperConfig(RobotConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        # Required here, not left optional as upstream has it — see
+        # ``validate_robot_id``.
+        self.id = validate_robot_id(self.id)
 
         if self.enable_head_camera:
             # Delegate to the camera config so there is one definition of what

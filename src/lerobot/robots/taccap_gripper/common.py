@@ -28,9 +28,11 @@ single gripper, ``"[left] "`` for one arm of the bimanual rig.
 from __future__ import annotations
 
 import glob
+import json
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -52,13 +54,16 @@ __all__ = [
     "POSE_KEYS",
     "HEAD_POSE_KEYS",
     "HEAD_CAMERA_KEYS",
+    "HARDWARE_MANIFEST_PATH",
     "GripperReadGuard",
     "HeadSkewMonitor",
+    "build_hardware_manifest",
     "build_head_camera_configs",
     "build_tactile_camera_configs",
     "build_wrist_camera_config",
     "connect_cameras_parallel",
     "disconnect_cameras_parallel",
+    "hardware_manifest_unit",
     "open_gripper",
     "prewarm_tactile_config_cache",
     "read_gripper_normalized",
@@ -69,6 +74,8 @@ __all__ = [
     "swap_tactile_display_features",
     "tactile_camera_output_types",
     "tactile_display_key",
+    "validate_robot_id",
+    "write_hardware_manifest",
 ]
 
 
@@ -720,3 +727,132 @@ def read_gripper_normalized(gripper: Any, open_rad: float) -> float:
     if open_rad <= 0.0:  # guarded in config.__post_init__ but be defensive
         return 0.0
     return float(np.clip(float(sample.position_rad) / open_rad, 0.0, 1.0))
+
+
+# -------------------------------------------------------------------- robot id
+
+
+def validate_robot_id(robot_id: str | None) -> str:
+    """Require ``--robot.id`` and return it stripped.
+
+    Upstream leaves ``RobotConfig.id`` optional, defaulting to ``None`` — which
+    is how terminal output came to read ``None BiTaccapGripper`` and how a run
+    could be recorded with nothing naming the rig it came from. Here it is the
+    station label, and a capture rig that cannot say which station it is is not
+    configured. Enforced in each config's ``__post_init__`` rather than by
+    changing the base dataclass, which belongs to upstream.
+
+    Free-form on purpose: the convention is ``taccap_0`` / ``taccap_1`` / …, but
+    the *identity* of the hardware is the serials in ``meta/hardware.json``, so
+    pinning a format here would buy nothing and would break the first rig named
+    after a room.
+    """
+    if robot_id is None or not robot_id.strip():
+        raise ValueError(
+            "--robot.id is required: the station label for this rig, e.g. "
+            "--robot.id=taccap_0 (taccap_0 / taccap_1 / …, one per rig — a bimanual rig is one rig). "
+            "It names the seat, not the hardware in it, so it stays put when a gripper is swapped; "
+            "the device serials go into the recorded dataset's meta/hardware.json instead."
+        )
+    return robot_id.strip()
+
+
+# ------------------------------------------------------------ hardware manifest
+
+HARDWARE_MANIFEST_PATH = "meta/hardware.json"
+"""Where a recorded dataset keeps its TacCap hardware manifest, relative to the
+dataset root.
+
+Deliberately a file of its own rather than a key in ``meta/info.json``: that
+file's schema belongs to upstream lerobot, and a fork-local key in it would
+collide on the next v5.x sync. ``robot.id`` does not reach the dataset at all
+(``LeRobotDataset.create`` takes only ``robot_type``), so this manifest is the
+only thing tying recorded episodes to the physical devices that produced them.
+"""
+
+
+def hardware_manifest_unit(
+    side: str,
+    *,
+    endpoints: Any,
+    tactile_serials: dict[str, str],
+    key_prefix: str,
+) -> dict[str, Any]:
+    """One TacCap unit's identity: its gripper, and the tactiles on that gripper.
+
+    ``endpoints`` is the unit's ``GripperEndpoints`` (``None`` when the gripper is
+    off, or when the robot is not connected — the SN is read over the wire). The
+    serial recorded is the **firmware** SN (``Cmd::GetSn``), never the CH343
+    ``mcu_serial``: the latter identifies the USB-serial adapter and changes when
+    the adapter does, so it is not the device's identity.
+
+    ``side`` is which gripper the unit is; ``finger`` is which sensor on it. Both
+    are called left/right and they are independent — 单左双右 is applied once to
+    the gripper's own serial and again to each tactile's — so each entry also
+    carries the ``observation_key`` it feeds (``{key_prefix}tactile_{finger}``),
+    letting a dataset column trace back to a physical sensor without re-deriving
+    the naming rule.
+    """
+    return {
+        "side": side,
+        "gripper_sn": getattr(endpoints, "firmware_sn", None) or None,
+        "tactile_sensors": [
+            {
+                "finger": finger,
+                "observation_key": f"{key_prefix}tactile_{finger}",
+                "serial": sn,
+            }
+            for finger, sn in sorted(tactile_serials.items())
+        ],
+    }
+
+
+def build_hardware_manifest(
+    *,
+    robot_type: str,
+    robot_id: str | None,
+    role: str,
+    units: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Wrap per-unit entries into the manifest both TacCap robots emit.
+
+    ``robot_id`` is the station label (``--robot.id``, e.g. ``taccap_0``) and is
+    free to be ``None``; the serials below are the actual identity, and they are
+    what a dataset should be trusted to be traced by.
+    """
+    return {
+        "robot_type": robot_type,
+        "robot_id": robot_id,
+        "role": role,
+        "units": units,
+    }
+
+
+def write_hardware_manifest(root: str | Path, manifest: dict[str, Any], logger: Any) -> Path:
+    """Write ``manifest`` to ``root/meta/hardware.json`` and return the path.
+
+    Written once, when the file is absent. Resuming a dataset with *different*
+    hardware keeps the original file and warns instead of overwriting: the
+    episodes already in the dataset came from the devices named there, and
+    silently replacing them would misattribute every one of them. The warning is
+    the signal that the dataset now spans two rigs.
+    """
+    path = Path(root) / HARDWARE_MANIFEST_PATH
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text())
+        except (OSError, ValueError) as e:
+            logger.warn(f"Could not read the existing hardware manifest {path} ({e}); leaving it alone.")
+            return path
+        if existing != manifest:
+            logger.warn(
+                f"Hardware manifest {path} does not match the devices connected now — this dataset "
+                f"already holds episodes recorded on other hardware. Keeping the original; "
+                f"current: {json.dumps(manifest, sort_keys=True)}"
+            )
+        return path
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, indent=2) + "\n")
+    logger.info(f"Hardware manifest written to {path}")
+    return path

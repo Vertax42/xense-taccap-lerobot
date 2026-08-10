@@ -13,7 +13,8 @@ Standalone smoke test for TaccapGripper.
 
 The gripper, its tactile sensors and its wrist camera are auto-discovered by
 serial rule — no serials are supplied. Pass ``--side`` only when both grippers
-are connected.
+are connected. ``--robot.id`` is required by the config; here it is ``--id``,
+defaulted to ``taccap_0`` so the smoke test stays a one-liner.
 
 Usage:
     # Gripper + tactile + wrist (auto-discovered); pick a side if both present.
@@ -55,6 +56,11 @@ def main() -> None:
         "--side", default=None, choices=["left", "right"], help="Which gripper (only needed when both are connected)."
     )
     parser.add_argument(
+        "--id",
+        default="taccap_0",
+        help="Station label for this rig (required by the config; the smoke test defaults it).",
+    )
+    parser.add_argument(
         "--role", default="leader", choices=["leader", "follower"], help="Device role to bind (default leader)."
     )
     parser.add_argument("--tracker", action="store_true", help="Enable the Pico4 motion tracker.")
@@ -70,6 +76,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = TaccapGripperConfig(
+        id=args.id,
         side=args.side,
         role=args.role,
         enable_gripper=True,

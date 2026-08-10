@@ -60,11 +60,13 @@ from ..taccap_gripper.common import (
     POSE_KEYS,
     GripperReadGuard,
     HeadSkewMonitor,
+    build_hardware_manifest,
     build_head_camera_configs,
     build_tactile_camera_configs,
     build_wrist_camera_config,
     connect_cameras_parallel,
     disconnect_cameras_parallel,
+    hardware_manifest_unit,
     open_gripper,
     prewarm_tactile_config_cache,
     read_head_pose,
@@ -116,7 +118,7 @@ class BiTaccapGripper(Robot):
     def __init__(self, config: BiTaccapGripperConfig):
         super().__init__(config)
         self.config = config
-        self.logger = get_logger(f"BiTaccapGripper-{config.id or 'default'}")
+        self.logger = get_logger(f"BiTaccapGripper-{config.id}")
         self._role = disco.normalize_role(config.role)
 
         any_gripper = any(getattr(config, f"{s}_enable_gripper") for s in _SIDES)
@@ -160,7 +162,7 @@ class BiTaccapGripper(Robot):
                 {s: getattr(config, f"{s}_tracker_serial") for s in _SIDES},
                 lambda: Pico4TrackerReader.list_serial_numbers(
                     device_wait_timeout=config.tracker_wait_timeout,
-                    logger_name=config.id or "bi",
+                    logger_name=config.id,
                 ),
             )
             self.logger.info(f"Pico4 trackers: {self._tracker_sn_by_side}")
@@ -190,6 +192,9 @@ class BiTaccapGripper(Robot):
         """
         n_exp = self.config.tactiles_per_side
         tactiles = disco.discover_tactiles_by_hub(self._role) if n_exp else {"left": {}, "right": {}}
+        # Kept for ``hardware_manifest``: the camera configs downstream carry the
+        # serials too, but only as an opaque field of each backend's config.
+        self._disc_tactiles = tactiles
         want_wrist = any(getattr(self.config, f"{s}_enable_wrist_camera") for s in _SIDES)
         cameras = disco.discover_wrist_cameras(self._role) if want_wrist else {}
 
@@ -230,6 +235,32 @@ class BiTaccapGripper(Robot):
         if self.config.enable_head_camera:
             configs.update(build_head_camera_configs(self.config))
         return configs
+
+    @property
+    def hardware_manifest(self) -> dict[str, Any]:
+        """Which physical devices this rig is, for the recording to carry along.
+
+        Read it **while connected**: the gripper serials are the firmware SNs
+        read over the wire at ``connect()``, and ``_release()`` drops the
+        endpoints again, so before/after they come out ``None``. Tactile serials
+        come from construction-time discovery and are always there.
+
+        ``--robot.id`` is only a station label; this is the identity.
+        """
+        return build_hardware_manifest(
+            robot_type=self.name,
+            robot_id=self.id,
+            role=self._role,
+            units=[
+                hardware_manifest_unit(
+                    side,
+                    endpoints=self._endpoints[side],
+                    tactile_serials=self._disc_tactiles.get(side, {}),
+                    key_prefix=f"{side}_",
+                )
+                for side in _SIDES
+            ],
+        )
 
     # ------------------------------------------------------------------ schema
 
@@ -408,7 +439,7 @@ class BiTaccapGripper(Robot):
                     tracker_to_ee_pos=ee_pos,
                     tracker_to_ee_quat=ee_quat,
                     device_wait_timeout=self.config.tracker_wait_timeout,
-                    logger_name=f"{self.config.id or 'bi'}-{side}",
+                    logger_name=f"{self.config.id}-{side}",
                 )
                 # No init-pose alignment — see the note in the config module.
                 tracker.connect()
