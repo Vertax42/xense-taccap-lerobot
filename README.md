@@ -123,7 +123,7 @@ main `lerobot` package.
 Step 3, so a bare Ubuntu install is missing pieces the build needs:
 
 ```bash
-sudo apt install -y build-essential cmake pkg-config git curl libudev-dev libusb-1.0-0-dev
+sudo apt install -y build-essential cmake pkg-config git curl
 sudo apt install -y v4l-utils usbutils   # not needed to run, but this is how you debug a camera
 ```
 
