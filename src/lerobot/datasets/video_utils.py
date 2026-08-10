@@ -163,7 +163,7 @@ def detect_available_hw_encoders() -> tuple[str, ...]:
         for codec_name in HW_ENCODERS:
             try:
                 av.codec.Codec(codec_name, "w")
-            except Exception:  # nosec B110
+            except Exception:  # nosec B112
                 continue  # not in this FFmpeg build
             if _encoder_session_opens(codec_name):
                 available.append(codec_name)
