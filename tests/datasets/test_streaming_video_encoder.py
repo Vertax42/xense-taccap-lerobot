@@ -87,9 +87,11 @@ class TestGetCodecOptions:
 
 
 class TestHWEncoderDetection:
-    def test_detect_available_hw_encoders_returns_list(self):
+    def test_detect_available_hw_encoders_returns_tuple(self):
+        """A tuple, not a list: the result is lru_cached and handed to every
+        caller, so it must not be mutable."""
         result = detect_available_hw_encoders()
-        assert isinstance(result, list)
+        assert isinstance(result, tuple)
 
     def test_detect_available_hw_encoders_only_valid(self):
         from lerobot.datasets.video_utils import HW_ENCODERS
@@ -97,6 +99,25 @@ class TestHWEncoderDetection:
         result = detect_available_hw_encoders()
         for encoder in result:
             assert encoder in HW_ENCODERS
+
+    def test_detected_encoders_actually_open(self):
+        """The point of the probe: anything it reports must survive
+        avcodec_open2, not merely exist in the FFmpeg build. A static lookup
+        passes for nvenc on a host with no NVIDIA driver, which is how 'auto'
+        used to select it and then die on the first frame."""
+        from lerobot.datasets.video_utils import _encoder_session_opens
+
+        for encoder in detect_available_hw_encoders():
+            assert _encoder_session_opens(encoder)
+
+    def test_probe_size_clears_nvenc_minimum(self):
+        """Too small a probe frame reports a working encoder as broken: 128x96
+        is rejected on an RTX PRO 6000 that encodes 160x120 fine."""
+        from lerobot.datasets.video_utils import _ENCODER_PROBE_SIZE
+
+        width, height = _ENCODER_PROBE_SIZE
+        assert width >= 160 and height >= 120
+        assert width % 2 == 0 and height % 2 == 0  # yuv420p
 
     def test_resolve_vcodec_passthrough(self):
         assert resolve_vcodec("libsvtav1") == "libsvtav1"
