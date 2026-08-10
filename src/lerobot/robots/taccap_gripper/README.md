@@ -180,11 +180,46 @@ twice.
 ## Hardware bring-up sequence
 
 1. Plug the TacCap-Gripper into the host (USB).
-2. Power on the Pico4 Ultra headset; pair the motion tracker.
-3. Launch the Unity VR Client app on the headset (this freezes the
+2. **Check the USB bandwidth budget** — see below. Do this before blaming
+   anything else; on a bimanual rig it is the single most common reason a
+   camera will not open, and it is decided by which physical ports you used.
+3. Power on the Pico4 Ultra headset; pair the motion tracker.
+4. Launch the Unity VR Client app on the headset (this freezes the
    coordinate origin).
-4. Start the XenseVR PC Service on the host.
-5. Run any of the scripts below.
+5. Start the XenseVR PC Service on the host.
+6. Run any of the scripts below.
+
+### Step 2 — check the USB bandwidth budget
+
+Every UVC camera reserves _isochronous_ bandwidth for as long as it is open, and
+that budget is **per USB 2.0 bus**: 480 Mbit/s, of which ~384 is available to
+periodic transfers. The cameras are USB 2.0 devices, so plugging them into a blue
+USB 3 port changes nothing — they still land on that controller's USB 2.0 bus.
+
+Count what shares a bus:
+
+```bash
+lsusb -t
+```
+
+Each `480M` `root_hub` line is one budget. A bimanual rig puts **six** cameras
+(four tactile + two wrist) on it, plus the laptop's built-in webcam if it has
+one. Two `480M` root_hubs, three cameras each, is comfortable.
+
+Watch the kernel while you start, in a second terminal:
+
+```bash
+sudo dmesg -w | grep --line-buffered -iE "uvcvideo|bandwidth|disconnect"
+```
+
+`--line-buffered` is not optional: without it `grep` buffers and appears to hang.
+`Not enough bandwidth for altsetting N` at the moment a camera fails is the
+diagnosis, full stop — nothing in this repo can work around it.
+
+If the budget is short, the fix is a **second USB host controller**, not another
+hub. A Thunderbolt/USB4 dock brings its own xHCI controller; a plain hub does
+not. Confirm by plugging one gripper into it and checking `lsusb -t` shows a
+**new `480M` root_hub**, not another nested hub.
 
 > **Serial-port permissions (one-time host setup).** The gripper MCU enumerates
 > as `/dev/ttyACM*`, owned by the `dialout` group. If your user is not in
@@ -246,14 +281,58 @@ open camera N`, even though its `/dev/video*` node is present and
 > changing anything else: run it and read the negotiated endpoints with
 >
 > ```bash
-> sudo grep -E "^(T:|I:.*Video|E:.*Isoc)" /sys/kernel/debug/usb/devices
+> # I:* marks the ACTIVE altsetting; the class string is lowercase "(video)"
+> sudo grep -E "^(T:|I:\*.*video|E:.*Isoc)" /sys/kernel/debug/usb/devices
 > ```
 >
 > Each video interface's `Alt=` and its `E:` line's `MxPS=` give the reservation
-> (`MxPS × 8000 × 8` bit/s); sum them per root port and compare against ~384
+> (`MxPS × 8000 × 8` bit/s); sum them per **bus** and compare against ~384
 > Mbit/s. The next lever is the tactile side — `raw_size` down to `(320, 240)`
 > quarters its bandwidth, but the sensor's rectify calibration is made at
 > 640x480, so verify the tactile output before recording with it.
+
+> **Whether a bimanual rig fits on one USB 2.0 bus depends on the sensors.** It
+> is not a fixed answer, and that is the confusing part. Three customer machines
+> with exactly one `480M` root*hub could not open all six cameras; the
+> development machine, also six cameras on one `480M` root_hub, does. The
+> difference is how much each device \_asks* for, which varies between sensor
+> batches — so measure this rig rather than assuming either outcome. On the
+> machines that failed:
+>
+> | Cameras open                                                                                 | Reserved              | Result    |
+> | -------------------------------------------------------------------------------------------- | --------------------- | --------- |
+> | 4 tactile (`--robot.left_enable_wrist_camera=false --robot.right_enable_wrist_camera=false`) | 242 Mbit/s            | works     |
+> | 2 wrist (`--robot.enable_tactile=false`)                                                     | fits                  | works     |
+> | all 6 (default)                                                                              | 6 × 60.4 = 362 Mbit/s | **fails** |
+>
+> Those three commands are the bisect: run each half, and "a camera is broken"
+> becomes arithmetic. `altsetting 6` is 944 B per microframe, i.e. 60.4 Mbit/s
+> per sensor — against ~37 Mbit/s of actual 320x240 YUYV@30 data, so the devices
+> over-request by ~64% and the wrist cameras over-request far more. It fails at
+> the margin, which is why _which_ camera loses moves between runs and why it can
+> look intermittent.
+>
+> The working development rig carries `GSPS01A28Z…` sensors; the three that
+> failed carry `GSPS01A29Z…` and `GSPS01A31Z…`. If a newer batch reserves more
+> for the same stream, that is a UVC descriptor question for firmware, not
+> something this repo can configure around — worth measuring both and comparing
+> the `Alt=` values before accepting "the host is too small".
+>
+> Things that do **not** help, so that nobody spends a day on them again:
+>
+> - **A different physical port.** The cameras are USB 2.0; every port on one
+>   controller shares one bus.
+> - **`--robot.tactile_fps`.** It throttles the Python read loop only. The Xense
+>   SDK's `Sensor.create` takes no fps argument, so the USB stream is unchanged.
+> - **`uvcvideo quirks=128`** (`UVC_QUIRK_FIX_BANDWIDTH`). Tried on a failing rig;
+>   no change. It recomputes the reservation from `width × height × bpp`, and a
+>   compressed format has no meaningful bpp — so it has nothing to work with for
+>   the MJPEG wrist cameras, which are the biggest over-requesters.
+>
+> Until a second controller is fitted, record with the wrist cameras off:
+> tactile, pose and jaw are all still there, but the dataset then has no
+> `{side}_wrist` key, so decide before recording rather than mixing two
+> incompatible observation schemas.
 
 ## Calibration workflow (do once per device)
 
