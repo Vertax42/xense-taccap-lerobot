@@ -106,7 +106,18 @@ is built from **our** pybind under
 `src/lerobot/teleoperators/pico4/xensevr-pc-service-pybind/`, not from the
 submodule's own packaging, and its `lib/` is gitignored — `setup_env.sh` builds
 the client `.so` from submodule source and copies it in, so a source-only fix
-there propagates on `--install` with nothing binary to commit.
+there propagates on `--install` with nothing binary to commit. (The `.deb`
+ships a prebuilt `SDK/x64/libPXREARobotSDK.so`, but it is **not** a substitute
+— it lags the submodule tip, so the from-source build is load-bearing.)
+
+That submodule is **pruned to the Linux build** and marked `shallow = true` in
+`.gitmodules`: its Windows halves (`Redistributable/win`, `GrpcSDK/lib`,
+`SDKDemo/UnityBin/RobotWinDemo`, `SDK/win`, `Package/innosetup` — 417 MiB, all
+behind `if(WIN32)`) were deleted, taking a recursive clone from ~313 MiB to
+~112 MiB. Deliberately **kept**: `SDKDemo/UnityBin/RobotLinuxDemo` and
+`Redistributable/linux/*`, which ship inside the released `.deb`, the aarch64
+tree, and `GrpcSDK/include` — only `lib/` was Windows-only. Do not "finish the
+job" by deleting those; check `dpkg -L xensevr-pc-service` first.
 
 The Insight head camera and its `pyinsight` submodule are **gone**, as is
 `XenseVR-RobotVision-PC` (the ZED-M passthrough). Head vision is the Pico

@@ -41,7 +41,7 @@ bash Miniforge3-$(uname)-$(uname -m).sh
 
 ```bash
 git clone \
-  --recurse-submodules \
+  --recurse-submodules --shallow-submodules \
   https://github.com/Vertax42/xense-taccap-lerobot.git
 cd xense-taccap-lerobot
 ```
@@ -50,6 +50,18 @@ cd xense-taccap-lerobot
 
 > ```bash
 > git submodule update --init --recursive --progress
+> ```
+
+> **Why `--shallow-submodules`?** `XenseVR-PC-Service` dominates the download —
+> its packed history is several times the size of this repository, and most of
+> that is prebuilt binaries the Linux build never opens. `.gitmodules` marks it
+> `shallow = true`, so `--recurse-submodules` alone already fetches it at
+> depth 1; the flag above just makes that explicit. Nothing in
+> `setup_env.sh --install` needs its history. If you want to **develop** the
+> vendored SDK rather than only build it, take the full history with:
+>
+> ```bash
+> git submodule update --init --recursive --no-recommend-shallow
 > ```
 
 > **Cloned before the submodule URLs moved to HTTPS?** Then your checkout still
