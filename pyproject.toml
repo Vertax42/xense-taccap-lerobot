@@ -25,7 +25,7 @@ discord = "https://discord.gg/s3KuuzsPFb"
 
 [project]
 name = "lerobot"
-version = "0.5.1+xtac.0.0.3"
+version = "0.5.1+xtac.0.0.4"
 description = "🤗 LeRobot (xense fork, no-ML build): datasets / record / replay / teleoperate with vendor hardware"
 dynamic = ["readme"]
 license = { text = "Apache-2.0" }
