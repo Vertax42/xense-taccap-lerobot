@@ -40,11 +40,12 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-          # Deliberately NOT recursive. The submodules under third_party/ are
-          # the vendor SDKs (taccap-gripper, XenseVR-PC-Service); they need a
-          # native build and are not on PyPI, so CI cannot have them. Every
-          # module that touches them guards the import, and the tests for our
-          # own code are written to run without them.
+          # Deliberately NOT recursive. third_party/taccap-gripper is a vendor
+          # SDK that needs a native build and is not on PyPI, so CI cannot have
+          # it — nor the Pico4 bindings, which link a client SDK that only
+          # exists inside the xensevr-pc-service .deb. Every module that touches
+          # either guards the import, and the tests for our own code are written
+          # to run without them.
           submodules: false
 
       - name: Set up Python

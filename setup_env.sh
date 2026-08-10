@@ -283,17 +283,18 @@ install_xensevr_service() {
 
     local ARCH DEB_VER DEB_URL DEB
     ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"   # amd64 | arm64
-    DEB_VER="0.2.0"
+    DEB_VER="0.2.1"
 
-    # v0.2.0 ships amd64 only. Without this, an arm64 host would build a URL
+    # 0.2.x ships amd64 only. Without this, an arm64 host would build a URL
     # for an asset that does not exist and fail with a bare 404 — pinning it
     # to the last release that has an arm64 build is both truthful and
     # working, at the cost of no Pico camera support there.
     if [[ "$ARCH" == "arm64" && -z "${XENSEVR_DEB_URL:-}${XENSEVR_DEB:-}" ]]; then
         DEB_VER="0.1.0"
         echo "  NOTE: arm64 detected — pinning to v${DEB_VER}, the newest release with"
-        echo "        an arm64 asset. v0.2.0 (Pico camera support) is amd64-only; build"
-        echo "        it from source with RoboticsService/qt-gcc_aarch64.sh if you need it."
+        echo "        an arm64 asset. 0.2.x (Pico camera support) is amd64-only, and"
+        echo "        XenseVR-PC-Service dropped its aarch64 tree, so building one is"
+        echo "        no longer a matter of running a script in that repository."
     fi
 
     DEB_URL="${XENSEVR_DEB_URL:-https://github.com/Vertax42/XenseVR-PC-Service/releases/download/v${DEB_VER}/XenseVR-PC-Service_${DEB_VER}_${ARCH}.deb}"
@@ -310,7 +311,15 @@ install_xensevr_service() {
         DEB="${TMPDIR:-/tmp}/XenseVR-PC-Service_${DEB_VER}_${ARCH}.deb"
         echo "  Downloading ${ARCH} asset from:"
         echo "    $DEB_URL"
-        if ! curl -fL "$DEB_URL" -o "$DEB"; then
+        # ~116 MB. Retry and resume rather than losing the whole transfer to one
+        # dropped connection — and this package is now the only source of the
+        # client SDK the Python bindings link against, so a failure here is no
+        # longer something a local build can paper over.
+        local RETRY=(--retry 5 --retry-delay 2)
+        if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
+            RETRY+=(--retry-all-errors)   # curl >= 7.71; covers a mid-transfer drop
+        fi
+        if ! curl -fL "${RETRY[@]}" -C - "$DEB_URL" -o "$DEB"; then
             echo "  WARN: download failed — skipping service install."
             echo "  Get it manually from https://github.com/Vertax42/XenseVR-PC-Service/releases"
             echo "  then: sudo dpkg -i XenseVR-PC-Service_*_${ARCH}.deb"
@@ -344,27 +353,43 @@ install_pico4() {
     echo " XenseVR-PC-Service  →  xensevr_pc_service_sdk"
     echo "══════════════════════════════════════════"
 
-    local SDK_SRC="$PROJECT_ROOT/third_party/XenseVR-PC-Service"
     local PYBIND_DIR="$PROJECT_ROOT/src/lerobot/teleoperators/pico4/xensevr-pc-service-pybind"
 
-    if [[ ! -d "$SDK_SRC" ]]; then
-        echo "ERROR: $SDK_SRC not found."
-        echo "  Run: git submodule update --init third_party/XenseVR-PC-Service"
+    # Install the PC Service daemon (.deb) the Python SDK will talk to. It also
+    # ships the client SDK the bindings link against, which is why there is no
+    # longer a XenseVR-PC-Service submodule to compile: the .deb's
+    # libPXREARobotSDK.so is the same artifact that build used to produce, and
+    # keeping a 31 MiB checkout of prebuilt gRPC archives around to rebuild it
+    # cost more than it was worth. The trade is that an SDK source fix now has
+    # to travel through a .deb release rather than through `--install`.
+    install_xensevr_service
+
+    # Take the header and .so straight out of the installed package. SDK/x64 on
+    # amd64, SDK/arm64 on arm64 — the names come from the service's own install
+    # step, not from dpkg's architecture strings.
+    local SDK_ROOT="/opt/apps/roboticsservice/SDK"
+    local SDK_LIBDIR
+    case "$(dpkg --print-architecture 2>/dev/null || echo amd64)" in
+        arm64) SDK_LIBDIR="$SDK_ROOT/arm64" ;;
+        *)     SDK_LIBDIR="$SDK_ROOT/x64" ;;
+    esac
+
+    if [[ ! -f "$SDK_ROOT/include/PXREARobotSDK.h" || ! -f "$SDK_LIBDIR/libPXREARobotSDK.so" ]]; then
+        echo "ERROR: the XenseVR PC Service SDK is not on this host."
+        echo "  Expected:"
+        echo "    $SDK_ROOT/include/PXREARobotSDK.h"
+        echo "    $SDK_LIBDIR/libPXREARobotSDK.so"
+        echo "  Both come from the xensevr-pc-service .deb, which the step above"
+        echo "  installs. If that step warned about a failed download, fix that"
+        echo "  first — the bindings cannot be built without it."
         return 1
     fi
 
-    # Install the PC Service daemon (.deb) the Python SDK will talk to.
-    install_xensevr_service
-
-    # Build the C SDK
-    bash "$SDK_SRC/RoboticsService/PXREARobotSDK/build.sh"
-
-    # Copy headers and .so into the pybind directory
-    local CSDK_DIR="$SDK_SRC/RoboticsService/PXREARobotSDK"
+    # nlohmann is not in the .deb; it comes from conda (nlohmann_json in
+    # conda_environment.yaml), and the pybind CMakeLists find_package()s it.
     mkdir -p "$PYBIND_DIR/include" "$PYBIND_DIR/lib"
-    cp "$CSDK_DIR/PXREARobotSDK.h" "$PYBIND_DIR/include/"
-    cp -r "$CSDK_DIR/nlohmann" "$PYBIND_DIR/include/"
-    cp "$CSDK_DIR/build/libPXREARobotSDK.so" "$PYBIND_DIR/lib/"
+    cp "$SDK_ROOT/include/PXREARobotSDK.h" "$PYBIND_DIR/include/"
+    cp "$SDK_LIBDIR/libPXREARobotSDK.so" "$PYBIND_DIR/lib/"
 
     # Build and install the Python bindings
     pushd "$PYBIND_DIR" > /dev/null
