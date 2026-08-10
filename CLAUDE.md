@@ -110,14 +110,25 @@ there propagates on `--install` with nothing binary to commit. (The `.deb`
 ships a prebuilt `SDK/x64/libPXREARobotSDK.so`, but it is **not** a substitute
 — it lags the submodule tip, so the from-source build is load-bearing.)
 
-That submodule is **pruned to the Linux build** and marked `shallow = true` in
-`.gitmodules`: its Windows halves (`Redistributable/win`, `GrpcSDK/lib`,
-`SDKDemo/UnityBin/RobotWinDemo`, `SDK/win`, `Package/innosetup` — 417 MiB, all
-behind `if(WIN32)`) were deleted, taking a recursive clone from ~313 MiB to
-~112 MiB. Deliberately **kept**: `SDKDemo/UnityBin/RobotLinuxDemo` and
-`Redistributable/linux/*`, which ship inside the released `.deb`, the aarch64
-tree, and `GrpcSDK/include` — only `lib/` was Windows-only. Do not "finish the
-job" by deleting those; check `dpkg -L xensevr-pc-service` first.
+That submodule is **pruned to the x86_64 Linux build** and marked
+`shallow = true` in `.gitmodules`. Deleted: the Windows halves
+(`Redistributable/win`, `GrpcSDK/lib`, `SDKDemo/UnityBin/RobotWinDemo`,
+`SDK/win`, `Package/innosetup` — 417 MiB, all behind `if(WIN32)`) and the whole
+aarch64 tree (`Redistributable/linux_aarch64`, `Package/debPackAArch64`,
+`PXREAService/linux_aarch64`, the `build_aarch64.sh` scripts — arm64 is not
+supported). A recursive clone went from ~313 MiB to ~104 MiB.
+
+Deliberately **kept**, do not "finish the job" on these:
+
+- `SDKDemo/UnityBin/RobotLinuxDemo` and `Redistributable/linux/*` — they ship
+  inside the released `.deb`; check `dpkg -L xensevr-pc-service` before touching.
+- `GrpcSDK/include` — needed on Linux too (`PXREARobotSDK/CMakeLists.txt:46`);
+  only `lib/` was Windows-only.
+- the two `stacktrace_aarch64-inl.inc` — absl headers compiled into the x86_64
+  build, named for the target absl can unwind on, not for our arch.
+
+The `if(ISA_NAME STREQUAL "aarch64")` CMake branches were left in place and now
+point at deleted paths. That is intentional: arm64 is unsupported.
 
 The Insight head camera and its `pyinsight` submodule are **gone**, as is
 `XenseVR-RobotVision-PC` (the ZED-M passthrough). Head vision is the Pico
