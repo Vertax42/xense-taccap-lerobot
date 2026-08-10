@@ -95,8 +95,8 @@ ghcr.io/vertax42/xense-taccap-lerobot
 ```
 
 该包是 **public** 的，拉取不需要登录 —— 与仓库本身一致：镜像里的 XenseSDK 来自公开
-PyPI，XenseVR-PC-Service 的 `.deb` 来自公开 GitHub release，两个 SDK submodule 也都是
-公开仓库，没有一样是靠镜像才拿得到的。只有**推送**需要凭据。
+PyPI，XenseVR-PC-Service 的 `.deb` 来自公开 GitHub release，taccap-gripper submodule
+也是公开仓库，没有一样是靠镜像才拿得到的。只有**推送**需要凭据。
 
 第 2 节的 tar 交付方式**继续保留**：客户机完全离线时仍然只能走 tar。GHCR 的价值在
 后续升级 —— 21 GB 里绝大部分是 conda 层和 SDK 层，版本迭代时客户只需要拉变动的

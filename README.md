@@ -52,20 +52,6 @@ cd xense-taccap-lerobot
 > git submodule update --init --recursive --progress
 > ```
 
-> **No `--shallow-submodules` needed.** `XenseVR-PC-Service` dominates the
-> download — its full history is several times the size of this repository, and
-> most of that is prebuilt binaries the Linux build never opens. `.gitmodules`
-> marks it `shallow = true`, which both commands above already honour: you get
-> it at depth 1 without asking. Nothing in `setup_env.sh --install` needs its
-> history.
->
-> If you want to **develop** the vendored SDK rather than only build it, ask for
-> the full history explicitly:
->
-> ```bash
-> git submodule update --init --recursive --no-recommend-shallow
-> ```
-
 > **Cloned before the submodule URLs moved to HTTPS?** Then your checkout still
 > records the old `git@github.com:` addresses, and a machine without an SSH key
 > fails to fetch them — `git submodule update --init` will not fix it, because
@@ -83,16 +69,26 @@ cd xense-taccap-lerobot
 > point: a customer machine and a Docker build can fetch them without being
 > given a key.
 
-This repository uses `third_party/` git submodules to manage hardware SDK dependencies:
+This repository uses one `third_party/` git submodule for a hardware SDK:
 
-| Submodule                        | Installed package                               |
-| -------------------------------- | ----------------------------------------------- |
-| `third_party/taccap-gripper`     | `xense.taccap` (TacCap UMI tactile gripper SDK) |
-| `third_party/XenseVR-PC-Service` | `xensevr_pc_service_sdk` (Pico4 teleop/tracker) |
+| Submodule                    | Installed package                               |
+| ---------------------------- | ----------------------------------------------- |
+| `third_party/taccap-gripper` | `xense.taccap` (TacCap UMI tactile gripper SDK) |
 
-`taccap-gripper` is installed in editable mode.
-Changes made inside those initialized submodules are therefore picked up by the
-environment without rebuilding the main `lerobot` package.
+`taccap-gripper` is installed in editable mode, so changes made inside the
+initialized submodule are picked up by the environment without rebuilding the
+main `lerobot` package.
+
+> **`xensevr_pc_service_sdk` (Pico4 teleop/tracker) has no submodule.** Its
+> Python bindings live in-repo under
+> `src/lerobot/teleoperators/pico4/xensevr-pc-service-pybind/`, and the C SDK
+> they link against — `PXREARobotSDK.h` plus `libPXREARobotSDK.so` — is copied
+> straight out of the `xensevr-pc-service` `.deb` that the step below installs.
+> A 31 MiB checkout of Qt service sources and prebuilt gRPC archives used to be
+> cloned purely to rebuild a library that package already shipped.
+>
+> The consequence is worth knowing: a fix to the C SDK's **source** now reaches
+> you through a new `.deb` release, not through re-running `--install`.
 
 > `xensesdk` is **not** a submodule and is **not** vendored in-repo — it is
 > published to PyPI (cp312 manylinux wheel that bundles the patched
@@ -103,20 +99,25 @@ environment without rebuilding the main `lerobot` package.
 > `export XENSESDK_WHEEL=/path/to/xensesdk-*-cp312-*-linux_x86_64.whl`.
 
 > The **XenseVR PC Service daemon** (what the Pico4 teleop/tracker talks to) is
-> likewise shipped as a separate ~100 MB Debian package (installs to
+> likewise shipped as a separate ~110 MB Debian package (installs to
 > `/opt/apps/roboticsservice`). `setup_env.sh --install` installs it
 > automatically by **downloading the matching-arch asset** from the
-> [v0.2.0 release](https://github.com/Vertax42/XenseVR-PC-Service/releases/tag/v0.2.0)
+> [v0.2.1 release](https://github.com/Vertax42/XenseVR-PC-Service/releases/tag/v0.2.1)
 > (override the URL with `$XENSEVR_DEB_URL`), then runs `sudo dpkg -i`
 > (idempotent — same version is skipped). It no longer searches repo `dist/`
 > or `~/Downloads/`; set `$XENSEVR_DEB` only when you explicitly need an
 > offline or patched local package. Start it with
 > `/opt/apps/roboticsservice/runService.sh`.
 >
-> **arm64 hosts stay on v0.1.0.** v0.2.0 ships an amd64 asset only, so
+> This package is also where the Pico4 bindings get their C SDK, so a failed
+> download is no longer cosmetic — `--install` stops rather than build against
+> something that is not there.
+>
+> **arm64 hosts stay on v0.1.0.** 0.2.x ships an amd64 asset only, so
 > `setup_env.sh` pins arm64 to the newest release that has an arm64 build and
-> says so. Build v0.2.0 for arm64 yourself with
-> `RoboticsService/qt-gcc_aarch64.sh` if you need it there.
+> says so. There is no longer a supported way to produce a 0.2.x arm64 build:
+> XenseVR-PC-Service dropped its aarch64 tree, so it would mean restoring that
+> first. arm64 therefore has no Pico camera support.
 
 **Step 1.5:** 🧱 System packages. The hardware SDKs are **compiled** during
 Step 3, so a bare Ubuntu install is missing pieces the build needs:

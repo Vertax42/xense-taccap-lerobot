@@ -11,11 +11,18 @@ message(STATUS "OS_PLATFORM (ISA_NAME): ${ISA_NAME}")
 include(GNUInstallDirs) # Add this line
 find_package(pybind11 REQUIRED)
 
+# py_bindings.cpp parses the device state JSON with nlohmann. This used to
+# resolve by accident: setup_env.sh copied a vendored nlohmann/ out of the
+# XenseVR-PC-Service submodule into include/ alongside the SDK header. That
+# submodule is gone — the SDK now comes from the installed .deb, which does not
+# carry nlohmann — so the dependency has to be declared and comes from conda.
+find_package(nlohmann_json CONFIG REQUIRED)
+
 # Python Bindings for py_bindings.cpp
 pybind11_add_module(xensevr_pc_service_sdk MODULE bindings/py_bindings.cpp)
 
 # Link xensevr_pc_service_sdk module against pybind11
-target_link_libraries(xensevr_pc_service_sdk PRIVATE pybind11::module)
+target_link_libraries(xensevr_pc_service_sdk PRIVATE pybind11::module nlohmann_json::nlohmann_json)
 
 # Add include directories and link libraries for PXREARobotSDK to xensevr_pc_service_sdk target
 if(WIN32)

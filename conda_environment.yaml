@@ -15,6 +15,11 @@ dependencies:
   - pybind11
   - eigen=3.4.0
   - libstdcxx-ng # newer CXXABI symbols (xensevr_pc_service_sdk)
+  # py_bindings.cpp parses the Pico device-state JSON with nlohmann. It used to
+  # arrive vendored inside the XenseVR-PC-Service submodule; that submodule is
+  # gone and the .deb the SDK now comes from does not carry it, so it is a
+  # declared dependency. Pinned to the version that was vendored.
+  - nlohmann_json=3.11.3
   # ── taccap-gripper C++ build deps ─────────────────────────────────────────
   # OpenCV C++ headers (Camera component) + spdlog (shared logger) that the
   # lerobot env does not otherwise ship. libopencv is the C++ runtime only; the

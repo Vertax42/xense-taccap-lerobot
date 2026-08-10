@@ -68,12 +68,12 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-          # Unlike tests.yml, which skips them on purpose, the image build needs
-          # the vendor SDKs: Dockerfile.user bind-mounts the build context and
-          # fails immediately if third_party/taccap-gripper and
-          # third_party/XenseVR-PC-Service are absent, and setup_env.sh compiles
-          # both from source. Both submodules are public HTTPS checkouts, so
-          # they clone without credentials.
+          # Unlike tests.yml, which skips it on purpose, the image build needs
+          # the vendor SDK: Dockerfile.user bind-mounts the build context and
+          # fails immediately if third_party/taccap-gripper is absent, and
+          # setup_env.sh compiles it from source. It is a public HTTPS checkout,
+          # so it clones without credentials. The Pico4 client SDK no longer
+          # needs a submodule — setup_env.sh takes it from the .deb it installs.
           submodules: recursive
 
       - name: Resolve image name and tag

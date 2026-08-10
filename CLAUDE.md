@@ -119,44 +119,37 @@ enumeration cannot leak a hold. Closing matters: the SDK's joinable
 `CLAUDE.md`). `xense.taccap` is gripper-protocol + wrist-camera only; tactile
 _imaging_ (rectify) is handled at the Python level via the `xensesdk` wheel.
 
-`third_party/XenseVR-PC-Service` is the Pico4 service; `xensevr_pc_service_sdk`
-is built from **our** pybind under
-`src/lerobot/teleoperators/pico4/xensevr-pc-service-pybind/`, not from the
-submodule's own packaging, and its `lib/` is gitignored — `setup_env.sh` builds
-the client `.so` from submodule source and copies it in, so a source-only fix
-there propagates on `--install` with nothing binary to commit. (The `.deb`
-ships a prebuilt `SDK/x64/libPXREARobotSDK.so`, but it is **not** a substitute
-— it lags the submodule tip, so the from-source build is load-bearing.)
+**There is no XenseVR-PC-Service submodule.** `xensevr_pc_service_sdk` is built
+from **our** pybind under
+`src/lerobot/teleoperators/pico4/xensevr-pc-service-pybind/`, and the C SDK it
+links — `PXREARobotSDK.h` + `libPXREARobotSDK.so` — is copied by `setup_env.sh`
+out of the installed `xensevr-pc-service` `.deb`
+(`/opt/apps/roboticsservice/SDK/{include,x64}`; `arm64` on arm64 hosts). The
+pybind's `include/` and `lib/` are gitignored staging, not sources.
 
-That submodule is **pruned to the x86_64 Linux build** and marked
-`shallow = true` in `.gitmodules`. Deleted: the Windows halves
-(`Redistributable/win`, `GrpcSDK/lib`, `SDKDemo/UnityBin/RobotWinDemo`,
-`SDK/win`, `Package/innosetup` — 417 MiB, all behind `if(WIN32)`) and the whole
-aarch64 tree (`Redistributable/linux_aarch64`, `Package/debPackAArch64`,
-`PXREAService/linux_aarch64`, the `build_aarch64.sh` scripts — arm64 is not
-supported). A recursive clone went from ~313 MiB to ~104 MiB.
+A 31 MiB checkout of Qt service sources and prebuilt gRPC archives used to be
+cloned purely to rebuild a library that `.deb` already shipped. Removing it took
+a recursive clone from ~33 MiB to ~1.6 MiB and dropped a cmake + static-gRPC
+link from every install. **The trade:** an SDK _source_ fix now has to travel
+through a `.deb` release — bump `debPack/control`, rebuild, publish, and bump
+`DEB_VER` in `setup_env.sh`. Re-releasing the same version number does not
+work: `install_xensevr_service()` skips a `.deb` whose version already matches
+what dpkg reports.
 
-`SDKDemo/UnityBin/RobotLinuxDemo` is **untracked but not gone** — it ships in
-the `.deb`, so it moved to a release asset that
-`SDKDemo/UnityBin/fetch_linux_demo.sh` pulls on demand (sha256-checked,
-`ROBOT_LINUX_DEMO_URL` overridable for offline builds). The service CMake calls
-that script where it used to `copy_directory`. Do not re-add it to git.
+Two consequences worth remembering:
 
-Deliberately **kept**, do not "finish the job" on these:
+- **nlohmann comes from conda** (`nlohmann_json=3.11.3` in
+  `conda_environment.yaml`, `find_package`d by the pybind CMakeLists).
+  `py_bindings.cpp` needs `<nlohmann/json.hpp>`; it used to resolve by accident
+  because the submodule vendored a copy that `setup_env.sh` shovelled into
+  `include/`. The `.deb` does not carry it.
+- **`setup.py:sdk_version()` asks dpkg**, not a submodule tag. The `.deb` is not
+  a proxy for the SDK, it _is_ where the SDK came from — so `pip list` and the
+  installed daemon can no longer disagree.
 
-- `Redistributable/linux/*` — ships inside the released `.deb`; check
-  `dpkg -L xensevr-pc-service` before touching.
-- `GrpcSDK/include` — needed on Linux too (`PXREARobotSDK/CMakeLists.txt:46`);
-  only `lib/` was Windows-only.
-- `Redistributable/linux/grpc` (23.5 MiB of static `.a`) — a real build input,
-  and the archives are version-matched to the checked-in
-  `PXREAService.pb.cc`. Swapping in system gRPC without regenerating the stubs
-  is a runtime ABI break, not a compile error.
-- the two `stacktrace_aarch64-inl.inc` — absl headers compiled into the x86_64
-  build, named for the target absl can unwind on, not for our arch.
-
-The `if(ISA_NAME STREQUAL "aarch64")` CMake branches were left in place and now
-point at deleted paths. That is intentional: arm64 is unsupported.
+To work on the C SDK itself, clone `Vertax42/XenseVR-PC-Service` separately. Its
+Windows and aarch64 trees were pruned; the Linux Unity demo lives as a release
+asset that `SDKDemo/UnityBin/fetch_linux_demo.sh` fetches on demand.
 
 The Insight head camera and its `pyinsight` submodule are **gone**, as is
 `XenseVR-RobotVision-PC` (the ZED-M passthrough). Head vision is the Pico

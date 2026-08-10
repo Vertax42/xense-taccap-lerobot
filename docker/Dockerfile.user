@@ -12,9 +12,8 @@ ARG MINIFORGE_VERSION=25.3.1-0
 
 # Check the build context before downloading the large Conda/CUDA stack.
 RUN --mount=type=bind,source=.,target=/context,ro \
-    test -f /context/third_party/XenseVR-PC-Service/RoboticsService/PXREARobotSDK/build.sh \
-    && test -f /context/third_party/taccap-gripper/pyproject.toml \
-    || (echo "Missing git submodules. Run: git submodule update --init --recursive" >&2; exit 1)
+    test -f /context/third_party/taccap-gripper/pyproject.toml \
+    || (echo "Missing git submodule. Run: git submodule update --init --recursive" >&2; exit 1)
 
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Etc/UTC
@@ -109,19 +108,17 @@ COPY . /opt/lerobot
 
 # Reuse the canonical installer so Docker and bare-metal environments receive
 # exactly the same version checks, native bindings and vendor runtime fixes.
-# The XenseVR-PC-Service checkout is build-time only, and it is still 136 MiB
-# of Qt service sources and prebuilt gRPC archives after the upstream prune
-# (it was 756 MB before the Windows, aarch64 and Unity-demo payloads left the
-# repository). What survives the build lives elsewhere: the daemon is
-# installed by the .deb under
-# /opt/apps/roboticsservice, and the C SDK the Python bindings load is copied
-# into xensevr-pc-service-pybind/lib, which the extension records as its RPATH.
+# There is nothing to delete afterwards any more: the XenseVR-PC-Service
+# checkout used to be a 136 MiB build-time-only cost that had to be removed
+# here, and it is gone from the repository entirely — the daemon is installed
+# by the .deb under /opt/apps/roboticsservice, and the C SDK the Python
+# bindings load is copied out of that same package into
+# xensevr-pc-service-pybind/lib, which the extension records as its RPATH.
 # taccap-gripper stays: it is an editable install, so its sources are its
 # package.
 RUN bash ./setup_env.sh --install \
     && mamba clean -afy \
-    && rm -rf /root/.cache/pip /root/.cache/uv \
-    && rm -rf third_party/XenseVR-PC-Service
+    && rm -rf /root/.cache/pip /root/.cache/uv
 
 RUN install -m 0755 docker/entrypoint.sh /usr/local/bin/lerobot-entrypoint \
     && mkdir -p /data /root/.xensesdk "${HF_HOME}" "${TORCH_HOME}" "${TRITON_CACHE_DIR}" "${XDG_RUNTIME_DIR}" \

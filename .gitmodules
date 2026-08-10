@@ -1,11 +1,3 @@
-[submodule "third_party/XenseVR-PC-Service"]
-	path = third_party/XenseVR-PC-Service
-	url = https://github.com/Vertax42/XenseVR-PC-Service.git
-	# Its 12 commits carry ~77 MiB of blobs that HEAD no longer references, so a
-	# full clone pays for history nobody reads. Only a recommendation — override
-	# with `git submodule update --init --no-recommend-shallow` when you need to
-	# work on the SDK sources rather than just build them.
-	shallow = true
 [submodule "third_party/taccap-gripper"]
 	path = third_party/taccap-gripper
 	url = https://github.com/Vertax42/TacCap-Gripper.git
