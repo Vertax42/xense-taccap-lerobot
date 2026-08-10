@@ -241,10 +241,16 @@ install_xensevr_service() {
         fi
     fi
 
-    local WANT INSTALLED
+    local WANT INSTALLED STATUS
     WANT="$(dpkg-deb -f "$DEB" Version 2>/dev/null)"
+    # Check the status, not just the version. `dpkg -r` leaves the package in
+    # `deinstall ok config-files`, and dpkg-query still reports its version
+    # there — so matching on the version alone declares a daemon installed
+    # when /opt/apps/roboticsservice is gone, skips the install, and fails
+    # later somewhere far less obvious.
+    STATUS="$(dpkg-query -W -f='${Status}' xensevr-pc-service 2>/dev/null || true)"
     INSTALLED="$(dpkg-query -W -f='${Version}' xensevr-pc-service 2>/dev/null || true)"
-    if [[ -n "$INSTALLED" && "$INSTALLED" == "$WANT" ]]; then
+    if [[ "$STATUS" == "install ok installed" && "$INSTALLED" == "$WANT" ]]; then
         echo "  xensevr-pc-service $INSTALLED already installed — skipping."
         return 0
     fi
