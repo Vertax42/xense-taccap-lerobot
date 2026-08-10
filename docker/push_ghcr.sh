@@ -55,7 +55,7 @@ EOF
 
 # Mirrors the tag resolution in .github/workflows/docker-publish.yml. Keep the
 # two in step: a Docker tag cannot contain `+`, so the PEP 440 local version
-# `0.5.1+xtac.0.0.3` publishes as `0.0.3`.
+# `0.5.1+xtac.0.0.4` publishes as `0.0.4`.
 derive_tag_from_pyproject() {
   sed -n 's/^version *= *".*+xtac\.\([^"]*\)"/\1/p' "${ROOT_DIR}/pyproject.toml"
 }

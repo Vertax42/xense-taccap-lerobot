@@ -21,7 +21,7 @@ Xense 触觉/手腕相机、TacCap 串口、Pico4 和 CAN。请只在可信的�
 开发机在镜像构建、验证完成后执行：
 
 ```bash
-export LEROBOT_IMAGE_TAG=0.0.3
+export LEROBOT_IMAGE_TAG=0.0.4
 ./docker/package_customer_delivery.sh
 ```
 
@@ -36,7 +36,7 @@ export LEROBOT_IMAGE_TAG=0.0.3
 将整个目录复制到客户的新机器，然后使用普通用户执行：
 
 ```bash
-cd xense-taccap-lerobot-0.0.3-linux-amd64
+cd xense-taccap-lerobot-0.0.4-linux-amd64
 ./install_customer.sh
 ```
 
@@ -108,7 +108,7 @@ PyPI，XenseVR-PC-Service 的 `.deb` 来自公开 GitHub release，taccap-grippe
 
 ```dotenv
 LEROBOT_IMAGE=ghcr.io/vertax42/xense-taccap-lerobot
-LEROBOT_IMAGE_TAG=0.0.3
+LEROBOT_IMAGE_TAG=0.0.4
 ```
 
 `compose.yaml` 默认仍是本地构建的 `xense-taccap-lerobot`，只有设置了
@@ -131,7 +131,7 @@ docker compose run --rm xense-taccap
 
 ```bash
 export GHCR_TOKEN=<classic PAT，需要 write:packages>
-./docker/push_ghcr.sh 0.0.3
+./docker/push_ghcr.sh 0.0.4
 ```
 
 不传参数时同样从 `pyproject.toml` 推导 tag；默认连带推 `latest`，用 `--no-latest`
@@ -139,12 +139,16 @@ export GHCR_TOKEN=<classic PAT，需要 write:packages>
 
 ## 4. 初始化源码并构建
 
-镜像会编译三个硬件 SDK，因此构建前必须拉取 git submodule：
+构建前必须拉取 git submodule —— `third_party/taccap-gripper` 会在镜像里从源码编译：
 
 ```bash
 git submodule update --init --recursive --progress
 docker compose build
 ```
+
+> 只剩这一个 submodule。Pico4 的 `xensevr_pc_service_sdk` 仍然会编译（那是仓库内的
+> pybind），但它链接的 C SDK 直接取自安装好的 `xensevr-pc-service` `.deb`，不再需要
+> 克隆 `XenseVR-PC-Service`；`xensesdk` 则是 PyPI 上的预编译 wheel。
 
 首次构建需要下载 Conda/CUDA/Python 依赖并编译原生模块，耗时较长，镜像也会比较大。
 后续未修改 `conda_environment.yaml` 时会复用最耗时的依赖层。
