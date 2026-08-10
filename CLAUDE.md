@@ -47,6 +47,24 @@ the **second-to-last digit**: odd → left, even → right (`pico_tracker_side`)
 e.g. `…496G` → `6` → right. Trackers enumerate from the XenseVR PC service at
 connect (pin with `--robot.{left_,right_,}tracker_serial=<SN>` to bypass).
 
+### Dataset provenance — `meta/hardware.json`, not `robot.id`
+
+`--robot.id` is the station label (`taccap_0`, `taccap_1`; one per rig) — it
+reaches the logger prefix, the calibration filename and `str(robot)`, and is
+**not a dataset column** (`LeRobotDataset.create` takes only `robot_type`).
+Unlike upstream's optional `RobotConfig.id` it is **required**: both TacCap
+configs run `validate_robot_id()` in `__post_init__`, so a missing/blank id
+fails at CLI-parse time instead of a rig recording anonymously. Enforced there
+rather than by changing the base dataclass, which is upstream's.
+Identity travels in `meta/hardware.json`, written by `lerobot-record` right
+after `connect()` from `robot.hardware_manifest`: per unit, the gripper's
+**firmware** SN (`Cmd::GetSn`, not `mcu_serial`) plus its tactile serials, each
+tagged with `side` (which gripper), `finger` (which sensor on it) and the
+`observation_key` it feeds. Keep it a separate file — `meta/info.json` is
+upstream's schema and a fork-local key there collides on the next v5.x sync.
+Helpers live in `taccap_gripper/common.py`; a resume against different hardware
+warns and keeps the original file rather than misattributing recorded episodes.
+
 ### On mis-burned / mis-installed hardware
 
 Every discovery helper raises `ValueError` naming the offending hub/serial

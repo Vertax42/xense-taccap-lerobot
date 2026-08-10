@@ -38,7 +38,7 @@ auto-discover by rule.
 from dataclasses import dataclass, field
 
 from ..config import RobotConfig
-from ..taccap_gripper.common import build_head_camera_configs
+from ..taccap_gripper.common import build_head_camera_configs, validate_robot_id
 
 _SIDES = ("left", "right")
 
@@ -231,6 +231,9 @@ class BiTaccapGripperConfig(RobotConfig):
 
     def __post_init__(self):
         super().__post_init__()
+        # Required here, not left optional as upstream has it — see
+        # ``validate_robot_id``.
+        self.id = validate_robot_id(self.id)
         if self.role.strip().lower() not in (
             "leader",
             "master",

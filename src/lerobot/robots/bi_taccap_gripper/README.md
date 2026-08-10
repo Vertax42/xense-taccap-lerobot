@@ -156,6 +156,7 @@ Self-driven — **no `--teleop`**. Prerequisite: `xense.taccap` importable in th
 ```bash
 lerobot-teleoperate \
     --robot.type=bi_taccap_gripper \
+    --robot.id=taccap_0 \
     --fps=30 \
     --display_data=true
 ```
@@ -167,6 +168,7 @@ add `--robot.enable_tracker=false` to record tactile + gripper only:
 ```bash
 lerobot-record \
     --robot.type=bi_taccap_gripper \
+    --robot.id=taccap_0 \
     --robot.enable_head_camera=true \
     --dataset.repo_id=Xense/<dataset_name> \
     --dataset.single_task="Pick up the cube" \
@@ -180,6 +182,15 @@ lerobot-record \
 The head camera shares the XenseVR SDK connection with the Pico4 trackers, so the
 headset app must be running and streaming before enabling it. Turning the camera off
 does not drop the trackers' connection, and vice versa.
+
+`--robot.id` is a **required station label** (`taccap_0`, `taccap_1`, … — one per rig,
+and this bimanual rig is one rig): the config rejects a missing or blank one at
+CLI-parse time, before any device is touched. It is not a dataset column. What is
+recorded instead is `meta/hardware.json`, written at connect: each unit's gripper
+firmware SN plus the two tactile serials on that gripper, keyed by `side` (which
+gripper) and `finger` (which sensor on it) and carrying the observation key each sensor
+feeds. See
+[`../taccap_gripper/README.md`](../taccap_gripper/README.md#--robotid-required-and-the-hardware-manifest).
 
 ## 3D trajectory visualization
 

@@ -24,6 +24,7 @@ Example (bimanual TacCap-Gripper):
 ```shell
 lerobot-teleoperate \
     --robot.type=bi_taccap_gripper \
+    --robot.id=taccap_0 \
     --fps=30 \
     --display_data=true
 ```

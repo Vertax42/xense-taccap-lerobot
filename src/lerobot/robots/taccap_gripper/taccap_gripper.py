@@ -61,11 +61,13 @@ from .common import (
     POSE_KEYS,
     GripperReadGuard,
     HeadSkewMonitor,
+    build_hardware_manifest,
     build_head_camera_configs,
     build_tactile_camera_configs,
     build_wrist_camera_config,
     connect_cameras_parallel,
     disconnect_cameras_parallel,
+    hardware_manifest_unit,
     open_gripper,
     prewarm_tactile_config_cache,
     read_head_pose,
@@ -116,7 +118,7 @@ class TaccapGripper(Robot):
     def __init__(self, config: TaccapGripperConfig):
         super().__init__(config)
         self.config = config
-        self.logger = get_logger(f"TaccapGripper-{config.id or 'default'}")
+        self.logger = get_logger(f"TaccapGripper-{config.id}")
         self._role = disco.normalize_role(config.role)
 
         # Tactile discovery now pairs sensors to a gripper by USB hub, so it also
@@ -161,7 +163,7 @@ class TaccapGripper(Robot):
                 {self._side: config.tracker_serial},
                 lambda: Pico4TrackerReader.list_serial_numbers(
                     device_wait_timeout=config.tracker_wait_timeout,
-                    logger_name=config.id or "robot",
+                    logger_name=config.id,
                 ),
             )[self._side]
             source = "manual" if (config.tracker_serial or "").strip() else "rule"
@@ -242,6 +244,33 @@ class TaccapGripper(Robot):
         if self.config.enable_head_camera:
             configs.update(build_head_camera_configs(self.config))
         return configs
+
+    @property
+    def hardware_manifest(self) -> dict[str, Any]:
+        """Which physical device this unit is, for the recording to carry along.
+
+        Read it **while connected**: the gripper serial is the firmware SN read
+        over the wire at ``connect()``, and ``_release()`` drops the endpoints
+        again, so before/after it comes out ``None``. Tactile serials come from
+        construction-time discovery and are always there.
+
+        ``--robot.id`` is only a station label; this is the identity. One unit,
+        so one entry in ``units`` — same shape as the bimanual manifest, which
+        keeps anything reading these datasets from needing two code paths.
+        """
+        return build_hardware_manifest(
+            robot_type=self.name,
+            robot_id=self.id,
+            role=self._role,
+            units=[
+                hardware_manifest_unit(
+                    self._side,
+                    endpoints=self._endpoints,
+                    tactile_serials=self._disc_tactiles.get(self._side, {}),
+                    key_prefix="",
+                )
+            ],
+        )
 
     # ------------------------------------------------------------------ schema
 
@@ -413,7 +442,7 @@ class TaccapGripper(Robot):
                 tracker_to_ee_pos=ee_pos,
                 tracker_to_ee_quat=ee_quat,
                 device_wait_timeout=self.config.tracker_wait_timeout,
-                logger_name=self.config.id or "robot",
+                logger_name=self.config.id,
             )
             # No init-pose alignment: poses stay in the world frame and the
             # deployment robot's base is cancelled downstream by the

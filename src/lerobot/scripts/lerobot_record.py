@@ -25,6 +25,7 @@ Example (bimanual TacCap-Gripper):
 ```shell
 lerobot-record \
     --robot.type=bi_taccap_gripper \
+    --robot.id=taccap_0 \
     --dataset.repo_id=<my_username>/<my_dataset_name> \
     --dataset.num_episodes=50 \
     --dataset.single_task="Pick up the cube" \
@@ -71,6 +72,7 @@ from lerobot.robots import (  # noqa: F401
     make_robot_from_config,
     taccap_gripper,
 )
+from lerobot.robots.taccap_gripper.common import write_hardware_manifest
 from lerobot.robots.taccap_gripper.visualization import TaccapTrajectoryViz
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -472,6 +474,18 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         robot.connect()
         if teleop is not None:
             teleop.connect()
+
+        # Which physical devices produced this dataset. It has to happen here:
+        # the gripper firmware SNs are read over the wire at connect(), and the
+        # dataset itself only stores ``robot_type`` — neither ``robot.id`` nor a
+        # serial reaches meta/info.json, so without this the episodes are not
+        # traceable to a rig at all. Robots that expose no manifest (anything but
+        # TacCap) are skipped.
+        # (asked of the class, not the instance: ``getattr(robot, ...)`` with a
+        # default would also swallow an AttributeError raised *inside* the
+        # property, turning a bug into a silently missing manifest.)
+        if hasattr(type(robot), "hardware_manifest"):
+            write_hardware_manifest(dataset.root, robot.hardware_manifest, logger)
 
         # 3D pose + trajectory overlay (no-op if the device emits no tcp.* poses).
         # The viewer is laid out from display_features when the robot has one —
