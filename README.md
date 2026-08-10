@@ -104,6 +104,21 @@ environment without rebuilding the main `lerobot` package.
 > says so. Build v0.2.0 for arm64 yourself with
 > `RoboticsService/qt-gcc_aarch64.sh` if you need it there.
 
+**Step 1.5:** 🧱 System packages. The hardware SDKs are **compiled** during
+Step 3, so a bare Ubuntu install is missing pieces the build needs:
+
+```bash
+sudo apt install -y build-essential cmake pkg-config git curl libudev-dev libusb-1.0-0-dev
+sudo apt install -y v4l-utils usbutils   # not needed to run, but this is how you debug a camera
+```
+
+`setup_env.sh` checks for these before it starts and stops with the exact command
+if any are missing — the build would otherwise fail much later, inside CMake or
+the linker, where the cause is far harder to see. `v4l-utils` and `usbutils` are
+the diagnostic half: `v4l2-ctl --list-formats-ext` and `lsusb -t` are what you
+reach for when a camera will not open, which on this hardware is the most common
+bring-up problem, so a host without them is a host you cannot debug.
+
 **Step 2:** 🐍 Create and activate the mamba environment:
 
 ```bash

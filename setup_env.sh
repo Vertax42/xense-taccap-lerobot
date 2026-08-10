@@ -31,6 +31,83 @@ fi
 
 echo "Operating system check passed: $OS_NAME $OS_VERSION"
 
+# ── System packages ───────────────────────────────────────────────────────────
+# The vendor SDKs are compiled here, so a bare Ubuntu install is missing things
+# the build needs — and the failure lands much later, deep in a CMake or linker
+# error that reads like a bug in the SDK rather than a missing apt package.
+# Customers hit this repeatedly; check up front and print the one command that
+# fixes it.
+#
+# Deliberately split: REQUIRED stops the run, RECOMMENDED only warns. v4l-utils
+# and usbutils are not needed to *run* anything — they are how you diagnose a
+# camera that will not open (`v4l2-ctl --list-formats-ext`, `lsusb -t`), which
+# on this hardware is the single most common bring-up problem, so a host without
+# them is a host that cannot be debugged.
+check_system_packages() {
+    local -a missing_required=() missing_recommended=()
+
+    # command → package that provides it
+    local -a required=(
+        "cmake:cmake"
+        "g++:build-essential"
+        "make:build-essential"
+        "pkg-config:pkg-config"
+        "git:git"
+        "curl:curl"
+    )
+    # Not ffmpeg: torchcodec loads the FFmpeg *shared libraries*, which the conda
+    # env supplies, so a host without the system binary works fine — warning
+    # about it would be a false alarm, and false alarms teach people to skip the
+    # real ones.
+    local -a recommended=(
+        "v4l2-ctl:v4l-utils"
+        "lsusb:usbutils"
+    )
+
+    local entry cmd pkg
+    for entry in "${required[@]}"; do
+        cmd="${entry%%:*}"; pkg="${entry##*:}"
+        command -v "$cmd" &>/dev/null || missing_required+=("$pkg")
+    done
+    for entry in "${recommended[@]}"; do
+        cmd="${entry%%:*}"; pkg="${entry##*:}"
+        command -v "$cmd" &>/dev/null || missing_recommended+=("$pkg")
+    done
+
+    # Header-only packages expose no command; ask pkg-config, which is itself in
+    # the required list above so this is meaningful by the time we get here.
+    if command -v pkg-config &>/dev/null; then
+        pkg-config --exists libudev || missing_required+=("libudev-dev")
+        pkg-config --exists libusb-1.0 || missing_required+=("libusb-1.0-0-dev")
+    fi
+
+    # De-duplicate (build-essential is named twice above).
+    local -a uniq_required=() uniq_recommended=()
+    mapfile -t uniq_required < <(printf '%s\n' "${missing_required[@]}" | sort -u | sed '/^$/d')
+    mapfile -t uniq_recommended < <(printf '%s\n' "${missing_recommended[@]}" | sort -u | sed '/^$/d')
+
+    if [[ ${#uniq_recommended[@]} -gt 0 ]]; then
+        echo ""
+        echo "  NOTE: missing diagnostic tools — install them before you need them:"
+        echo "    sudo apt install -y ${uniq_recommended[*]}"
+        echo "  (v4l-utils/usbutils are what you use to work out why a camera will not open.)"
+    fi
+
+    if [[ ${#uniq_required[@]} -gt 0 ]]; then
+        echo ""
+        echo "ERROR: the hardware SDK build needs system packages that are not installed:"
+        echo "    sudo apt install -y ${uniq_required[*]}"
+        echo ""
+        echo "Install them and re-run this script. Continuing would fail later inside"
+        echo "CMake or the linker, where the cause is much harder to see."
+        exit 1
+    fi
+
+    echo "System package check passed."
+}
+
+check_system_packages
+
 # Large PyPI wheels such as torch can exceed uv's default 30s timeout on
 # slower links. Allow callers to override, but use a safer default for setup.
 export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-300}"
