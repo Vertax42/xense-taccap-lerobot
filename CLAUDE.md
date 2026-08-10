@@ -118,12 +118,22 @@ aarch64 tree (`Redistributable/linux_aarch64`, `Package/debPackAArch64`,
 `PXREAService/linux_aarch64`, the `build_aarch64.sh` scripts — arm64 is not
 supported). A recursive clone went from ~313 MiB to ~104 MiB.
 
+`SDKDemo/UnityBin/RobotLinuxDemo` is **untracked but not gone** — it ships in
+the `.deb`, so it moved to a release asset that
+`SDKDemo/UnityBin/fetch_linux_demo.sh` pulls on demand (sha256-checked,
+`ROBOT_LINUX_DEMO_URL` overridable for offline builds). The service CMake calls
+that script where it used to `copy_directory`. Do not re-add it to git.
+
 Deliberately **kept**, do not "finish the job" on these:
 
-- `SDKDemo/UnityBin/RobotLinuxDemo` and `Redistributable/linux/*` — they ship
-  inside the released `.deb`; check `dpkg -L xensevr-pc-service` before touching.
+- `Redistributable/linux/*` — ships inside the released `.deb`; check
+  `dpkg -L xensevr-pc-service` before touching.
 - `GrpcSDK/include` — needed on Linux too (`PXREARobotSDK/CMakeLists.txt:46`);
   only `lib/` was Windows-only.
+- `Redistributable/linux/grpc` (23.5 MiB of static `.a`) — a real build input,
+  and the archives are version-matched to the checked-in
+  `PXREAService.pb.cc`. Swapping in system gRPC without regenerating the stubs
+  is a runtime ABI break, not a compile error.
 - the two `stacktrace_aarch64-inl.inc` — absl headers compiled into the x86_64
   build, named for the target absl can unwind on, not for our arch.
 
