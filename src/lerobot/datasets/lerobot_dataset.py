@@ -15,7 +15,9 @@
 # limitations under the License.
 import concurrent.futures
 import contextlib
+import copy
 import logging
+import os
 import shutil
 import tempfile
 import time
@@ -40,7 +42,9 @@ from lerobot.datasets.utils import (
     DEFAULT_EPISODES_PATH,
     DEFAULT_FEATURES,
     DEFAULT_IMAGE_PATH,
+    DEFAULT_TASKS_PATH,
     INFO_PATH,
+    STATS_PATH,
     _validate_feature_names,
     check_delta_timestamps,
     check_version_compatibility,
@@ -82,6 +86,23 @@ from lerobot.datasets.video_utils import (
 from lerobot.utils.constants import HF_LEROBOT_HOME
 
 CODEBASE_VERSION = "v3.0"
+
+
+def _backup_path(path: Path, backup_dir: Path, backups: dict[Path, Path | None]) -> None:
+    """Snapshot an existing file before an episode save mutates it.
+
+    New files are recorded with ``None`` so a failed save can delete them; existing
+    files are copied once into ``backup_dir`` so a failed save can restore them.
+    """
+    path = Path(path)
+    if path in backups:
+        return
+    if path.exists():
+        backup = backup_dir / f"{len(backups):04d}-{path.name}.bak"
+        shutil.copy2(path, backup)
+        backups[path] = backup
+    else:
+        backups[path] = None
 
 
 class LeRobotDatasetMetadata:
@@ -1239,6 +1260,79 @@ class LeRobotDataset(torch.utils.data.Dataset):
 
         self.episode_buffer["size"] += 1
 
+    def _snapshot_save_state(self) -> dict:
+        """Capture in-memory dataset state before an episode save starts."""
+        episodes_dir = self.root / "meta" / "episodes"
+        return {
+            "latest_episode": self.latest_episode,
+            "current_file_start_frame": self._current_file_start_frame,
+            "recorded_frames": self._recorded_frames,
+            "writer_closed_for_reading": self._writer_closed_for_reading,
+            "episodes_since_last_encoding": self.episodes_since_last_encoding,
+            "preexisting_episodes": {path for path in episodes_dir.rglob("*.parquet") if episodes_dir.exists()},
+            "meta_latest_episode": self.meta.latest_episode,
+            "meta_metadata_buffer": list(self.meta.metadata_buffer),
+            "meta_tasks": self.meta.tasks.copy() if self.meta.tasks is not None else None,
+            "meta_info": copy.deepcopy(self.meta.info) if self.meta.info is not None else None,
+            "meta_stats": copy.deepcopy(self.meta.stats) if self.meta.stats is not None else None,
+            "meta_episodes": self.meta.episodes,
+        }
+
+    def _rollback_save_transaction(self, backups: dict[Path, Path | None], prev_state: dict) -> None:
+        """Restore files and in-memory state after a failed episode save."""
+        with contextlib.suppress(Exception):
+            self._close_writer()
+        with contextlib.suppress(Exception):
+            self.meta._close_writer()
+
+        for path, backup in backups.items():
+            try:
+                if backup is None:
+                    if path.exists():
+                        path.unlink()
+                else:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(backup, path)
+            except Exception as e:  # pragma: no cover - best-effort rollback
+                logging.error(f"Failed to rollback dataset file {path}: {e}")
+
+        # Metadata writes may create a fresh episodes parquet. Since every
+        # pre-existing episodes parquet was backed up above, any file here that is
+        # not in `backups` was created by this failed transaction and can be removed.
+        episodes_dir = self.root / "meta" / "episodes"
+        if episodes_dir.exists():
+            for path in episodes_dir.rglob("*.parquet"):
+                if path not in backups and path not in prev_state["preexisting_episodes"]:
+                    with contextlib.suppress(FileNotFoundError):
+                        path.unlink()
+
+        self.latest_episode = prev_state["latest_episode"]
+        self._current_file_start_frame = prev_state["current_file_start_frame"]
+        self._recorded_frames = prev_state["recorded_frames"]
+        self._writer_closed_for_reading = prev_state["writer_closed_for_reading"]
+        self.episodes_since_last_encoding = prev_state["episodes_since_last_encoding"]
+        self.writer = None
+        self.meta.writer = None
+        self.meta.latest_episode = prev_state["meta_latest_episode"]
+        self.meta.metadata_buffer = prev_state["meta_metadata_buffer"]
+        self.meta.tasks = prev_state["meta_tasks"]
+        self.meta.info = prev_state["meta_info"]
+        self.meta.stats = prev_state["meta_stats"]
+        self.meta.episodes = prev_state["meta_episodes"]
+
+    @staticmethod
+    def _atomic_write_parquet(path: Path, table: pa.Table) -> None:
+        """Write a parquet table via a same-directory temp file and atomic replace."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".parquet.tmp", dir=path.parent)
+        os.close(fd)
+        try:
+            pq.write_table(table, tmp_path, compression="snappy", use_dictionary=True)
+            os.replace(tmp_path, path)
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
     def save_episode(
         self,
         episode_data: dict | None = None,
@@ -1271,103 +1365,141 @@ class LeRobotDataset(torch.utils.data.Dataset):
         episode_buffer["index"] = np.arange(self.meta.total_frames, self.meta.total_frames + episode_length)
         episode_buffer["episode_index"] = np.full((episode_length,), episode_index)
 
-        # Update tasks and task indices with new tasks if any
-        self.meta.save_episode_tasks(episode_tasks)
+        backup_dir = Path(tempfile.mkdtemp(prefix=".lerobot_episode_txn_", dir=self.root))
+        backups: dict[Path, Path | None] = {}
+        staged_videos: dict[str, Path] = {}
+        prev_state = self._snapshot_save_state()
+        try:
+            # Tasks are metadata too. Snapshot the file before the first disk write
+            # so a failure later in this save leaves the old dataset untouched.
+            _backup_path(self.root / DEFAULT_TASKS_PATH, backup_dir, backups)
+            self.meta.save_episode_tasks(episode_tasks)
 
-        # Given tasks in natural language, find their corresponding task indices
-        episode_buffer["task_index"] = np.array([self.meta.get_task_index(task) for task in tasks])
+            # Given tasks in natural language, find their corresponding task indices
+            episode_buffer["task_index"] = np.array([self.meta.get_task_index(task) for task in tasks])
 
-        for key, ft in self.features.items():
-            # index, episode_index, task_index are already processed above, and image and video
-            # are processed separately by storing image path and frame info as meta data
-            if key in ["index", "episode_index", "task_index"] or ft["dtype"] in ["image", "video"]:
-                continue
-            episode_buffer[key] = np.stack(episode_buffer[key])
+            for key, ft in self.features.items():
+                # index, episode_index, task_index are already processed above, and image and video
+                # are processed separately by storing image path and frame info as meta data
+                if key in ["index", "episode_index", "task_index"] or ft["dtype"] in ["image", "video"]:
+                    continue
+                episode_buffer[key] = np.stack(episode_buffer[key])
 
-        # Wait for image writer to end, so that episode stats over images can be computed
-        self._wait_image_writer()
+            # Wait for image writer to end, so that episode stats over images can be computed
+            self._wait_image_writer()
 
-        has_video_keys = len(self.meta.video_keys) > 0
-        use_streaming = self._streaming_encoder is not None and has_video_keys
-        use_batched_encoding = self.batch_encoding_size > 1
+            has_video_keys = len(self.meta.video_keys) > 0
+            use_streaming = self._streaming_encoder is not None and has_video_keys
+            use_batched_encoding = self.batch_encoding_size > 1
 
-        if use_streaming:
-            # Compute stats for non-video features only (video stats come from encoder)
-            non_video_buffer = {
-                k: v for k, v in episode_buffer.items() if self.features.get(k, {}).get("dtype") not in ("video",)
-            }
-            non_video_features = {k: v for k, v in self.features.items() if v["dtype"] != "video"}
-            ep_stats = compute_episode_stats(non_video_buffer, non_video_features)
-        else:
-            ep_stats = compute_episode_stats(episode_buffer, self.features)
-
-        ep_metadata = self._save_episode_data(episode_buffer)
-
-        if use_streaming:
-            # Finish streaming encoding and collect results
-            streaming_results = self._streaming_encoder.finish_episode()
-            for video_key in self.meta.video_keys:
-                temp_path, video_stats = streaming_results[video_key]
-                if video_stats is not None:
-                    # Format stats same as compute_episode_stats: normalize to [0,1], reshape to (C,1,1)
-                    ep_stats[video_key] = {
-                        k: v if k == "count" else np.squeeze(v.reshape(1, -1, 1, 1) / 255.0, axis=0)
-                        for k, v in video_stats.items()
-                    }
-                ep_metadata.update(self._save_episode_video(video_key, episode_index, temp_path=temp_path))
-        elif has_video_keys and not use_batched_encoding:
-            num_cameras = len(self.meta.video_keys)
-            if parallel_encoding and num_cameras > 1:
-                # TODO(Steven): Ideally we would like to control the number of threads per encoding such that:
-                # num_cameras * num_threads = (total_cpu -1)
-                with concurrent.futures.ProcessPoolExecutor(max_workers=num_cameras) as executor:
-                    future_to_key = {
-                        executor.submit(
-                            _encode_video_worker,
-                            video_key,
-                            episode_index,
-                            self.root,
-                            self.fps,
-                            self.vcodec,
-                            self._encoder_threads,
-                        ): video_key
-                        for video_key in self.meta.video_keys
-                    }
-
-                    results = {}
-                    for future in concurrent.futures.as_completed(future_to_key):
-                        video_key = future_to_key[future]
-                        try:
-                            temp_path = future.result()
-                            results[video_key] = temp_path
-                        except Exception as exc:
-                            logging.error(f"Video encoding failed for {video_key}: {exc}")
-                            raise exc
-
-                for video_key in self.meta.video_keys:
-                    temp_path = results[video_key]
-                    ep_metadata.update(self._save_episode_video(video_key, episode_index, temp_path=temp_path))
+            if use_streaming:
+                # Compute stats for non-video features only (video stats come from encoder)
+                non_video_buffer = {
+                    k: v for k, v in episode_buffer.items() if self.features.get(k, {}).get("dtype") not in ("video",)
+                }
+                non_video_features = {k: v for k, v in self.features.items() if v["dtype"] != "video"}
+                ep_stats = compute_episode_stats(non_video_buffer, non_video_features)
             else:
+                ep_stats = compute_episode_stats(episode_buffer, self.features)
+
+            # Stage every video before touching any final data file. If encoding
+            # fails, the only files to clean up are the staging directories.
+            if use_streaming:
+                streaming_results = self._streaming_encoder.finish_episode()
                 for video_key in self.meta.video_keys:
-                    ep_metadata.update(self._save_episode_video(video_key, episode_index))
+                    temp_path, video_stats = streaming_results[video_key]
+                    if video_stats is not None:
+                        # Format stats same as compute_episode_stats: normalize to [0,1], reshape to (C,1,1)
+                        ep_stats[video_key] = {
+                            k: v if k == "count" else np.squeeze(v.reshape(1, -1, 1, 1) / 255.0, axis=0)
+                            for k, v in video_stats.items()
+                        }
+                    staged_videos[video_key] = temp_path
+            elif has_video_keys and not use_batched_encoding:
+                num_cameras = len(self.meta.video_keys)
+                if parallel_encoding and num_cameras > 1:
+                    # TODO(Steven): Ideally we would like to control the number of threads per encoding such that:
+                    # num_cameras * num_threads = (total_cpu -1)
+                    with concurrent.futures.ProcessPoolExecutor(max_workers=num_cameras) as executor:
+                        future_to_key = {
+                            executor.submit(
+                                _encode_video_worker,
+                                video_key,
+                                episode_index,
+                                self.root,
+                                self.fps,
+                                self.vcodec,
+                                self._encoder_threads,
+                            ): video_key
+                            for video_key in self.meta.video_keys
+                        }
 
-        # `meta.save_episode` need to be executed after encoding the videos
-        self.meta.save_episode(episode_index, episode_length, episode_tasks, ep_stats, ep_metadata)
+                        results = {}
+                        for future in concurrent.futures.as_completed(future_to_key):
+                            video_key = future_to_key[future]
+                            try:
+                                temp_path = future.result()
+                                results[video_key] = temp_path
+                            except Exception as exc:
+                                logging.error(f"Video encoding failed for {video_key}: {exc}")
+                                raise exc
 
-        if has_video_keys and use_batched_encoding:
-            # Check if we should trigger batch encoding
-            self.episodes_since_last_encoding += 1
-            if self.episodes_since_last_encoding == self.batch_encoding_size:
-                start_ep = self.num_episodes - self.batch_encoding_size
-                end_ep = self.num_episodes
-                self._batch_save_episode_video(start_ep, end_ep)
-                self.episodes_since_last_encoding = 0
+                    for video_key in self.meta.video_keys:
+                        staged_videos[video_key] = results[video_key]
+                else:
+                    for video_key in self.meta.video_keys:
+                        staged_videos[video_key] = self._encode_temporary_episode_video(video_key, episode_index)
 
-        if not episode_data:
-            # Reset episode buffer and clean up temporary images (if not already deleted during video encoding)
-            self.clear_episode_buffer(delete_images=len(self.meta.image_keys) > 0)
+            # Snapshot the final metadata/video files that the commit below can mutate.
+            _backup_path(self.root / INFO_PATH, backup_dir, backups)
+            _backup_path(self.root / STATS_PATH, backup_dir, backups)
+            episodes_dir = self.root / "meta" / "episodes"
+            if episodes_dir.exists():
+                for path in episodes_dir.rglob("*.parquet"):
+                    _backup_path(path, backup_dir, backups)
 
-    def _batch_save_episode_video(self, start_episode: int, end_episode: int | None = None) -> None:
+            ep_metadata, _ = self._save_episode_data(episode_buffer, backup_dir, backups)
+
+            for video_key, temp_path in staged_videos.items():
+                video_metadata, _ = self._save_episode_video(
+                    video_key,
+                    episode_index,
+                    temp_path=temp_path,
+                    backup_dir=backup_dir,
+                    backups=backups,
+                )
+                ep_metadata.update(video_metadata)
+
+            # `meta.save_episode` need to be executed after the data and final videos exist.
+            self.meta.save_episode(episode_index, episode_length, episode_tasks, ep_stats, ep_metadata)
+
+            if has_video_keys and use_batched_encoding:
+                # Check if we should trigger batch encoding
+                self.episodes_since_last_encoding += 1
+                if self.episodes_since_last_encoding == self.batch_encoding_size:
+                    start_ep = self.num_episodes - self.batch_encoding_size
+                    end_ep = self.num_episodes
+                    self._batch_save_episode_video(start_ep, end_ep, backup_dir, backups)
+                    self.episodes_since_last_encoding = 0
+
+            if not episode_data:
+                # Reset episode buffer and clean up temporary images (if not already deleted during video encoding)
+                self.clear_episode_buffer(delete_images=len(self.meta.image_keys) > 0)
+        except Exception:
+            self._rollback_save_transaction(backups, prev_state)
+            for temp_path in staged_videos.values():
+                shutil.rmtree(temp_path.parent, ignore_errors=True)
+            raise
+        finally:
+            shutil.rmtree(backup_dir, ignore_errors=True)
+
+    def _batch_save_episode_video(
+        self,
+        start_episode: int,
+        end_episode: int | None = None,
+        backup_dir: Path | None = None,
+        backups: dict[Path, Path | None] | None = None,
+    ) -> None:
         """
         Batch save videos for multiple episodes.
 
@@ -1408,17 +1540,30 @@ class LeRobotDataset(torch.utils.data.Dataset):
             # Save the current episode's video metadata to the dataframe
             video_ep_metadata = {}
             for video_key in self.meta.video_keys:
-                video_ep_metadata.update(self._save_episode_video(video_key, ep_idx))
+                video_metadata, _ = self._save_episode_video(
+                    video_key,
+                    ep_idx,
+                    backup_dir=backup_dir,
+                    backups=backups,
+                )
+                video_ep_metadata.update(video_metadata)
             video_ep_metadata.pop("episode_index")
             video_ep_df = pd.DataFrame(video_ep_metadata, index=[ep_idx]).convert_dtypes(
                 dtype_backend="pyarrow"
             )  # allows NaN values along with integers
 
             episode_df = episode_df.combine_first(video_ep_df)
+            if backup_dir is not None and backups is not None:
+                _backup_path(episode_df_path, backup_dir, backups)
             episode_df.to_parquet(episode_df_path)
             self.meta.episodes = load_episodes(self.root)
 
-    def _save_episode_data(self, episode_buffer: dict) -> dict:
+    def _save_episode_data(
+        self,
+        episode_buffer: dict,
+        backup_dir: Path | None = None,
+        backups: dict[Path, Path | None] | None = None,
+    ) -> tuple[dict, Path]:
         """Save episode data to a parquet file and update the Hugging Face dataset of frames data.
 
         This function processes episodes data from a buffer, converts it into a Hugging Face dataset,
@@ -1481,14 +1626,20 @@ class LeRobotDataset(torch.utils.data.Dataset):
         ep_dict["data/chunk_index"] = chunk_idx
         ep_dict["data/file_index"] = file_idx
 
-        # Write the resulting dataframe from RAM to disk
+        # Write the resulting dataframe from RAM to disk. The file is replaced
+        # atomically from a same-directory temp file, so a failed write cannot
+        # leave a half-appended parquet behind.
         path = self.root / self.meta.data_path.format(chunk_index=chunk_idx, file_index=file_idx)
-        path.parent.mkdir(parents=True, exist_ok=True)
-
         table = ep_dataset.with_format("arrow")[:]
-        if not self.writer:
-            self.writer = pq.ParquetWriter(path, schema=table.schema, compression="snappy", use_dictionary=True)
-        self.writer.write_table(table)
+        self._close_writer()
+        if path.exists():
+            existing_table = pq.read_table(path)
+            table = pa.concat_tables([existing_table, table])
+        if backup_dir is not None and backups is not None:
+            _backup_path(path, backup_dir, backups)
+        self._atomic_write_parquet(path, table)
+        self.writer = None
+        self._writer_closed_for_reading = False
 
         metadata = {
             "data/chunk_index": chunk_idx,
@@ -1506,14 +1657,16 @@ class LeRobotDataset(torch.utils.data.Dataset):
         # Update recorded frames count for efficient length tracking
         self._recorded_frames += ep_num_frames
 
-        return metadata
+        return metadata, path
 
     def _save_episode_video(
         self,
         video_key: str,
         episode_index: int,
         temp_path: Path | None = None,
-    ) -> dict:
+        backup_dir: Path | None = None,
+        backups: dict[Path, Path | None] | None = None,
+    ) -> tuple[dict, Path]:
         # Encode episode frames into a temporary video
         ep_path = self._encode_temporary_episode_video(video_key, episode_index) if temp_path is None else temp_path
 
@@ -1537,7 +1690,10 @@ class LeRobotDataset(torch.utils.data.Dataset):
             new_path = self.root / self.meta.video_path.format(
                 video_key=video_key, chunk_index=chunk_idx, file_index=file_idx
             )
+            final_path = new_path
             new_path.parent.mkdir(parents=True, exist_ok=True)
+            if backup_dir is not None and backups is not None:
+                _backup_path(final_path, backup_dir, backups)
             shutil.move(str(ep_path), str(new_path))
         else:
             # Retrieve information from the latest updated video file using latest_episode
@@ -1557,11 +1713,17 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 new_path = self.root / self.meta.video_path.format(
                     video_key=video_key, chunk_index=chunk_idx, file_index=file_idx
                 )
+                final_path = new_path
                 new_path.parent.mkdir(parents=True, exist_ok=True)
+                if backup_dir is not None and backups is not None:
+                    _backup_path(final_path, backup_dir, backups)
                 shutil.move(str(ep_path), str(new_path))
                 latest_duration_in_s = 0.0
             else:
                 # Update latest video file
+                final_path = latest_path
+                if backup_dir is not None and backups is not None:
+                    _backup_path(final_path, backup_dir, backups)
                 concatenate_video_files(
                     [latest_path, ep_path],
                     latest_path,
@@ -1582,7 +1744,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             f"videos/{video_key}/from_timestamp": latest_duration_in_s,
             f"videos/{video_key}/to_timestamp": latest_duration_in_s + ep_duration_in_s,
         }
-        return metadata
+        return metadata, final_path
 
     def clear_episode_buffer(self, delete_images: bool = True) -> None:
         # Cancel streaming encoder if active
