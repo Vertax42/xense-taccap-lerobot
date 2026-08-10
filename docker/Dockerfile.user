@@ -109,9 +109,11 @@ COPY . /opt/lerobot
 
 # Reuse the canonical installer so Docker and bare-metal environments receive
 # exactly the same version checks, native bindings and vendor runtime fixes.
-# The XenseVR-PC-Service checkout is build-time only, and it is 756 MB of Qt
-# service sources, a Unity demo and duplicate SDK binaries. What survives the
-# build lives elsewhere: the daemon is installed by the .deb under
+# The XenseVR-PC-Service checkout is build-time only, and it is still 136 MiB
+# of Qt service sources and prebuilt gRPC archives after the upstream prune
+# (it was 756 MB before the Windows, aarch64 and Unity-demo payloads left the
+# repository). What survives the build lives elsewhere: the daemon is
+# installed by the .deb under
 # /opt/apps/roboticsservice, and the C SDK the Python bindings load is copied
 # into xensevr-pc-service-pybind/lib, which the extension records as its RPATH.
 # taccap-gripper stays: it is an editable install, so its sources are its
