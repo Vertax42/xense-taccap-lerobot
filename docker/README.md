@@ -246,6 +246,12 @@ docker compose pull
 
 - `No such image: ghcr.io/...`：`docker image inspect` 只查本地。这个 tag 还没拉过，
   先 `docker compose pull`；只想看远端用 `docker manifest inspect`。
+- `mamba activate` 报 `critical libmamba Shell not initialized`：**环境本来就是激活的**，
+  不需要 activate。镜像把 `xense-taccap/bin` 放在 `PATH` 最前面来激活环境，而不是靠
+  shell hook —— `mamba env list` 里那个 `*` 就在 `xense-taccap` 上。直接敲 `python`、
+  `lerobot-info` 即可。确实想手动切环境时，先在当前 shell 里执行
+  `eval "$(mamba shell hook --shell bash)"`。0.0.5 及更早的镜像需要这一步，之后的镜像
+  已内置 hook。
 - `pull access denied ... may require 'docker login'`：**不是权限问题**。GHCR 上的包是
   公开的，拉取从不需要登录。这条报错说明镜像名被解析成了 registry 上不存在的名字 ——
   用 `docker compose config --images` 看看实际解析出来的是什么，并检查 `.env` 里的
