@@ -61,9 +61,14 @@ services:
       START_XENSEVR_SERVICE: ${START_XENSEVR_SERVICE:-1}
       XDG_RUNTIME_DIR: /tmp/xdg-runtime
       WGPU_BACKEND: vulkan
-      # Both are read by the NVIDIA hook. VISIBLE_DEVICES replaces what
-      # `gpus: all` used to say; DRIVER_CAPABILITIES is what actually pulls in
-      # the graphics group (libGLX/libEGL plus the Vulkan and GLVND manifests).
+      # VISIBLE_DEVICES replaces what `gpus: all` used to say and is required.
+      #
+      # DRIVER_CAPABILITIES is NOT what fixed the missing graphics libraries —
+      # Dockerfile.user already bakes it into the image, and it was set all
+      # along while graphics was broken. `runtime: nvidia` above is the load
+      # bearing part; this line only restates the image default so the wiring
+      # is readable in one place. Do not "simplify" by keeping this and
+      # dropping the runtime.
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: all
       HF_TOKEN: ${HF_TOKEN:-}

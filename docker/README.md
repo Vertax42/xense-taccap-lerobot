@@ -2,25 +2,33 @@
 
 预装 `xense-taccap` Conda 环境、CUDA 12.8、LeRobot-Xense、XenseSDK、
 TacCap-Gripper SDK 和 Pico4 绑定的镜像。**从 GHCR 拉取，不需要自己构建，也不需要登录。**
+
 构建镜像、发布新版本、离线交付见 [`MAINTAINING.md`](MAINTAINING.md)。
 
 ## 快速开始
+
+**逐条敲,不要整块粘贴** —— `newgrp` 会开一个子 shell，整块粘贴时它后面的命令会被吃掉。
 
 ```bash
 git clone https://github.com/Vertax42/xense-taccap-lerobot.git
 cd xense-taccap-lerobot
 ./docker/install_customer.sh          # 装 Docker / NVIDIA Toolkit / udev 规则，并拉镜像
+```
 
-# 宿主机上执行，缺一不可
+装完在**宿主机**上继续，这两条不能跳过：
+
+```bash
 newgrp docker                         # 让 docker 组权限在当前终端生效
 xhost +si:localuser:root              # 要显示 Rerun 等窗口
+```
 
+```bash
 docker compose run --rm xense-taccap  # 进容器
 ```
 
-**中间那两条不能跳过。** 脚本已经把你加进 `docker` 组了，但**当前终端不会自动生效** ——
-不执行 `newgrp docker` 就直接跑最后一条，会得到 `permission denied`。也可以注销后重新
-登录，效果一样。
+脚本已经把你加进 `docker` 组了，但**当前终端不会自动生效** —— 不执行 `newgrp docker`
+就直接进容器会得到 `permission denied`。**注销后重新登录是更干净的做法**:`newgrp` 之后
+你在该终端新建的文件属组会变成 `docker`，重新登录则没有这个副作用。
 
 容器里环境已激活，直接用：
 
@@ -104,10 +112,11 @@ dpkg-query -W -f='daemon -> ${Version}\n' xensevr-pc-service
 | `No such image: ghcr.io/...`                 | `image inspect` 只查本地。先 `docker compose pull`；只想看远端用 `manifest inspect`                                                                                                                                                                                             |
 | `mamba activate` 报 `Shell not initialized`  | 环境本来就是激活的，不用 activate。要手动切环境先 `eval "$(mamba shell hook --shell bash)"`                                                                                                                                                                                     |
 | `pull access denied ... 'docker login'`      | 不是权限问题（包是公开的）。用 `docker compose config --images` 看镜像名被解析成了什么，检查 `.env` 的 `LEROBOT_IMAGE`                                                                                                                                                          |
-| `could not select device driver ... gpu`     | 装/配 NVIDIA Container Toolkit，然后重启 Docker daemon                                                                                                                                                                                                                          |
+| `Unknown runtime specified nvidia`           | NVIDIA runtime 没在 Docker 里注册。`sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`，再用 `docker info --format '{{json .Runtimes}}'` 确认列出了 `nvidia`                                                                                  |
+| `could not select device driver ... gpu`     | 没装 NVIDIA Container Toolkit,或装完没重启 Docker daemon                                                                                                                                                                                                                        |
 | `/dev/ttyACM*` 存在但 busy                   | 按顶层 README 配置宿主机 ModemManager udev 规则，重新插拔                                                                                                                                                                                                                       |
 | GUI 不显示                                   | 检查 `$DISPLAY`、`/tmp/.X11-unix` 和 `xhost +si:localuser:root`                                                                                                                                                                                                                 |
-| Rerun 报 `Failed to create surface`          | 容器没拿到 NVIDIA 的 Vulkan ICD。`ls /etc/vulkan/icd.d/` 里应有 `nvidia_icd.json`，空的话看下一行                                                                                                                                                                               |
+| Rerun 报 `Failed to create surface`          | 容器没拿到 NVIDIA 的 Vulkan ICD。容器里跑 `vulkaninfo --summary` 看有没有 NVIDIA 设备，没有就看下一行                                                                                                                                                                           |
 | 容器内 `vulkaninfo` 报 `INCOMPATIBLE_DRIVER` | CUDA 正常但图形能力没注入。确认 `docker info --format '{{json .Runtimes}}'` 列出了 `nvidia`；没有就 `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`。**别把 compose 的 `runtime: nvidia` 改回 `gpus: all`** —— 后者只申请 compute+utility |
 | `cuda: False` 但 `nvidia-smi` 正常           | 宿主机 CUDA 状态坏了（挂起/恢复后常见），与容器无关。`sudo rmmod nvidia_uvm && sudo modprobe nvidia_uvm`，或重启                                                                                                                                                                |
 | 找不到 GSPS 但宿主机能看到                   | 确认经 Compose 启动，检查 `ls /dev/v4l/by-id/*GSPS*`，必要时重插 USB Hub 后 `sudo udevadm settle --timeout=20`                                                                                                                                                                  |

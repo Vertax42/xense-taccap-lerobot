@@ -361,42 +361,64 @@ verify_image() {
   )
 
   log "Running GPU and Python smoke test with ${image_ref}"
-  "${DOCKER_CMD[@]}" run --rm "${gpu_args[@]}" \
-    --entrypoint python "${image_ref}" \
-    -c 'import torch; print("torch:", torch.__version__); print("cuda:", torch.cuda.is_available()); raise SystemExit(0 if torch.cuda.is_available() else 1)'
 
-  # Graphics is a separate driver capability from compute, and it fails
-  # separately: CUDA and nvidia-smi keep working while Rerun dies with
-  # "Failed to create surface for any enabled backend". Checking it here turns
-  # that into an install-time failure with a fix, instead of a puzzle the
-  # operator meets the first time they pass --display_data=true.
-  log "Checking the NVIDIA Vulkan ICD (Rerun needs it)"
-  if ! "${DOCKER_CMD[@]}" run --rm "${gpu_args[@]}" \
-      --entrypoint bash "${image_ref}" \
-      -c 'test -s /etc/vulkan/icd.d/nvidia_icd.json' 2>/dev/null; then
-    fail "$(
-      cat <<'EOF'
-The container did not receive the NVIDIA Vulkan ICD
-(/etc/vulkan/icd.d/nvidia_icd.json). CUDA works, but Rerun and any other
-GPU-rendered window will fail with:
+  # Both checks in one container: every start pays the full NVIDIA injection
+  # (39-53 bind mounts), and running them together lets the script distinguish
+  # "compute ok, graphics missing" from "nothing works".
+  #
+  # docker's own stderr is captured and printed rather than discarded. An
+  # unregistered runtime, a missing shell in the image or a full disk all make
+  # this `docker run` fail, and silencing it would report every one of them as
+  # a graphics problem.
+  local output="" rc=0
+  output="$(
+    "${DOCKER_CMD[@]}" run --rm "${gpu_args[@]}" --entrypoint bash "${image_ref}" -c '
+      if python -c "import torch; print(\"torch:\", torch.__version__); print(\"cuda:\", torch.cuda.is_available()); raise SystemExit(0 if torch.cuda.is_available() else 1)"; then
+        echo "SMOKE cuda=ok"
+      else
+        echo "SMOKE cuda=fail"
+      fi
+      # Ask the Vulkan loader instead of testing a path. Packaged drivers put
+      # the ICD in /etc/vulkan/icd.d, NVIDIA'"'"'s .run installer puts it in
+      # /usr/share/vulkan/icd.d, and the container runtime mounts it wherever
+      # the host happens to keep it — so a hardcoded path fails a working host.
+      if vulkaninfo --summary 2>/dev/null | grep -qi "deviceName.*NVIDIA"; then
+        echo "SMOKE graphics=ok"
+      else
+        echo "SMOKE graphics=fail"
+      fi
+    ' 2>&1
+  )" || rc=$?
 
-    WGPU error: Failed to create surface for any enabled backend
+  printf '%s\n' "${output}"
 
-The ICD is not part of the image — the NVIDIA container runtime mounts it from
-the host. Check, in this order:
+  if ! printf '%s' "${output}" | grep -q "^SMOKE "; then
+    fail "The smoke-test container did not run (exit ${rc}). See its output above."
+  fi
 
-  1. The host has it:      ls /etc/vulkan/icd.d/nvidia_icd.json
-     Missing means the driver's graphics half is not installed (a headless or
-     compute-only driver). Install the matching libnvidia-gl-<branch> package.
+  printf '%s' "${output}" | grep -q "SMOKE cuda=ok" || \
+    fail "PyTorch cannot see the GPU inside the container. Check the host driver and NVIDIA Container Toolkit, then rerun."
 
-  2. The runtime is registered:   docker info --format '{{json .Runtimes}}'
-     Must list "nvidia". If not: sudo nvidia-ctk runtime configure
-     --runtime=docker && sudo systemctl restart docker
-
-  3. Regenerate the CDI spec if you use one:
-     sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
-EOF
-    )"
+  # Graphics is a separate driver capability from compute and fails separately:
+  # CUDA and nvidia-smi keep working while Rerun dies with "Failed to create
+  # surface for any enabled backend". It is also optional — only
+  # --display_data=true needs it — so this warns and lets the install finish
+  # rather than discarding a completed 21 GB install over a Rerun window.
+  if ! printf '%s' "${output}" | grep -q "SMOKE graphics=ok"; then
+    log ""
+    log "WARNING: the container has CUDA but no working Vulkan/NVIDIA graphics."
+    log "Recording works. Rerun (--display_data=true) will fail with:"
+    log "    WGPU error: Failed to create surface for any enabled backend"
+    log ""
+    log "The Vulkan ICD is not part of the image — the NVIDIA container runtime"
+    log "mounts it from the host. Check, in this order:"
+    log "  1. The host has it:  ls /etc/vulkan/icd.d/nvidia_icd.json /usr/share/vulkan/icd.d/nvidia_icd.json"
+    log "     Missing from both means the driver's graphics half is not installed"
+    log "     (a headless or compute-only driver). Install libnvidia-gl-<branch>."
+    log "  2. The runtime is registered:  docker info --format '{{json .Runtimes}}'"
+    log "     Must list \"nvidia\". If not:"
+    log "       sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker"
+    log ""
   fi
 }
 
@@ -439,9 +461,14 @@ main() {
   verify_image
 
   log "Installation completed successfully."
-  log "Log out and back in once so docker/video/plugdev group membership takes effect."
-  log "Then start the container from this directory with:"
-  log "  xhost +SI:localuser:root"
+  log ""
+  # This epilogue is what the operator actually reads after a long install, so
+  # it has to carry the newgrp step rather than leave it to docker/README.md.
+  # Without it the very next line they type is a permission denied.
+  log "Your docker/video/plugdev group membership is not active in this shell yet."
+  log "Log out and back in, or run these in order:"
+  log "  newgrp docker                         # else the last line is 'permission denied'"
+  log "  xhost +si:localuser:root              # only if you want Rerun windows"
   log "  docker compose run --rm xense-taccap"
   if [[ "${IMAGE_TAG}" == "latest" ]]; then
     log ""
