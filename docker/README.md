@@ -21,7 +21,7 @@ lerobot-info
 lerobot-find-cameras
 ```
 
-`install_customer.sh` 需要几分钟到几十分钟（镜像约 21 GB）。要走代理就加
+`install_customer.sh` 需要几分钟到几十分钟（镜像约 21 GB）。如果本机要走代理就加
 `XENSE_PROXY_URL=http://127.0.0.1:7897`。
 
 ## 宿主机要求
@@ -31,7 +31,7 @@ Ubuntu 22.04/24.04、`linux/amd64`、**NVIDIA 驱动 ≥ 570.144**。
 Docker、NVIDIA Container Toolkit 和 TacCap 的 udev 规则都由 `install_customer.sh`
 装好；**驱动要你自己先装**（涉及显卡型号、Secure Boot 和重启，脚本不碰）。
 
-装完后当前用户还需要两件事：
+装完后当前用户还需要两件事, 在宿主机器上输入:
 
 ```bash
 sudo usermod -aG docker "$USER" && newgrp docker  # Docker 权限
