@@ -2,7 +2,6 @@
 
 预装 `xense-taccap` Conda 环境、CUDA 12.8、LeRobot-Xense、XenseSDK、
 TacCap-Gripper SDK 和 Pico4 绑定的镜像。**从 GHCR 拉取，不需要自己构建，也不需要登录。**
-
 构建镜像、发布新版本、离线交付见 [`MAINTAINING.md`](MAINTAINING.md)。
 
 ## 快速开始
@@ -11,8 +10,17 @@ TacCap-Gripper SDK 和 Pico4 绑定的镜像。**从 GHCR 拉取，不需要自�
 git clone https://github.com/Vertax42/xense-taccap-lerobot.git
 cd xense-taccap-lerobot
 ./docker/install_customer.sh          # 装 Docker / NVIDIA Toolkit / udev 规则，并拉镜像
+
+# 宿主机上执行，缺一不可
+newgrp docker                         # 让 docker 组权限在当前终端生效
+xhost +si:localuser:root              # 要显示 Rerun 等窗口
+
 docker compose run --rm xense-taccap  # 进容器
 ```
+
+**中间那两条不能跳过。** 脚本已经把你加进 `docker` 组了，但**当前终端不会自动生效** ——
+不执行 `newgrp docker` 就直接跑最后一条，会得到 `permission denied`。也可以注销后重新
+登录，效果一样。
 
 容器里环境已激活，直接用：
 
@@ -31,11 +39,10 @@ Ubuntu 22.04/24.04、`linux/amd64`、**NVIDIA 驱动 ≥ 570.144**。
 Docker、NVIDIA Container Toolkit 和 TacCap 的 udev 规则都由 `install_customer.sh`
 装好；**驱动要你自己先装**（涉及显卡型号、Secure Boot 和重启，脚本不碰）。
 
-装完后当前用户还需要两件事, 在宿主机器上输入:
+用户权限和 X11 授权见上面的快速开始。`xhost` 的授权用完可以撤销：
 
 ```bash
-sudo usermod -aG docker "$USER" && newgrp docker  # Docker 权限
-xhost +si:localuser:root                          # 要显示 Rerun 等窗口时
+xhost -si:localuser:root
 ```
 
 > Compose 使用 `privileged: true` + host 网络/IPC，以支持热插拔的触觉相机、串口、
