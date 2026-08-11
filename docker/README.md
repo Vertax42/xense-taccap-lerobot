@@ -79,8 +79,49 @@ LEROBOT_IMAGE_TAG=0.0.5
 | 不用 Pico4，关掉随启服务 | `START_XENSEVR_SERVICE=0 docker compose run --rm xense-taccap`          |
 | 查看数据                 | `docker compose run --rm xense-taccap bash -lc 'ls -la /data'`          |
 
-数据和缓存都在 Docker volume 里，删容器不会丢：`/data`（`HF_LEROBOT_HOME=/data/lerobot`）、
-`/root/.xensesdk`、`/root/.cache/huggingface`、`/root/.cache/torch`。
+## 数据存在哪
+
+**录的数据集和 HF 下载缓存不是同一个地方**，别混：
+
+| 存什么                     | 环境变量          | 容器内路径                 | Docker 卷           |
+| -------------------------- | ----------------- | -------------------------- | ------------------- |
+| **你录的数据集**           | `HF_LEROBOT_HOME` | `/data/lerobot`            | `lerobot-data`      |
+| HF Hub 缓存（模型/数据集） | `HF_HOME`         | `/root/.cache/huggingface` | `huggingface-cache` |
+| Torch 权重缓存             | `TORCH_HOME`      | `/root/.cache/torch`       | `torch-cache`       |
+| 触觉传感器配置缓存         | —                 | `/root/.xensesdk`          | `xensesdk-cache`    |
+
+环境变量在 `docker/Dockerfile.user` 里设，卷映射在 `compose.yaml` 里。用 Docker
+**具名卷**而不是仓库目录，所以 `docker compose run --rm` 每次删容器都不会丢数据。
+
+宿主机上的实际位置是 `/var/lib/docker/volumes/xense-taccap-lerobot_<卷名>/_data`，
+属 root，直接 `ls` 要 sudo。查数据走容器更省事：
+
+```bash
+docker compose run --rm xense-taccap bash -lc 'ls -la /data/lerobot'
+```
+
+导出到宿主机。**先建目录再加 `--user`**，否则导出的文件属主是 root，你自己删不掉也改不了
+（容器里跑的是 root，而 Docker 自动创建的挂载点也归 root）：
+
+```bash
+mkdir -p export
+docker compose run --rm --user "$(id -u):$(id -g)" -v "$PWD/export:/export" \
+    xense-taccap bash -lc 'cp -r /data/lerobot /export/'
+```
+
+已经导出成 root 属主了，用容器改回来（宿主机上 `chown` 要 sudo）：
+
+```bash
+docker compose run --rm -v "$PWD:/host" xense-taccap \
+    bash -lc "chown -R $(id -u):$(id -g) /host/export"
+```
+
+> **不要用 `docker volume prune`。** 它删的是"没有容器在用"的卷，而你的数据卷平时正是
+> 这个状态 —— 那条命令会把录好的数据一起删掉。清理镜像用 `docker image prune`，清理
+> 构建缓存用 `docker builder prune`，这两个都不碰卷。
+
+想把数据直接存到宿主机某个目录（比如挂了块大盘），改 `compose.yaml` 把
+`lerobot-data:/data` 换成 `/your/path:/data`。
 
 ## 验证镜像
 
