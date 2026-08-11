@@ -9,7 +9,7 @@ LeRobot-Xense、XenseSDK、TacCap-Gripper SDK、Pico4 Python 绑定，
 
 ## 0. 镜像里有什么
 
-当前发布版本 **0.0.4**（`ghcr.io/vertax42/xense-taccap-lerobot:0.0.4`，`latest` 指向同一镜像）。
+当前发布版本 **0.0.5**（`ghcr.io/vertax42/xense-taccap-lerobot:0.0.5`，`latest` 指向同一镜像）。
 
 | 组成                      | 版本 / 来源                                                        |
 | ------------------------- | ------------------------------------------------------------------ |
@@ -23,6 +23,23 @@ LeRobot-Xense、XenseSDK、TacCap-Gripper SDK、Pico4 Python 绑定，
 镜像的 tag 由 `pyproject.toml` 的 `version = "0.5.1+xtac.<版本>"` 推导（Docker tag 不能含
 `+`，故只取 `+xtac.` 之后的部分）。每次发布同时打一个 `sha-<commit>` tag，可以精确追溯
 镜像是从哪个源码提交构建的。
+
+### 0.0.4 → 0.0.5 的变化
+
+**镜像内容与 0.0.4 基本相同** —— conda 环境、各个 SDK、daemon（仍是 v0.2.1）都没变。
+变的是安装方式，所以已经装好 0.0.4 并且跑得好好的机器，没有必须升级的理由。
+
+- **安装改为从 GHCR 在线拉取。** 干净 clone 之后 `docker compose pull` 直接可用：
+  `compose.yaml` 的默认镜像名从本地构建名换成了
+  `ghcr.io/vertax42/xense-taccap-lerobot`。以前不写 `.env` 会撞
+  `pull access denied ... may require 'docker login'`，而那句提示是误导——包是公开的，
+  拉取从不需要登录。
+- **`install_customer.sh` 不再需要 tar。** 默认在线拉取；显式传入 tar、或同目录下正好有
+  一个 tar 时，才走离线装载。断网客户机的用法不变。
+- **离线 tar 交付和手动推送降为内部应急手段**，移到第 6 节，不再是客户流程。
+- **发布走 `v*` git tag 触发**，见第 5 节。
+
+对**已有命令行用法**没有影响：`lerobot-record` 等一概照旧。
 
 ### 0.0.3 → 0.0.4 的变化
 
@@ -90,17 +107,17 @@ Secure Boot 和系统重启。若 `nvidia-smi` 不可用或驱动低于 `570.144
 之前，在仓库根目录的 `.env` 里钉死版本：
 
 ```dotenv
-LEROBOT_IMAGE_TAG=0.0.4
+LEROBOT_IMAGE_TAG=0.0.5
 ```
 
 `.env` 已在 `.gitignore` 里，不会被提交。想确认手上跑的到底是哪一个镜像：
 
 ```bash
 docker image inspect --format '{{index .RepoDigests 0}}' \
-    ghcr.io/vertax42/xense-taccap-lerobot:0.0.4
+    ghcr.io/vertax42/xense-taccap-lerobot:0.0.5
 ```
 
-发布时 `0.0.4` 和 `latest` 指向同一镜像，两者 digest 应当一致。想在**拉之前**看远端的，
+发布时 `0.0.5` 和 `latest` 指向同一镜像，两者 digest 应当一致。想在**拉之前**看远端的，
 用 `docker manifest inspect <image>:<tag>`，不必先下载 21 GB。
 
 ### 安装完成后的宿主机设置
@@ -160,7 +177,7 @@ python -c 'import importlib.metadata as M; print("pico4 ->", M.version("xensevr_
 dpkg-query -W -f='daemon -> ${Version}\n' xensevr-pc-service
 ```
 
-后两行应当**打印同一个版本号**（0.0.4 镜像里是 `0.2.1`）。这不是巧合：pico4 绑定链接的
+后两行应当**打印同一个版本号**（0.0.5 镜像里是 `0.2.1`）。这不是巧合：pico4 绑定链接的
 C SDK 就是从那个 `.deb` 里取的，它的包版本也由 `dpkg-query` 推导。两者不一致，说明镜像
 是半新不旧的构建，不要拿它录数据。
 
@@ -278,7 +295,7 @@ workflow 挂了，或者要发布的就是刚在本机实机验证过的那个�
 
 ```bash
 export GHCR_TOKEN=<classic PAT，需要 write:packages>
-./docker/push_ghcr.sh 0.0.4
+./docker/push_ghcr.sh 0.0.5
 ```
 
 不传参数时同样从 `pyproject.toml` 推导 tag；默认连带推 `latest`，用 `--no-latest`
@@ -289,8 +306,8 @@ export GHCR_TOKEN=<classic PAT，需要 write:packages>
 只在客户机**完全无法访问 ghcr.io** 时使用。开发机上：
 
 ```bash
-LEROBOT_IMAGE_TAG=0.0.4 docker compose build
-LEROBOT_IMAGE_TAG=0.0.4 ./docker/package_customer_delivery.sh
+LEROBOT_IMAGE_TAG=0.0.5 docker compose build
+LEROBOT_IMAGE_TAG=0.0.5 ./docker/package_customer_delivery.sh
 ```
 
 两条命令的 `LEROBOT_IMAGE_TAG` 必须一致：`docker compose build` 默认打的是
@@ -300,7 +317,7 @@ LEROBOT_IMAGE_TAG=0.0.4 ./docker/package_customer_delivery.sh
 `compose.yaml`、`.env` 和 `install_customer.sh`。把整个目录复制到客户机后：
 
 ```bash
-cd xense-taccap-lerobot-0.0.4-linux-amd64
+cd xense-taccap-lerobot-0.0.5-linux-amd64
 ./install_customer.sh
 ```
 
@@ -314,8 +331,8 @@ cd xense-taccap-lerobot-0.0.4-linux-amd64
   公开的，拉取从不需要登录。这条报错说明镜像名被解析成了 registry 上不存在的名字 ——
   检查 `.env` 里的 `LEROBOT_IMAGE` 是否被改成了本地构建名，或用
   `docker compose config --images` 看看实际解析出来的是什么。
-- 打包/推送脚本报 `Docker image not found: ...:0.0.4`：`docker compose build` 打的 tag 是
-  `latest`。用 `LEROBOT_IMAGE_TAG=0.0.4 docker compose build` 重新构建，或先
+- 打包/推送脚本报 `Docker image not found: ...:0.0.5`：`docker compose build` 打的 tag 是
+  `latest`。用 `LEROBOT_IMAGE_TAG=0.0.5 docker compose build` 重新构建，或先
   `docker tag` 到目标 tag。
 - `Missing git submodules`：只有自己构建镜像时才需要 submodule。在仓库根目录执行
   `git submodule update --init --recursive` 后重新构建。
