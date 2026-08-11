@@ -21,6 +21,16 @@ nautilus/*.yaml
 *.key
 sbatch*.sh
 
+# Compose's env file. .gitignore already keeps this out of the repository, which
+# is why CI-built images never contained it — but .gitignore has no say over the
+# build context, and Dockerfile.user does `COPY . /opt/lerobot`. Without this
+# rule a local `docker compose build` bakes the developer's .env into the image,
+# and that image has two routes out: docker/push_ghcr.sh to a *public* GHCR
+# package, and docker/package_customer_delivery.sh to a customer. compose.yaml
+# passes `HF_TOKEN: ${HF_TOKEN:-}`, so a token in .env is the expected case.
+.env
+.env.*
+
 # Byte-compiled / optimized files
 __pycache__/
 *.py[cod]
