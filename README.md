@@ -23,8 +23,9 @@ training scripts) refer to the
 > `ghcr.io/vertax42/xense-taccap-lerobot` and need no login to pull;
 > `docker/install_customer.sh` prepares the host (Docker, NVIDIA Container
 > Toolkit, the udev rules documented below) and pulls one — see
-> [the install section](docker/README.md#2-客户安装在线拉取). Building the image
-> yourself is a maintainer path, not an installation step.
+> [the install section](docker/README.md#2-安装在线拉取). Building the image
+> yourself is a maintainer path, not an installation step — see
+> [`docker/MAINTAINING.md`](docker/MAINTAINING.md) for that.
 
 Tested on Ubuntu 22.04, NVIDIA driver ≥ 570.144. Use
 [`Mamba`](https://github.com/conda-forge/miniforge?tab=readme-ov-file#install)
