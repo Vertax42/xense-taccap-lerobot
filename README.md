@@ -19,10 +19,12 @@ training scripts) refer to the
 
 > **Docker users:** a complete GPU + hardware-SDK image and Compose setup are
 > available in [`docker/README.md`](docker/README.md). It is the quickest way to
-> give an end user a reproducible environment; the host still needs NVIDIA
-> Container Toolkit and the udev rules documented below. Prebuilt images are on
-> `ghcr.io/vertax42/xense-taccap-lerobot` and need no login to pull — see
-> [the GHCR section](docker/README.md#3-从-ghcr-拉取镜像在线交付).
+> give an end user a reproducible environment. Images are published on
+> `ghcr.io/vertax42/xense-taccap-lerobot` and need no login to pull;
+> `docker/install_customer.sh` prepares the host (Docker, NVIDIA Container
+> Toolkit, the udev rules documented below) and pulls one — see
+> [the install section](docker/README.md#2-客户安装在线拉取). Building the image
+> yourself is a maintainer path, not an installation step.
 
 Tested on Ubuntu 22.04, NVIDIA driver ≥ 570.144. Use
 [`Mamba`](https://github.com/conda-forge/miniforge?tab=readme-ov-file#install)
@@ -63,11 +65,10 @@ cd xense-taccap-lerobot
 > git submodule update --init --recursive --progress
 > ```
 >
-> Check what yours are on with
-> `git submodule foreach 'git remote get-url origin'`. Both submodule
-> repositories are public, so HTTPS needs no credentials at all — which is the
-> point: a customer machine and a Docker build can fetch them without being
-> given a key.
+> Check what yours is on with
+> `git submodule foreach 'git remote get-url origin'`. The submodule repository
+> is public, so HTTPS needs no credentials at all — which is the point: a
+> Docker build can fetch it without being given a key.
 
 This repository uses one `third_party/` git submodule for a hardware SDK:
 

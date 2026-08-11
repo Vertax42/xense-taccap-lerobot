@@ -3,14 +3,25 @@ set -euo pipefail
 
 # Pushes a locally built xense-taccap-lerobot image to GHCR.
 #
-# The normal publishing path is .github/workflows/docker-publish.yml, which
-# builds on a hosted runner and uploads over GitHub's own network. This script
-# is the manual route: it pushes an image that is already on this machine,
-# which is what you want when the workflow is unavailable or when the image you
-# want published is the one you just validated against real hardware.
+# The normal publishing path is a `v*` git tag, which fires
+# .github/workflows/docker-publish.yml to build on a hosted runner and upload
+# over GitHub's own network:
+#
+#     git tag -a v0.0.5 -m 'release 0.0.5' && git push origin v0.0.5
+#
+# This script is the fallback: it pushes an image already on this machine, for
+# when the workflow is unavailable or when the image you want published is the
+# one you just validated against real hardware.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOCAL_REPOSITORY="${XENSE_IMAGE_REPOSITORY:-xense-taccap-lerobot}"
+# The bare package name, used to build the target GHCR reference. Kept separate
+# from LOCAL_REPOSITORY below: compose now builds under the full GHCR name, and
+# feeding that back into "${REGISTRY}/${owner}/..." would produce
+# ghcr.io/<owner>/ghcr.io/<owner>/xense-taccap-lerobot.
+IMAGE_NAME="xense-taccap-lerobot"
+# Resolved in main(), once the owner is known: it defaults to the same name
+# compose.yaml builds under.
+LOCAL_REPOSITORY="${XENSE_IMAGE_REPOSITORY:-}"
 REGISTRY="${GHCR_REGISTRY:-ghcr.io}"
 PUSH_LATEST=1
 IMAGE_TAG=""
@@ -32,8 +43,12 @@ usage() {
   cat <<'EOF'
 Usage: ./docker/push_ghcr.sh [IMAGE_TAG] [--no-latest]
 
-Pushes the local image xense-taccap-lerobot:<IMAGE_TAG> to GHCR as
-ghcr.io/<owner>/xense-taccap-lerobot:<IMAGE_TAG>.
+Pushes a locally built image to ghcr.io/<owner>/xense-taccap-lerobot:<IMAGE_TAG>.
+It reads the image compose.yaml builds by default, so with the default settings
+the local and target names are the same and only the push happens.
+
+The normal publishing path is a `v*` git tag, which fires the Docker Publish
+workflow. Use this when that is unavailable.
 
 IMAGE_TAG defaults to LEROBOT_IMAGE_TAG, then to the fork version in
 pyproject.toml (the part after `+xtac.`).
@@ -48,7 +63,9 @@ Environment:
   GHCR_OWNER               GHCR namespace (default: parsed from `origin`)
   GHCR_IMAGE               Full target repository, overriding registry/owner
   GHCR_REGISTRY            Registry host (default: ghcr.io)
-  XENSE_IMAGE_REPOSITORY   Local image name (default: xense-taccap-lerobot)
+  XENSE_IMAGE_REPOSITORY   Local image name to push from
+                           (default: ghcr.io/<owner>/xense-taccap-lerobot,
+                           matching compose.yaml)
   GHCR_PUSH_RETRIES        Push attempts per tag (default: 3)
 EOF
 }
@@ -148,8 +165,11 @@ main() {
 
   local owner target_repository local_ref
   owner="${GHCR_OWNER:-$(resolve_owner)}"
-  target_repository="${GHCR_IMAGE:-${REGISTRY}/${owner}/${LOCAL_REPOSITORY}}"
+  target_repository="${GHCR_IMAGE:-${REGISTRY}/${owner}/${IMAGE_NAME}}"
   GHCR_USER="${GHCR_USER:-${owner}}"
+  # Same default as compose.yaml, so this pushes whatever `docker compose build`
+  # produced. When the two names coincide the `docker tag` below is a no-op.
+  LOCAL_REPOSITORY="${LOCAL_REPOSITORY:-${REGISTRY}/${owner}/${IMAGE_NAME}}"
   local_ref="${LOCAL_REPOSITORY}:${IMAGE_TAG}"
 
   # Same two preflight checks as package_customer_delivery.sh: the image has to
