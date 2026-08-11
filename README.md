@@ -23,7 +23,7 @@ training scripts) refer to the
 > `ghcr.io/vertax42/xense-taccap-lerobot` and need no login to pull;
 > `docker/install_customer.sh` prepares the host (Docker, NVIDIA Container
 > Toolkit, the udev rules documented below) and pulls one — see
-> [the install section](docker/README.md#2-安装在线拉取). Building the image
+> [the quickstart](docker/README.md#快速开始). Building the image
 > yourself is a maintainer path, not an installation step — see
 > [`docker/MAINTAINING.md`](docker/MAINTAINING.md) for that.
 
