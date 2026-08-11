@@ -120,9 +120,17 @@ RUN bash ./setup_env.sh --install \
     && mamba clean -afy \
     && rm -rf /root/.cache/pip /root/.cache/uv
 
+# Writes the mamba hook into /root/.bashrc so `mamba activate` works in an
+# interactive shell. The env is already active without it — the ENV PATH above
+# puts xense-taccap/bin first, which is what makes `docker run <img> python ...`
+# work with no shell setup at all, and that stays the mechanism. This only adds
+# the ability to switch environments by hand; without it mamba answers
+# "Shell not initialized" and prints setup instructions, which reads like a
+# broken image even though nothing is wrong.
 RUN install -m 0755 docker/entrypoint.sh /usr/local/bin/lerobot-entrypoint \
     && mkdir -p /data /root/.xensesdk "${HF_HOME}" "${TORCH_HOME}" "${TRITON_CACHE_DIR}" "${XDG_RUNTIME_DIR}" \
-    && chmod 0700 "${XDG_RUNTIME_DIR}"
+    && chmod 0700 "${XDG_RUNTIME_DIR}" \
+    && mamba shell init --shell bash --root-prefix=/opt/conda
 
 VOLUME ["/data", "/root/.xensesdk", "/root/.cache/huggingface", "/root/.cache/torch"]
 
