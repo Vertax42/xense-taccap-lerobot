@@ -349,30 +349,51 @@ docker_image_version() {
   printf '%s' "${version:-<release>}"
 }
 
+# The compose file the operator will actually launch with. Same two layouts
+# env_lookup() handles: alongside this script in a delivery directory, one level
+# up in a repository checkout.
+COMPOSE_FILE=""
+COMPOSE_SERVICE="xense-taccap"
+
+locate_compose_file() {
+  local candidate
+  for candidate in "${ROOT_DIR}/compose.yaml" "${ROOT_DIR}/../compose.yaml"; do
+    if [[ -f "${candidate}" ]]; then
+      COMPOSE_FILE="$(realpath "${candidate}")"
+      return
+    fi
+  done
+  fail "Cannot find compose.yaml next to this script or one level up. It is what the smoke test launches, and what you will run afterwards."
+}
+
 verify_image() {
-  local image_ref="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
-  # The same GPU wiring compose.yaml uses. It deliberately is not `--gpus all`:
-  # that only asks for compute+utility, so it would test a configuration the
-  # user never runs and would pass on a host where graphics is broken.
-  local -a gpu_args=(
-    --runtime=nvidia
-    -e NVIDIA_VISIBLE_DEVICES=all
-    -e NVIDIA_DRIVER_CAPABILITIES=all
-  )
+  locate_compose_file
 
-  log "Running GPU and Python smoke test with ${image_ref}"
+  log "Running GPU and Python smoke test via ${COMPOSE_FILE}"
 
-  # Both checks in one container: every start pays the full NVIDIA injection
-  # (39-53 bind mounts), and running them together lets the script distinguish
-  # "compute ok, graphics missing" from "nothing works".
+  # Launched through compose on purpose, not a hand-written `docker run`. This
+  # test exists to answer "will `docker compose run` work on this machine?", so
+  # it has to *be* that command — image reference (including any tag pinned in
+  # .env), runtime, environment, devices and volumes all come from the same
+  # file the operator uses. A second copy of the GPU flags here could drift
+  # from compose.yaml and report success for a configuration nobody runs, which
+  # is the failure this whole check was added for.
   #
-  # docker's own stderr is captured and printed rather than discarded. An
-  # unregistered runtime, a missing shell in the image or a full disk all make
-  # this `docker run` fail, and silencing it would report every one of them as
-  # a graphics problem.
+  # -T because there is no TTY in an install script and the service declares
+  # tty/stdin_open. --entrypoint replaces lerobot-entrypoint, so the XenseVR
+  # daemon does not start for a smoke test.
+  #
+  # Both checks share one container: each start pays the full NVIDIA injection
+  # (39-53 bind mounts), and running them together distinguishes "compute ok,
+  # graphics missing" from "nothing works".
+  #
+  # stderr is captured and printed rather than discarded. An unregistered
+  # runtime, a missing shell in the image or a full disk all make this fail,
+  # and silencing it would report every one of them as a graphics problem.
   local output="" rc=0
   output="$(
-    "${DOCKER_CMD[@]}" run --rm "${gpu_args[@]}" --entrypoint bash "${image_ref}" -c '
+    "${DOCKER_CMD[@]}" compose -f "${COMPOSE_FILE}" run --rm -T \
+      --entrypoint bash "${COMPOSE_SERVICE}" -c '
       if python -c "import torch; print(\"torch:\", torch.__version__); print(\"cuda:\", torch.cuda.is_available()); raise SystemExit(0 if torch.cuda.is_available() else 1)"; then
         echo "SMOKE cuda=ok"
       else
