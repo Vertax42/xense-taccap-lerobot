@@ -351,10 +351,53 @@ docker_image_version() {
 
 verify_image() {
   local image_ref="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+  # The same GPU wiring compose.yaml uses. It deliberately is not `--gpus all`:
+  # that only asks for compute+utility, so it would test a configuration the
+  # user never runs and would pass on a host where graphics is broken.
+  local -a gpu_args=(
+    --runtime=nvidia
+    -e NVIDIA_VISIBLE_DEVICES=all
+    -e NVIDIA_DRIVER_CAPABILITIES=all
+  )
+
   log "Running GPU and Python smoke test with ${image_ref}"
-  "${DOCKER_CMD[@]}" run --rm --gpus all \
+  "${DOCKER_CMD[@]}" run --rm "${gpu_args[@]}" \
     --entrypoint python "${image_ref}" \
     -c 'import torch; print("torch:", torch.__version__); print("cuda:", torch.cuda.is_available()); raise SystemExit(0 if torch.cuda.is_available() else 1)'
+
+  # Graphics is a separate driver capability from compute, and it fails
+  # separately: CUDA and nvidia-smi keep working while Rerun dies with
+  # "Failed to create surface for any enabled backend". Checking it here turns
+  # that into an install-time failure with a fix, instead of a puzzle the
+  # operator meets the first time they pass --display_data=true.
+  log "Checking the NVIDIA Vulkan ICD (Rerun needs it)"
+  if ! "${DOCKER_CMD[@]}" run --rm "${gpu_args[@]}" \
+      --entrypoint bash "${image_ref}" \
+      -c 'test -s /etc/vulkan/icd.d/nvidia_icd.json' 2>/dev/null; then
+    fail "$(
+      cat <<'EOF'
+The container did not receive the NVIDIA Vulkan ICD
+(/etc/vulkan/icd.d/nvidia_icd.json). CUDA works, but Rerun and any other
+GPU-rendered window will fail with:
+
+    WGPU error: Failed to create surface for any enabled backend
+
+The ICD is not part of the image — the NVIDIA container runtime mounts it from
+the host. Check, in this order:
+
+  1. The host has it:      ls /etc/vulkan/icd.d/nvidia_icd.json
+     Missing means the driver's graphics half is not installed (a headless or
+     compute-only driver). Install the matching libnvidia-gl-<branch> package.
+
+  2. The runtime is registered:   docker info --format '{{json .Runtimes}}'
+     Must list "nvidia". If not: sudo nvidia-ctk runtime configure
+     --runtime=docker && sudo systemctl restart docker
+
+  3. Regenerate the CDI spec if you use one:
+     sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+EOF
+    )"
+  fi
 }
 
 main() {

@@ -27,7 +27,26 @@ services:
     privileged: true
     network_mode: host
     ipc: host
-    gpus: all
+    # NOT `gpus: all`. That is shorthand for capabilities=[gpu], which the
+    # NVIDIA hook maps to compute+utility only, and on some Docker versions the
+    # NVIDIA_DRIVER_CAPABILITIES env var below is then ignored. The result is a
+    # container with all 24 CUDA libraries and none of the graphics ones: CUDA
+    # works, `nvidia-smi` works, and Rerun dies with
+    #
+    #     WGPU error: Failed to create surface for any enabled backend
+    #
+    # because /etc/vulkan/icd.d/nvidia_icd.json was never mounted, so the Vulkan
+    # loader reports no ICD and not even VK_KHR_surface. Measured on two hosts
+    # with identical toolkit 1.19.1, identical config.toml and identical host
+    # driver files: `gpus: all` injected 39 NVIDIA paths on Docker 29.1.3 and 53
+    # on 29.7.2. `deploy.resources.reservations.devices` with an explicit
+    # capabilities list does not fix it either — tested, still 39.
+    #
+    # Requires the runtime to be registered (`nvidia-ctk runtime configure
+    # --runtime=docker`, which docker/install_customer.sh runs). If it is not,
+    # compose fails immediately with "Unknown runtime specified nvidia", which
+    # is a better failure than silently losing graphics.
+    runtime: nvidia
     ulimits:
       memlock:
         soft: -1
@@ -42,6 +61,10 @@ services:
       START_XENSEVR_SERVICE: ${START_XENSEVR_SERVICE:-1}
       XDG_RUNTIME_DIR: /tmp/xdg-runtime
       WGPU_BACKEND: vulkan
+      # Both are read by the NVIDIA hook. VISIBLE_DEVICES replaces what
+      # `gpus: all` used to say; DRIVER_CAPABILITIES is what actually pulls in
+      # the graphics group (libGLX/libEGL plus the Vulkan and GLVND manifests).
+      NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: all
       HF_TOKEN: ${HF_TOKEN:-}
     volumes:
