@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Installs a customer machine. The normal path is online: prepare the host,
+# then pull the published image from GHCR. The package is public, so the pull
+# needs no credentials.
+#
+# An image archive is the offline fallback, for a machine that cannot reach
+# ghcr.io at all. It is used when one is passed explicitly, or when exactly one
+# sits next to this script — which is the layout docker/package_customer_delivery.sh
+# produces. Neither is required any more: with no archive in sight the script
+# pulls instead of failing.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARCHIVE_PATH="${1:-${XENSE_IMAGE_ARCHIVE:-}}"
 PROXY_URL="${XENSE_PROXY_URL:-}"
-IMAGE_REPOSITORY="${XENSE_IMAGE_REPOSITORY:-xense-taccap-lerobot}"
+IMAGE_REPOSITORY="${XENSE_IMAGE_REPOSITORY:-}"
 IMAGE_TAG="${LEROBOT_IMAGE_TAG:-}"
+DEFAULT_IMAGE_REPOSITORY="ghcr.io/vertax42/xense-taccap-lerobot"
 TEMP_DIR=""
 DOCKER_CMD=(docker)
 
@@ -19,17 +29,22 @@ fail() {
 }
 
 usage() {
-  cat <<'EOF'
+  cat <<EOF
 Usage: ./install_customer.sh [IMAGE_ARCHIVE]
 
-Installs/checks Docker and NVIDIA Container Toolkit, verifies and loads the
-delivery image, installs host udev rules, and runs a CUDA smoke test.
+Installs/checks Docker and NVIDIA Container Toolkit, installs host udev rules,
+obtains the container image, and runs a CUDA smoke test.
+
+The image is pulled from ${DEFAULT_IMAGE_REPOSITORY} unless an
+archive is given or found next to this script, in which case it is verified
+against SHA256SUMS and loaded from disk instead.
 
 Environment:
   XENSE_PROXY_URL          Optional HTTP/HTTPS proxy, e.g. http://127.0.0.1:7897
   XENSE_IMAGE_ARCHIVE      Image archive path when not passed as an argument
-  LEROBOT_IMAGE_TAG        Override the expected image tag
-  XENSE_IMAGE_REPOSITORY   Image repository name (default: xense-taccap-lerobot)
+  LEROBOT_IMAGE            Override the image repository
+  LEROBOT_IMAGE_TAG        Override the image tag (default: latest)
+  XENSE_IMAGE_REPOSITORY   Same as LEROBOT_IMAGE, kept for older delivery dirs
 EOF
 }
 
@@ -210,34 +225,68 @@ install_udev_rules() {
   sudo udevadm trigger
 }
 
-read_delivery_tag() {
-  if [[ -n "${IMAGE_TAG}" ]]; then
-    return
-  fi
-  if [[ -f "${ROOT_DIR}/.env" ]]; then
-    IMAGE_TAG="$(awk -F= '$1 == "LEROBOT_IMAGE_TAG" {print substr($0, index($0, "=") + 1); exit}' "${ROOT_DIR}/.env")"
-  fi
-  if [[ -z "${IMAGE_TAG}" && -f "${ROOT_DIR}/delivery.env" ]]; then
-    IMAGE_TAG="$(awk -F= '$1 == "LEROBOT_IMAGE_TAG" {print substr($0, index($0, "=") + 1); exit}' "${ROOT_DIR}/delivery.env")"
-  fi
-  IMAGE_TAG="${IMAGE_TAG:-latest}"
+# The script sits at docker/ in a repository checkout but at the top of a
+# delivery directory, so compose's .env is one level up in the first layout and
+# alongside in the second. Look in both rather than guessing which one this is.
+ENV_LOOKUP_RESULT=""
+TAG_EXPLICIT=0
+
+# Returns through a global on purpose: a $(...) capture would run this in a
+# subshell, so anything it recorded would be discarded with that subshell.
+env_lookup() {
+  local key="$1" candidate value
+  ENV_LOOKUP_RESULT=""
+  for candidate in "${ROOT_DIR}/.env" "${ROOT_DIR}/delivery.env" "${ROOT_DIR}/../.env"; do
+    [[ -f "${candidate}" ]] || continue
+    value="$(awk -F= -v k="${key}" '$1 == k {print substr($0, index($0, "=") + 1); exit}' "${candidate}")"
+    if [[ -n "${value}" ]]; then
+      ENV_LOOKUP_RESULT="${value}"
+      return
+    fi
+  done
 }
 
-find_archive() {
+resolve_image_ref() {
+  if [[ -z "${IMAGE_REPOSITORY}" ]]; then
+    env_lookup LEROBOT_IMAGE
+    IMAGE_REPOSITORY="${ENV_LOOKUP_RESULT:-${DEFAULT_IMAGE_REPOSITORY}}"
+  fi
+
+  if [[ -n "${IMAGE_TAG}" ]]; then
+    TAG_EXPLICIT=1
+  else
+    env_lookup LEROBOT_IMAGE_TAG
+    if [[ -n "${ENV_LOOKUP_RESULT}" ]]; then
+      IMAGE_TAG="${ENV_LOOKUP_RESULT}"
+      TAG_EXPLICIT=1
+    else
+      IMAGE_TAG="latest"
+    fi
+  fi
+}
+
+# Auto-detection, not a requirement: zero archives is the normal online case and
+# must stay silent. Two or more is genuinely ambiguous — picking one at random
+# would install an image the operator did not choose, so that still fails.
+detect_archive() {
   if [[ -n "${ARCHIVE_PATH}" ]]; then
     ARCHIVE_PATH="$(realpath "${ARCHIVE_PATH}")"
-    return
+    return 0
   fi
 
   local matches=()
   mapfile -t matches < <(find "${ROOT_DIR}" -maxdepth 1 -type f -name 'xense-taccap-lerobot-*.tar' -print | sort)
-  [[ "${#matches[@]}" -eq 1 ]] || \
-    fail "Expected exactly one xense-taccap-lerobot-*.tar in ${ROOT_DIR}; found ${#matches[@]}. Pass the archive path as the first argument."
-  ARCHIVE_PATH="${matches[0]}"
+  case "${#matches[@]}" in
+    0) return 1 ;;
+    1) ARCHIVE_PATH="${matches[0]}" ;;
+    *) fail "Found ${#matches[@]} xense-taccap-lerobot-*.tar files in ${ROOT_DIR}. Pass the one to install as the first argument." ;;
+  esac
 }
 
 derive_tag_from_archive() {
-  if [[ "${IMAGE_TAG}" != "latest" || -f "${ROOT_DIR}/.env" || -f "${ROOT_DIR}/delivery.env" ]]; then
+  # The archive name is the weakest source of a tag: it loses to an explicit
+  # LEROBOT_IMAGE_TAG and to one pinned in an env file.
+  if [[ "${TAG_EXPLICIT}" -eq 1 ]]; then
     return
   fi
 
@@ -260,13 +309,48 @@ verify_archive() {
   )
 }
 
-load_and_verify_image() {
+load_image_from_archive() {
   local image_ref="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
   log "Loading Docker image from ${ARCHIVE_PATH}"
   "${DOCKER_CMD[@]}" load --input "${ARCHIVE_PATH}"
+  # A bundle built before the image was renamed to its GHCR reference carries
+  # the bare `xense-taccap-lerobot` name, which no longer matches the default.
   "${DOCKER_CMD[@]}" image inspect "${image_ref}" >/dev/null 2>&1 || \
-    fail "Expected image was not found after docker load: ${image_ref}"
+    fail "$(
+      cat <<EOF
+Expected image was not found after docker load: ${image_ref}
 
+The archive loaded, but under a different name. \`docker images\` will show it;
+if this is an older delivery directory, rerun with:
+
+  XENSE_IMAGE_REPOSITORY=xense-taccap-lerobot ./install_customer.sh
+EOF
+    )"
+}
+
+pull_image() {
+  local image_ref="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+  log "Pulling ${image_ref} (this downloads about 21 GB on a first install)"
+  # Deliberately `docker pull` rather than `docker compose pull`: this script
+  # runs both from a repository checkout and from a delivery directory, and only
+  # the image reference is common to both. The package is public, so no login.
+  "${DOCKER_CMD[@]}" pull "${image_ref}" || \
+    fail "Could not pull ${image_ref}. Check network/proxy, or install offline by passing an image archive."
+}
+
+# Published images carry the release here: docker/metadata-action sets
+# org.opencontainers.image.version from the tag it pushed. Used only to make the
+# "pin your tag" hint name a real version instead of a placeholder.
+docker_image_version() {
+  local version=""
+  version="$("${DOCKER_CMD[@]}" image inspect \
+    --format '{{index .Config.Labels "org.opencontainers.image.version"}}' \
+    "${IMAGE_REPOSITORY}:${IMAGE_TAG}" 2>/dev/null || true)"
+  printf '%s' "${version:-<release>}"
+}
+
+verify_image() {
+  local image_ref="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
   log "Running GPU and Python smoke test with ${image_ref}"
   "${DOCKER_CMD[@]}" run --rm --gpus all \
     --entrypoint python "${image_ref}" \
@@ -282,10 +366,20 @@ main() {
   require_normal_user
   load_os_release
   TEMP_DIR="$(mktemp -d)"
-  read_delivery_tag
-  find_archive
-  derive_tag_from_archive
-  verify_archive
+  resolve_image_ref
+
+  # Decide the image source before touching the host, so an ambiguous archive
+  # or a bad checksum stops the run before it starts installing packages.
+  local offline=0
+  if detect_archive; then
+    offline=1
+    derive_tag_from_archive
+    verify_archive
+    log "Installing offline from ${ARCHIVE_PATH}"
+  else
+    log "Installing online from ${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+  fi
+
   install_docker
   configure_docker_proxy
   configure_docker_access
@@ -293,13 +387,25 @@ main() {
   install_udev_rules
   sudo systemctl restart docker
   configure_docker_access
-  load_and_verify_image
+
+  if [[ "${offline}" -eq 1 ]]; then
+    load_image_from_archive
+  else
+    pull_image
+  fi
+  verify_image
 
   log "Installation completed successfully."
   log "Log out and back in once so docker/video/plugdev group membership takes effect."
   log "Then start the container from this directory with:"
   log "  xhost +SI:localuser:root"
   log "  docker compose run --rm xense-taccap"
+  if [[ "${IMAGE_TAG}" == "latest" ]]; then
+    log ""
+    log "NOTE: this machine is on the floating \`latest\` tag. Before recording"
+    log "data, pin it in .env so a later release cannot change the image underneath:"
+    log "  LEROBOT_IMAGE_TAG=$(docker_image_version)"
+  fi
 }
 
 main "$@"
