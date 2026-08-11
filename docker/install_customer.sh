@@ -55,6 +55,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# `set -e` aborts with no output at all, which is how a bare `return` in
+# configure_docker_proxy silently ended every non-proxy install right after the
+# Docker step — the toolkit, the runtime registration, the image and the smoke
+# test were all skipped and nothing said so. Anything that dies without going
+# through fail() now names the line it died on.
+on_unexpected_exit() {
+  local code=$?
+  printf '[install_customer] ERROR: aborted at line %s (exit %s) without a message.\n' "$1" "${code}" >&2
+  printf '[install_customer] This is a bug in the installer. Report it with the output above.\n' >&2
+  exit "${code}"
+}
+trap 'on_unexpected_exit ${LINENO}' ERR
+
 require_normal_user() {
   if [[ "${EUID}" -eq 0 ]]; then
     fail "Run this script as a normal user with sudo privileges, not as root."
@@ -139,7 +152,15 @@ install_docker() {
 }
 
 configure_docker_proxy() {
-  [[ -n "${PROXY_URL}" ]] || return
+  # `return 0`, not a bare `return`. A bare one hands back the status of the
+  # test that just failed — 1 — and under `set -e` a non-zero return from a
+  # function called on its own line kills the script. With no XENSE_PROXY_URL
+  # set, that is every run: the installer exited silently right after the
+  # Docker step and never installed the NVIDIA toolkit.
+  if [[ -z "${PROXY_URL}" ]]; then
+    log "No XENSE_PROXY_URL set; not configuring a proxy."
+    return 0
+  fi
 
   local proxy_conf="${TEMP_DIR}/http-proxy.conf"
   printf '%s\n' \
@@ -155,6 +176,10 @@ configure_docker_proxy() {
 }
 
 configure_docker_access() {
+  # Logged because this step is otherwise silent and calls sudo: if the sudo
+  # timestamp has expired it stops at a password prompt, and without a line
+  # here that is indistinguishable from a hang.
+  log "Configuring Docker group access for ${USER}..."
   sudo groupadd --force docker
   sudo usermod -aG docker "${USER}"
   if docker info >/dev/null 2>&1; then
