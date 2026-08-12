@@ -210,7 +210,33 @@ def format_big_number(num, precision=0):
     return num
 
 
+# Warn once per process. A recording session calls log_say on every episode, so
+# a host without the binary would otherwise print the same line hundreds of times.
+_TTS_WARNED = False
+
+
+def _warn_tts_once(reason: str) -> None:
+    global _TTS_WARNED
+    if not _TTS_WARNED:
+        _TTS_WARNED = True
+        logging.warning(
+            f"Text-to-speech unavailable ({reason}); continuing without it. Use --play_sounds=false to silence this."
+        )
+
+
 def say(text: str, blocking: bool = False):
+    """Speak `text`, or quietly carry on if the host cannot.
+
+    Never raises. Speech is a convenience — `play_sounds` defaults to True, and
+    the record loop calls this from its cleanup path as well as its main path,
+    so an exception here can land *while another one is being handled*. That is
+    not hypothetical: in the container, where `spd-say` is not installed, the
+    FileNotFoundError from the episode announcement was immediately followed by
+    a second one from "Stop recording" in the teardown, the process died with an
+    unhandled exception, and the XenseVR SDK's joinable std::threads — never
+    closed — turned it into `terminate called without an active exception` and a
+    core dump. A missing text-to-speech binary must not be able to do that.
+    """
     system = platform.system()
 
     if system == "Darwin":
@@ -230,12 +256,21 @@ def say(text: str, blocking: bool = False):
         ]
 
     else:
-        raise RuntimeError("Unsupported operating system for text-to-speech.")
+        _warn_tts_once(f"unsupported operating system {system!r}")
+        return
 
-    if blocking:
-        subprocess.run(cmd, check=True)
-    else:
-        subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW if system == "Windows" else 0)
+    try:
+        if blocking:
+            subprocess.run(cmd, check=True)
+        else:
+            subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW if system == "Windows" else 0)
+    except FileNotFoundError:
+        # The usual case: the TTS binary is not installed.
+        _warn_tts_once(f"{cmd[0]} not found")
+    except (OSError, subprocess.SubprocessError) as exc:
+        # It exists but did not work — no audio sink, no speech-dispatcher
+        # daemon, device busy. Same verdict: not worth failing a recording over.
+        _warn_tts_once(f"{cmd[0]} failed: {exc}")
 
 
 def log_say(text: str, play_sounds: bool = True, blocking: bool = False):
