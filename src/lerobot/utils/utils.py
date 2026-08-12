@@ -214,6 +214,9 @@ def format_big_number(num, precision=0):
 # a host without the binary would otherwise print the same line hundreds of times.
 _TTS_WARNED = False
 
+# Generous for a five-word announcement, short enough that nobody watches it.
+_TTS_BLOCKING_TIMEOUT_S = 10.0
+
 
 def _warn_tts_once(reason: str) -> None:
     global _TTS_WARNED
@@ -261,7 +264,15 @@ def say(text: str, blocking: bool = False):
 
     try:
         if blocking:
-            subprocess.run(cmd, check=True)
+            # Bounded, because a TTS stack that hangs is a real state, not a
+            # hypothetical one: install a synthesizer in a container with no
+            # working audio sink and `spd-say --wait` blocks forever instead of
+            # failing. The only blocking call site is "Stop recording" in the
+            # record teardown, so an unbounded wait there wedges the whole
+            # session at the end, after the data was captured. TimeoutExpired is
+            # a SubprocessError, so the handler below reports it like any other
+            # failure.
+            subprocess.run(cmd, check=True, timeout=_TTS_BLOCKING_TIMEOUT_S)
         else:
             subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW if system == "Windows" else 0)
     except FileNotFoundError:
@@ -269,7 +280,8 @@ def say(text: str, blocking: bool = False):
         _warn_tts_once(f"{cmd[0]} not found")
     except (OSError, subprocess.SubprocessError) as exc:
         # It exists but did not work — no audio sink, no speech-dispatcher
-        # daemon, device busy. Same verdict: not worth failing a recording over.
+        # daemon, device busy, or it hung. Same verdict: not worth failing or
+        # stalling a recording over.
         _warn_tts_once(f"{cmd[0]} failed: {exc}")
 
 
