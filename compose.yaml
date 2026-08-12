@@ -78,7 +78,19 @@ services:
       - /dev:/dev
       - /run/udev:/run/udev:ro
       - xensesdk-cache:/root/.xensesdk
-      - lerobot-data:/data
+      # Recorded datasets. Defaults to the `lerobot-data` named volume, which
+      # survives `--rm` but lives under /var/lib/docker and is root-owned, so
+      # getting data out means a copy through a container.
+      #
+      # Point LEROBOT_DATA_DIR at a host directory in .env to bind-mount
+      # instead, and the datasets land somewhere you can open directly:
+      #
+      #     LEROBOT_DATA_DIR=/home/you/.cache/huggingface/docker_data
+      #
+      # A value containing `/` is a bind mount; anything else is a named
+      # volume. Recording still runs as root either way, so the files are
+      # root-owned until you chown them — see docker/README.md.
+      - ${LEROBOT_DATA_DIR:-lerobot-data}:/data
       - huggingface-cache:/root/.cache/huggingface
       - torch-cache:/root/.cache/torch
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
