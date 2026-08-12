@@ -93,6 +93,32 @@ LEROBOT_IMAGE_TAG=0.0.5
 环境变量在 `docker/Dockerfile.user` 里设，卷映射在 `compose.yaml` 里。用 Docker
 **具名卷**而不是仓库目录，所以 `docker compose run --rm` 每次删容器都不会丢数据。
 
+### 想直接在宿主机访问数据（推荐给要频繁看/删数据的机器）
+
+在 `.env` 里把数据目录指到宿主机，数据集就直接落在你能打开的地方，不用每次拷出来：
+
+```dotenv
+LEROBOT_DATA_DIR=/home/你的用户名/.cache/huggingface/docker_data
+```
+
+带 `/` 的值是 bind mount，不带的当具名卷 —— 不设就还是默认的 `lerobot-data`。改完
+`docker compose config` 确认一下，然后正常录制，数据会出现在
+`<那个目录>/lerobot/`。
+
+**但录制仍以 root 运行，所以文件属主是 root。** 录完把属主交还给自己：
+
+```bash
+docker compose run --rm --no-deps --entrypoint /bin/bash --user 0:0 \
+    xense-taccap -lc "chown -R $(id -u):$(id -g) /data"
+```
+
+或者直接在宿主机 `sudo chown -R "$(id -u):$(id -g)" ~/.cache/huggingface/docker_data`。
+用 `ls -ln` 检查（显示数字 uid/gid，比 `ls -l` 直观）：
+
+```bash
+ls -ln ~/.cache/huggingface/docker_data/lerobot
+```
+
 宿主机上的实际位置是 `/var/lib/docker/volumes/xense-taccap-lerobot_<卷名>/_data`，
 属 root，直接 `ls` 要 sudo。查数据走容器更省事：
 
