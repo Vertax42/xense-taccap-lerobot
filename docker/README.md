@@ -181,9 +181,12 @@ dpkg-query -W -f='daemon -> ${Version}\n' xensevr-pc-service
 
 - **0.0.6** — **建议所有机器升级**，三条都是踩过的坑：
   - **录制不再因为语音提示崩溃。** `--play_sounds` 默认开，而镜像里没有 `spd-say`，
-    于是第一集刚开始就 `FileNotFoundError`，清理时又抛一次,最后 `Aborted (core dumped)`。
-    现在装了 `speech-dispatcher`（`/dev/snd` 是通的，语音真能响），并且即使 TTS 不可用也
-    只警告不中断。**升级后不再需要 `--play_sounds=false`。**
+    于是第一集刚开始就 `FileNotFoundError`，清理时又抛一次，最后 `Aborted (core dumped)`。
+    现在 TTS 失败只警告不中断。**升级后不再需要 `--play_sounds=false`。**
+    注意**容器里仍然听不到声音** —— 镜像装了 `speech-dispatcher`，但没有语音合成器
+    模块，`spd-say` 会以非零退出，然后被安全忽略。补上合成器反而更糟：容器里没有可用的
+    音频输出，`spd-say --wait` 会**无限挂住**而不是失败，所以这条 blocking 调用现在带
+    10 秒上限。想真正听到提示音，请在宿主机上跑录制，或自己映射音频服务。
   - **录出来的视频不再是 `-rw------- root`**，改为 `0644`，别的用户/账号读得了。
   - **`LEROBOT_DATA_DIR`** 可以把数据集直接落到宿主机目录，见上面「想直接在宿主机访问
     数据」。这条不需要新镜像，改 `.env` 即可。
