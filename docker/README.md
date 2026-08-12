@@ -62,7 +62,7 @@ xhost -si:localuser:root
 的 `.env` 里钉死（`.env` 不会被提交）：
 
 ```dotenv
-LEROBOT_IMAGE_TAG=0.0.5
+LEROBOT_IMAGE_TAG=0.0.6
 ```
 
 改完用 `docker compose config --images` 确认解析结果。
@@ -74,7 +74,7 @@ LEROBOT_IMAGE_TAG=0.0.5
 | 跑一次性命令             | `docker compose run --rm xense-taccap lerobot-info`                     |
 | 升级镜像                 | 改 `.env` 的 tag，再 `docker compose pull`                              |
 | 确认解析到哪个镜像       | `docker compose config --images`                                        |
-| 看远端有什么（不下载）   | `docker manifest inspect ghcr.io/vertax42/xense-taccap-lerobot:0.0.5`   |
+| 看远端有什么（不下载）   | `docker manifest inspect ghcr.io/vertax42/xense-taccap-lerobot:0.0.6`   |
 | 确认本地跑的是哪个       | `docker image inspect --format '{{index .RepoDigests 0}}' <镜像>:<tag>` |
 | 不用 Pico4，关掉随启服务 | `START_XENSEVR_SERVICE=0 docker compose run --rm xense-taccap`          |
 | 查看数据                 | `docker compose run --rm xense-taccap bash -lc 'ls -la /data'`          |
@@ -172,13 +172,21 @@ python -c 'import importlib.metadata as M; print("pico4 ->", M.version("xensevr_
 dpkg-query -W -f='daemon -> ${Version}\n' xensevr-pc-service
 ```
 
-**后两行必须打印同一个版本号**（0.0.5 里是 `0.2.1`）。pico4 绑定链接的 C SDK 就取自那个
+**后两行必须打印同一个版本号**（0.0.6 里是 `0.2.1`）。pico4 绑定链接的 C SDK 就取自那个
 `.deb`，两者不一致说明镜像是半新不旧的构建，不要拿它录数据。
 
 ## 版本
 
-当前 **0.0.5**（`latest` 指向同一镜像）。只列影响使用方式的变化：
+当前 **0.0.6**（`latest` 指向同一镜像）。只列影响使用方式的变化：
 
+- **0.0.6** — **建议所有机器升级**，三条都是踩过的坑：
+  - **录制不再因为语音提示崩溃。** `--play_sounds` 默认开，而镜像里没有 `spd-say`，
+    于是第一集刚开始就 `FileNotFoundError`，清理时又抛一次,最后 `Aborted (core dumped)`。
+    现在装了 `speech-dispatcher`（`/dev/snd` 是通的，语音真能响），并且即使 TTS 不可用也
+    只警告不中断。**升级后不再需要 `--play_sounds=false`。**
+  - **录出来的视频不再是 `-rw------- root`**，改为 `0644`，别的用户/账号读得了。
+  - **`LEROBOT_DATA_DIR`** 可以把数据集直接落到宿主机目录，见上面「想直接在宿主机访问
+    数据」。这条不需要新镜像，改 `.env` 即可。
 - **0.0.5** — 安装改为从 GHCR 在线拉取，不再需要 tar 交付包。镜像内容与 0.0.4 相同，
   已装好 0.0.4 的机器没有必须升级的理由。
 - **0.0.4** — `--robot.id` 接受纯数字并按 `--robot.type` 展开（`--robot.id=0` → 单臂

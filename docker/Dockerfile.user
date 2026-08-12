@@ -21,6 +21,19 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # Runtime libraries cover USB/HID/video/X11 access. Build tools are retained on
 # purpose: taccap-gripper and the Pico4 Python extension are editable installs,
 # making the image useful for both end users and hardware SDK development.
+#
+# libusb-1.0-0, not libusb-1.0-0-dev: d50e49b4 established that nothing here
+# compiles against the headers — taccap-gripper's only find_package is Threads,
+# and the Pico4 bindings link the SDK out of the .deb. The library is needed at
+# *runtime* by pyrealsense2, and pyudev (under xensesdk) dlopens libudev by
+# name. libudev1 ships in the base image; libusb-1.0-0 does not, which is why
+# the -dev package cannot simply be deleted — it was the only thing dragging
+# the runtime library in.
+#
+# speech-dispatcher provides spd-say, which lerobot's --play_sounds path shells
+# out to. Missing, it used to abort recording; that is fixed in code now, but
+# /dev/snd reaches the container through the /dev mount, so the announcements
+# can actually play.
 RUN test "${TARGETARCH}" = "amd64" || \
         (echo "LeRobot-Xense Docker currently supports linux/amd64 only" >&2; exit 1) \
     && apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=60 update \
@@ -38,8 +51,7 @@ RUN test "${TARGETARCH}" = "amd64" || \
         libglib2.0-0 \
         libhidapi-hidraw0 \
         libsm6 \
-        libudev-dev \
-        libusb-1.0-0-dev \
+        libusb-1.0-0 \
         libvulkan1 \
         libx11-6 \
         libxkbcommon-x11-0 \
@@ -47,6 +59,7 @@ RUN test "${TARGETARCH}" = "amd64" || \
         libxrender1 \
         ninja-build \
         pkg-config \
+        speech-dispatcher \
         sudo \
         tini \
         udev \
