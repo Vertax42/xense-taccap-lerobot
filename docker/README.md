@@ -100,34 +100,33 @@ LEROBOT_IMAGE_TAG=0.0.5
 docker compose run --rm xense-taccap bash -lc 'ls -la /data/lerobot'
 ```
 
-导出到宿主机：
+导出到宿主机。**以 root 读、拷完再交还属主** —— 这是唯一对已录数据成立的写法：
 
 ```bash
 mkdir -p export
 docker compose run --rm --no-deps \
     --entrypoint /bin/bash \
-    --user "$(id -u):$(id -g)" \
     -v "$PWD/export:/export" \
     xense-taccap \
-    -lc 'cp -a /data/lerobot /export/'
+    -lc "cp -a /data/lerobot /export/ && chown -R $(id -u):$(id -g) /export"
 ```
 
-三个参数都是必需的，少一个就不成立：
+为什么不能直接用 `--user` 以自己的身份拷:
 
-- **`--entrypoint /bin/bash`** —— 绕开 `lerobot-entrypoint`。它会 `chmod 0700`
-  运行目录，非 root 身份做不到，报
-  `chmod: changing permissions of '/tmp/xdg-runtime': Operation not permitted`。
-  顺带也免得为了拷个文件把 XenseVR 服务拉起来。
-- **`--user`** —— 否则容器以 root 写文件，导出的东西你自己删不掉也改不了。
-- **`mkdir -p export` 先建目录** —— Docker 自动创建的挂载点归 root，非 root 进去写会
-  `Permission denied`。
+- **0.0.5 及更早的镜像录出来的视频是 `-rw------- root`**。`NamedTemporaryFile` 建的临时
+  文件是 `0600`，`shutil.move` 保留权限，于是整份数据集只有 root 读得了。非 root 拷贝会
+  在每个视频上报 `cp: cannot open '.../file-000.mp4' for reading: Permission denied`
+  ——而元数据是正常 `0644`，所以**只有 `.mp4` 失败**，很像是个别文件坏了。这个已在源码里
+  修掉（视频落盘后 `chmod 0644`），但要等下次发镜像才生效。
+- **`--entrypoint /bin/bash` 仍然必需** —— `lerobot-entrypoint` 会 `chmod 0700` 运行目录，
+  也会顺带启动 XenseVR 服务，拷个文件没必要。
+- **先 `mkdir -p export`** —— Docker 自动创建的挂载点归 root。
 
-已经导出成 root 属主的，用容器改回来（宿主机上 `chown` 要 sudo）：
+`cp -a` 会连权限一起带过去，所以导出的视频仍是 `0600`（只是属主已经是你）。想让它们对同组
+或其他用户可读，在上面那条末尾再加一段：
 
 ```bash
-docker compose run --rm --no-deps --entrypoint /bin/bash \
-    -v "$PWD:/host" xense-taccap \
-    -lc "chown -R $(id -u):$(id -g) /host/export"
+    && chmod -R u+rwX,go+rX /export
 ```
 
 > **不要用 `docker volume prune`。** 它删的是"没有容器在用"的卷，而你的数据卷平时正是
