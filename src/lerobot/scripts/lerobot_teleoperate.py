@@ -107,8 +107,6 @@ class TeleoperateConfig:
     show_trajectory: bool = True
     # Print per-step timing breakdown instead of action values.
     debug_timing: bool = False
-    # Dryrun mode: print actions but do not send to robot
-    dryrun: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -313,8 +311,6 @@ def self_driven_teleop_loop(
 @parser.wrap()
 def teleoperate(cfg: TeleoperateConfig):
     logger.info(pformat(asdict(cfg)))
-    if cfg.dryrun:
-        logger.warn("DRYRUN MODE ENABLED - Actions will be printed but NOT sent to robot")
 
     if cfg.display_data:
         teleop_name = cfg.teleop.type if cfg.teleop else "none"
