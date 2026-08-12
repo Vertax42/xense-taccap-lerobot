@@ -632,6 +632,14 @@ def concatenate_video_files(input_video_paths: list[Path | str], output_video_pa
     input_container.close()
     output_container.close()
     shutil.move(tmp_output_video_path, output_video_path)
+    # tempfile.NamedTemporaryFile creates 0600 and shutil.move preserves the
+    # mode, so without this every recorded video is readable only by the user
+    # that wrote it. In the container that user is root, which makes the
+    # dataset impossible to copy out as yourself:
+    #     cp: cannot open '.../file-000.mp4' for reading: Permission denied
+    # The sibling metadata is written normally and comes out 0644, so the
+    # failure shows up only on the videos.
+    Path(output_video_path).chmod(0o644)
     Path(tmp_concatenate_path).unlink()
 
 
