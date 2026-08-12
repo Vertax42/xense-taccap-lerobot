@@ -100,20 +100,34 @@ LEROBOT_IMAGE_TAG=0.0.5
 docker compose run --rm xense-taccap bash -lc 'ls -la /data/lerobot'
 ```
 
-导出到宿主机。**先建目录再加 `--user`**，否则导出的文件属主是 root，你自己删不掉也改不了
-（容器里跑的是 root，而 Docker 自动创建的挂载点也归 root）：
+导出到宿主机：
 
 ```bash
 mkdir -p export
-docker compose run --rm --user "$(id -u):$(id -g)" -v "$PWD/export:/export" \
-    xense-taccap bash -lc 'cp -r /data/lerobot /export/'
+docker compose run --rm --no-deps \
+    --entrypoint /bin/bash \
+    --user "$(id -u):$(id -g)" \
+    -v "$PWD/export:/export" \
+    xense-taccap \
+    -lc 'cp -a /data/lerobot /export/'
 ```
 
-已经导出成 root 属主了，用容器改回来（宿主机上 `chown` 要 sudo）：
+三个参数都是必需的，少一个就不成立：
+
+- **`--entrypoint /bin/bash`** —— 绕开 `lerobot-entrypoint`。它会 `chmod 0700`
+  运行目录，非 root 身份做不到，报
+  `chmod: changing permissions of '/tmp/xdg-runtime': Operation not permitted`。
+  顺带也免得为了拷个文件把 XenseVR 服务拉起来。
+- **`--user`** —— 否则容器以 root 写文件，导出的东西你自己删不掉也改不了。
+- **`mkdir -p export` 先建目录** —— Docker 自动创建的挂载点归 root，非 root 进去写会
+  `Permission denied`。
+
+已经导出成 root 属主的，用容器改回来（宿主机上 `chown` 要 sudo）：
 
 ```bash
-docker compose run --rm -v "$PWD:/host" xense-taccap \
-    bash -lc "chown -R $(id -u):$(id -g) /host/export"
+docker compose run --rm --no-deps --entrypoint /bin/bash \
+    -v "$PWD:/host" xense-taccap \
+    -lc "chown -R $(id -u):$(id -g) /host/export"
 ```
 
 > **不要用 `docker volume prune`。** 它删的是"没有容器在用"的卷，而你的数据卷平时正是
