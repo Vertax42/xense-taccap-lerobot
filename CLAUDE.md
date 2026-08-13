@@ -113,6 +113,34 @@ Discovery deliberately loads without holding (`ensure_loaded`), so one-shot
 enumeration cannot leak a hold. Closing matters: the SDK's joinable
 `std::thread`s call `std::terminate()` if the process exits without it.
 
+## Recorded files land 0600 if they come from a temp file
+
+Python's temp-file APIs create restrictively **on purpose**, and `shutil.move` /
+`os.replace` carry the mode onto the destination:
+
+| API                  | mode   |
+| -------------------- | ------ |
+| `NamedTemporaryFile` | `0600` |
+| `mkstemp`            | `0600` |
+| `mkdtemp`            | `0700` |
+
+So "write to a temp file, then move it into place" quietly produces a dataset
+only its writer can read. In the container the writer is root, so exporting as
+yourself fails — and only on the files that took that path, which is what makes
+it confusing: `dac15f74` was reported as `cp: cannot open '.../file-000.mp4':
+Permission denied` on **every video while the parquet and json copied fine**,
+because those are written straight through `pq.ParquetWriter` / `write_text`
+and land `0644` under the normal umask (`0022` on the host and in the image).
+
+**Anything that moves a temp file into a dataset needs an explicit
+`chmod(0o644)` after the move.** `video_utils.py` does this after
+`shutil.move(tmp_output_video_path, output_video_path)`. Do not reach for
+`os.umask` instead — encoding runs in a thread pool and umask is process-global.
+
+The same trap has now appeared twice: once in the video concatenation path, and
+once in a proposed `_atomic_write_parquet` that would have moved data parquet
+from `0644` to `0600` (reviewed on PR #19).
+
 ## Vendored SDK
 
 `third_party/taccap-gripper` is the TacCap-Gripper SDK submodule (has its own
