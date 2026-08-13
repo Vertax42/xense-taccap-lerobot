@@ -890,7 +890,7 @@ class StreamingVideoEncoder:
             stop_event = threading.Event()
             ready_event = threading.Event()
 
-            temp_video_dir = Path(tempfile.mkdtemp(dir=temp_dir))
+            temp_video_dir = Path(tempfile.mkdtemp(prefix=".lerobot_episode_stage_", dir=temp_dir))
             video_path = temp_video_dir / f"{video_key.replace('/', '_')}_streaming.mp4"
 
             encoder_thread = _CameraEncoderThread(
@@ -995,28 +995,29 @@ class StreamingVideoEncoder:
         for video_key in self._frame_queues:
             self._frame_queues[video_key].put(None)
 
-        # Wait for all threads and collect results
-        for video_key in self._threads:
-            self._threads[video_key].join(timeout=120)
-            if self._threads[video_key].is_alive():
-                logging.error(f"Encoder thread for {video_key} did not finish in time")
-                self._stop_events[video_key].set()
-                self._threads[video_key].join(timeout=5)
-                results[video_key] = (self._video_paths[video_key], None)
-                continue
+        # Wait for all threads and collect results.
+        try:
+            for video_key in self._threads:
+                self._threads[video_key].join(timeout=120)
+                if self._threads[video_key].is_alive():
+                    logging.error(f"Encoder thread for {video_key} did not finish in time")
+                    self._stop_events[video_key].set()
+                    self._threads[video_key].join(timeout=5)
+                    results[video_key] = (self._video_paths[video_key], None)
+                    continue
 
-            try:
-                status, data = self._result_queues[video_key].get(timeout=5)
-                if status == "error":
-                    raise RuntimeError(f"Encoder thread for {video_key} failed: {data}")
-                results[video_key] = (self._video_paths[video_key], data)
-            except queue.Empty:
-                logging.error(f"No result from encoder thread for {video_key}")
-                results[video_key] = (self._video_paths[video_key], None)
-
-        self._cleanup()
-        self._episode_active = False
-        return results
+                try:
+                    status, data = self._result_queues[video_key].get(timeout=5)
+                    if status == "error":
+                        raise RuntimeError(f"Encoder thread for {video_key} failed: {data}")
+                    results[video_key] = (self._video_paths[video_key], data)
+                except queue.Empty:
+                    logging.error(f"No result from encoder thread for {video_key}")
+                    results[video_key] = (self._video_paths[video_key], None)
+            return results
+        finally:
+            self._cleanup()
+            self._episode_active = False
 
     def cancel_episode(self) -> None:
         """Cancel the current episode, stopping encoder threads and cleaning up."""

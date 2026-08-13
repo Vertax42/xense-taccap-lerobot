@@ -99,10 +99,30 @@ def _backup_path(path: Path, backup_dir: Path, backups: dict[Path, Path | None])
         return
     if path.exists():
         backup = backup_dir / f"{len(backups):04d}-{path.name}.bak"
-        shutil.copy2(path, backup)
+        try:
+            shutil.copy2(path, backup)
+            if backup.stat().st_size != path.stat().st_size:
+                raise RuntimeError(f"backup copy is incomplete: {path} -> {backup}")
+        except Exception:
+            backup.unlink(missing_ok=True)
+            raise
         backups[path] = backup
     else:
         backups[path] = None
+
+
+def _atomic_write_parquet(path: Path, table: pa.Table) -> None:
+    """Write a parquet table via a same-directory temp file and atomic replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".parquet.tmp", dir=path.parent)
+    os.close(fd)
+    try:
+        pq.write_table(table, tmp_path, compression="snappy", use_dictionary=True)
+        os.chmod(tmp_path, 0o644)
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 class LeRobotDatasetMetadata:
@@ -154,13 +174,12 @@ class LeRobotDatasetMetadata:
         file_idx = first_ep["meta/episodes/file_index"][0]
 
         table = pa.Table.from_pydict(combined_dict)
-
-        if not self.writer:
-            path = Path(self.root / DEFAULT_EPISODES_PATH.format(chunk_index=chunk_idx, file_index=file_idx))
-            path.parent.mkdir(parents=True, exist_ok=True)
-            self.writer = pq.ParquetWriter(path, schema=table.schema, compression="snappy", use_dictionary=True)
-
-        self.writer.write_table(table)
+        path = Path(self.root / DEFAULT_EPISODES_PATH.format(chunk_index=chunk_idx, file_index=file_idx))
+        if path.exists():
+            existing_table = pq.read_table(path)
+            table = pa.concat_tables([existing_table, table])
+        _atomic_write_parquet(path, table)
+        self.writer = None
 
         self.latest_episode = self.metadata_buffer[-1]
         self.metadata_buffer.clear()
@@ -416,6 +435,28 @@ class LeRobotDatasetMetadata:
         if len(self.metadata_buffer) >= self.metadata_buffer_size:
             self._flush_metadata_buffer()
 
+    def _episode_metadata_paths_for_save(self) -> list[Path]:
+        """Return episodes parquet paths the next metadata save may write."""
+        if self.latest_episode is not None:
+            chunk_idx = self.latest_episode["meta/episodes/chunk_index"][0]
+            file_idx = self.latest_episode["meta/episodes/file_index"][0]
+            current = self.root / DEFAULT_EPISODES_PATH.format(chunk_index=chunk_idx, file_index=file_idx)
+            next_chunk_idx, next_file_idx = update_chunk_file_indices(chunk_idx, file_idx, self.chunks_size)
+            return [
+                current,
+                self.root
+                / DEFAULT_EPISODES_PATH.format(chunk_index=next_chunk_idx, file_index=next_file_idx),
+            ]
+
+        if self.episodes is not None and len(self.episodes) > 0:
+            latest_ep = self.episodes[-1]
+            chunk_idx = latest_ep["meta/episodes/chunk_index"]
+            file_idx = latest_ep["meta/episodes/file_index"]
+            chunk_idx, file_idx = update_chunk_file_indices(chunk_idx, file_idx, self.chunks_size)
+        else:
+            chunk_idx, file_idx = 0, 0
+        return [self.root / DEFAULT_EPISODES_PATH.format(chunk_index=chunk_idx, file_index=file_idx)]
+
     def save_episode(
         self,
         episode_index: int,
@@ -573,7 +614,10 @@ def _encode_video_worker(
     vcodec: str = "libsvtav1",
     encoder_threads: int | None = None,
 ) -> Path:
-    temp_path = Path(tempfile.mkdtemp(dir=root)) / f"{video_key}_{episode_index:03d}.mp4"
+    temp_path = (
+        Path(tempfile.mkdtemp(prefix=".lerobot_episode_stage_", dir=root))
+        / f"{video_key}_{episode_index:03d}.mp4"
+    )
     fpath = DEFAULT_IMAGE_PATH.format(image_key=video_key, episode_index=episode_index, frame_index=0)
     img_dir = (root / fpath).parent
     encode_video_frames(img_dir, temp_path, fps, vcodec=vcodec, overwrite=True, encoder_threads=encoder_threads)
@@ -821,7 +865,12 @@ class LeRobotDataset(torch.utils.data.Dataset):
         upload_large_folder: bool = False,
         **card_kwargs,
     ) -> None:
-        ignore_patterns = ["images/"]
+        ignore_patterns = [
+            "images/",
+            ".lerobot_episode_txn_*",
+            ".lerobot_episode_stage_*",
+            "*.parquet.tmp",
+        ]
         if not push_videos:
             ignore_patterns.append("videos/")
 
@@ -1262,28 +1311,25 @@ class LeRobotDataset(torch.utils.data.Dataset):
 
     def _snapshot_save_state(self) -> dict:
         """Capture in-memory dataset state before an episode save starts."""
-        episodes_dir = self.root / "meta" / "episodes"
         return {
             "latest_episode": self.latest_episode,
             "current_file_start_frame": self._current_file_start_frame,
             "recorded_frames": self._recorded_frames,
+            "lazy_loading": self._lazy_loading,
             "writer_closed_for_reading": self._writer_closed_for_reading,
             "episodes_since_last_encoding": self.episodes_since_last_encoding,
-            "preexisting_episodes": {path for path in episodes_dir.rglob("*.parquet") if episodes_dir.exists()},
             "meta_latest_episode": self.meta.latest_episode,
             "meta_metadata_buffer": list(self.meta.metadata_buffer),
             "meta_tasks": self.meta.tasks.copy() if self.meta.tasks is not None else None,
             "meta_info": copy.deepcopy(self.meta.info) if self.meta.info is not None else None,
             "meta_stats": copy.deepcopy(self.meta.stats) if self.meta.stats is not None else None,
-            "meta_episodes": self.meta.episodes,
+            "meta_episodes": copy.deepcopy(self.meta.episodes),
         }
 
     def _rollback_save_transaction(self, backups: dict[Path, Path | None], prev_state: dict) -> None:
         """Restore files and in-memory state after a failed episode save."""
         with contextlib.suppress(Exception):
             self._close_writer()
-        with contextlib.suppress(Exception):
-            self.meta._close_writer()
 
         for path, backup in backups.items():
             try:
@@ -1296,19 +1342,10 @@ class LeRobotDataset(torch.utils.data.Dataset):
             except Exception as e:  # pragma: no cover - best-effort rollback
                 logging.error(f"Failed to rollback dataset file {path}: {e}")
 
-        # Metadata writes may create a fresh episodes parquet. Since every
-        # pre-existing episodes parquet was backed up above, any file here that is
-        # not in `backups` was created by this failed transaction and can be removed.
-        episodes_dir = self.root / "meta" / "episodes"
-        if episodes_dir.exists():
-            for path in episodes_dir.rglob("*.parquet"):
-                if path not in backups and path not in prev_state["preexisting_episodes"]:
-                    with contextlib.suppress(FileNotFoundError):
-                        path.unlink()
-
         self.latest_episode = prev_state["latest_episode"]
         self._current_file_start_frame = prev_state["current_file_start_frame"]
         self._recorded_frames = prev_state["recorded_frames"]
+        self._lazy_loading = prev_state["lazy_loading"]
         self._writer_closed_for_reading = prev_state["writer_closed_for_reading"]
         self.episodes_since_last_encoding = prev_state["episodes_since_last_encoding"]
         self.writer = None
@@ -1319,19 +1356,6 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.meta.info = prev_state["meta_info"]
         self.meta.stats = prev_state["meta_stats"]
         self.meta.episodes = prev_state["meta_episodes"]
-
-    @staticmethod
-    def _atomic_write_parquet(path: Path, table: pa.Table) -> None:
-        """Write a parquet table via a same-directory temp file and atomic replace."""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_path = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".parquet.tmp", dir=path.parent)
-        os.close(fd)
-        try:
-            pq.write_table(table, tmp_path, compression="snappy", use_dictionary=True)
-            os.replace(tmp_path, path)
-        finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
 
     def save_episode(
         self,
@@ -1352,24 +1376,23 @@ class LeRobotDataset(torch.utils.data.Dataset):
             parallel_encoding (bool, optional): If True, encode videos in parallel using ProcessPoolExecutor.
                 Defaults to True on Linux, False on macOS as it tends to use all the CPU available already.
         """
-        episode_buffer = episode_data if episode_data is not None else self.episode_buffer
-
+        episode_buffer = copy.deepcopy(episode_data if episode_data is not None else self.episode_buffer)
         validate_episode_buffer(episode_buffer, self.meta.total_episodes, self.features)
-
-        # size and task are special cases that won't be added to hf_dataset
-        episode_length = episode_buffer.pop("size")
-        tasks = episode_buffer.pop("task")
-        episode_tasks = list(set(tasks))
-        episode_index = episode_buffer["episode_index"]
-
-        episode_buffer["index"] = np.arange(self.meta.total_frames, self.meta.total_frames + episode_length)
-        episode_buffer["episode_index"] = np.full((episode_length,), episode_index)
 
         backup_dir = Path(tempfile.mkdtemp(prefix=".lerobot_episode_txn_", dir=self.root))
         backups: dict[Path, Path | None] = {}
         staged_videos: dict[str, Path] = {}
         prev_state = self._snapshot_save_state()
         try:
+            # size and task are special cases that won't be added to hf_dataset
+            episode_length = episode_buffer.pop("size")
+            tasks = episode_buffer.pop("task")
+            episode_tasks = list(set(tasks))
+            episode_index = episode_buffer["episode_index"]
+
+            episode_buffer["index"] = np.arange(self.meta.total_frames, self.meta.total_frames + episode_length)
+            episode_buffer["episode_index"] = np.full((episode_length,), episode_index)
+
             # Tasks are metadata too. Snapshot the file before the first disk write
             # so a failure later in this save leaves the old dataset untouched.
             _backup_path(self.root / DEFAULT_TASKS_PATH, backup_dir, backups)
@@ -1453,15 +1476,13 @@ class LeRobotDataset(torch.utils.data.Dataset):
             # Snapshot the final metadata/video files that the commit below can mutate.
             _backup_path(self.root / INFO_PATH, backup_dir, backups)
             _backup_path(self.root / STATS_PATH, backup_dir, backups)
-            episodes_dir = self.root / "meta" / "episodes"
-            if episodes_dir.exists():
-                for path in episodes_dir.rglob("*.parquet"):
-                    _backup_path(path, backup_dir, backups)
+            for path in self.meta._episode_metadata_paths_for_save():
+                _backup_path(path, backup_dir, backups)
 
-            ep_metadata, _ = self._save_episode_data(episode_buffer, backup_dir, backups)
+            ep_metadata = self._save_episode_data(episode_buffer, backup_dir, backups)
 
             for video_key, temp_path in staged_videos.items():
-                video_metadata, _ = self._save_episode_video(
+                video_metadata = self._save_episode_video(
                     video_key,
                     episode_index,
                     temp_path=temp_path,
@@ -1485,13 +1506,18 @@ class LeRobotDataset(torch.utils.data.Dataset):
             if not episode_data:
                 # Reset episode buffer and clean up temporary images (if not already deleted during video encoding)
                 self.clear_episode_buffer(delete_images=len(self.meta.image_keys) > 0)
-        except Exception:
+        except BaseException:
             self._rollback_save_transaction(backups, prev_state)
-            for temp_path in staged_videos.values():
-                shutil.rmtree(temp_path.parent, ignore_errors=True)
+            self._cleanup_episode_staging()
             raise
         finally:
+            self._cleanup_episode_staging()
             shutil.rmtree(backup_dir, ignore_errors=True)
+
+    def _cleanup_episode_staging(self) -> None:
+        """Remove staging directories that a failed or interrupted save may leave."""
+        for path in self.root.glob(".lerobot_episode_stage_*"):
+            shutil.rmtree(path, ignore_errors=True)
 
     def _batch_save_episode_video(
         self,
@@ -1528,6 +1554,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
             ):
                 # The current episode is in a new chunk or file.
                 # Save previous episode dataframe and update the Hugging Face dataset by reloading it.
+                if backup_dir is not None and backups is not None:
+                    _backup_path(episode_df_path, backup_dir, backups)
                 episode_df.to_parquet(episode_df_path)
                 self.meta.episodes = load_episodes(self.root)
 
@@ -1540,7 +1568,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             # Save the current episode's video metadata to the dataframe
             video_ep_metadata = {}
             for video_key in self.meta.video_keys:
-                video_metadata, _ = self._save_episode_video(
+                video_metadata = self._save_episode_video(
                     video_key,
                     ep_idx,
                     backup_dir=backup_dir,
@@ -1563,7 +1591,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         episode_buffer: dict,
         backup_dir: Path | None = None,
         backups: dict[Path, Path | None] | None = None,
-    ) -> tuple[dict, Path]:
+    ) -> dict:
         """Save episode data to a parquet file and update the Hugging Face dataset of frames data.
 
         This function processes episodes data from a buffer, converts it into a Hugging Face dataset,
@@ -1626,9 +1654,6 @@ class LeRobotDataset(torch.utils.data.Dataset):
         ep_dict["data/chunk_index"] = chunk_idx
         ep_dict["data/file_index"] = file_idx
 
-        # Write the resulting dataframe from RAM to disk. The file is replaced
-        # atomically from a same-directory temp file, so a failed write cannot
-        # leave a half-appended parquet behind.
         path = self.root / self.meta.data_path.format(chunk_index=chunk_idx, file_index=file_idx)
         table = ep_dataset.with_format("arrow")[:]
         self._close_writer()
@@ -1637,7 +1662,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             table = pa.concat_tables([existing_table, table])
         if backup_dir is not None and backups is not None:
             _backup_path(path, backup_dir, backups)
-        self._atomic_write_parquet(path, table)
+        _atomic_write_parquet(path, table)
         self.writer = None
         self._writer_closed_for_reading = False
 
@@ -1657,7 +1682,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         # Update recorded frames count for efficient length tracking
         self._recorded_frames += ep_num_frames
 
-        return metadata, path
+        return metadata
 
     def _save_episode_video(
         self,
@@ -1666,7 +1691,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         temp_path: Path | None = None,
         backup_dir: Path | None = None,
         backups: dict[Path, Path | None] | None = None,
-    ) -> tuple[dict, Path]:
+    ) -> dict:
         # Encode episode frames into a temporary video
         ep_path = self._encode_temporary_episode_video(video_key, episode_index) if temp_path is None else temp_path
 
@@ -1744,7 +1769,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             f"videos/{video_key}/from_timestamp": latest_duration_in_s,
             f"videos/{video_key}/to_timestamp": latest_duration_in_s + ep_duration_in_s,
         }
-        return metadata, final_path
+        return metadata
 
     def clear_episode_buffer(self, delete_images: bool = True) -> None:
         # Cancel streaming encoder if active

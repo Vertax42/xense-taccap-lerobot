@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 import pytest
 import torch
 
+from lerobot.datasets import lerobot_dataset
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 
@@ -73,6 +74,7 @@ def test_save_episode_appends_data_atomically(tmp_path, empty_lerobot_dataset_fa
         assert dataset.meta.total_episodes == 2
         assert dataset.meta.total_frames == 5
         assert pq.read_table(_data_path(dataset)).num_rows == 5
+        assert _data_path(dataset).stat().st_mode & 0o777 == 0o644
         assert not list(tmp_path.rglob("*.parquet.tmp"))
     finally:
         dataset.finalize()
@@ -126,6 +128,7 @@ def test_save_episode_rolls_back_when_metadata_commit_fails(tmp_path, monkeypatc
         assert dataset.meta.info["total_episodes"] == info_before["total_episodes"]
         assert dataset.meta.info["total_frames"] == info_before["total_frames"]
         assert not list(tmp_path.rglob(".lerobot_episode_txn_*"))
+        assert not list(tmp_path.rglob(".lerobot_episode_stage_*"))
     finally:
         dataset.finalize()
 
@@ -155,6 +158,7 @@ def test_save_episode_cleans_staging_when_streaming_finish_fails(tmp_path, monke
         if data_dir.exists():
             assert not list(data_dir.rglob("*.parquet"))
         assert not list(tmp_path.rglob(".lerobot_episode_txn_*"))
+        assert not list(tmp_path.rglob(".lerobot_episode_stage_*"))
     finally:
         dataset.finalize()
 
@@ -174,14 +178,82 @@ def test_save_episode_preserves_data_when_atomic_write_fails(tmp_path, empty_ler
         def fail_atomic_write(path, table):
             raise RuntimeError("simulated parquet failure")
 
-        monkeypatch.setattr(LeRobotDataset, "_atomic_write_parquet", staticmethod(fail_atomic_write))
+        original_atomic_write = lerobot_dataset._atomic_write_parquet
+        monkeypatch.setattr(lerobot_dataset, "_atomic_write_parquet", fail_atomic_write)
         _add_frames(dataset, 3, task="task_1")
         with pytest.raises(RuntimeError, match="simulated parquet failure"):
             dataset.save_episode()
+        monkeypatch.setattr(lerobot_dataset, "_atomic_write_parquet", original_atomic_write)
 
         assert data_path.read_bytes() == before
         assert dataset.meta.total_episodes == 1
         assert dataset.meta.total_frames == 2
         assert not list(tmp_path.rglob("*.parquet.tmp"))
+    finally:
+        dataset.finalize()
+
+
+def test_save_episode_rolls_back_flushed_episode_metadata(tmp_path, empty_lerobot_dataset_factory, monkeypatch):
+    dataset = empty_lerobot_dataset_factory(
+        root=tmp_path / "dataset",
+        features=_state_features(),
+        use_videos=False,
+        metadata_buffer_size=1,
+    )
+    try:
+        for task in ("task_0", "task_1", "task_2"):
+            _add_frames(dataset, 1, task=task)
+            dataset.save_episode()
+
+        episode_path = next((dataset.root / "meta" / "episodes").rglob("*.parquet"))
+        episodes_before = pq.read_table(episode_path).num_rows
+        assert episodes_before == 3
+
+        def fail_info_write(*args, **kwargs):
+            raise RuntimeError("simulated metadata commit failure")
+
+        _add_frames(dataset, 1, task="task_3")
+        original_write_info = lerobot_dataset.write_info
+        monkeypatch.setattr(lerobot_dataset, "write_info", fail_info_write)
+        with pytest.raises(RuntimeError, match="simulated metadata commit failure"):
+            dataset.save_episode()
+        monkeypatch.setattr(lerobot_dataset, "write_info", original_write_info)
+
+        assert pq.read_table(episode_path).num_rows == episodes_before
+        assert dataset.meta.total_episodes == 3
+        assert dataset.meta.total_frames == 3
+        assert dataset.episode_buffer["task"] == ["task_3"]
+        assert dataset.episode_buffer["size"] == 1
+    finally:
+        dataset.finalize()
+
+
+def test_save_episode_rolls_back_on_keyboard_interrupt(tmp_path, empty_lerobot_dataset_factory, monkeypatch):
+    dataset = empty_lerobot_dataset_factory(
+        root=tmp_path / "dataset",
+        features=_state_features(),
+        use_videos=False,
+    )
+    try:
+        _add_frames(dataset, 2, task="task_0")
+        dataset.save_episode()
+        data_path = _data_path(dataset)
+        before = data_path.read_bytes()
+
+        def interrupt_atomic_write(path, table):
+            raise KeyboardInterrupt
+
+        original_atomic_write = lerobot_dataset._atomic_write_parquet
+        monkeypatch.setattr(lerobot_dataset, "_atomic_write_parquet", interrupt_atomic_write)
+        _add_frames(dataset, 3, task="task_1")
+        with pytest.raises(KeyboardInterrupt):
+            dataset.save_episode()
+        monkeypatch.setattr(lerobot_dataset, "_atomic_write_parquet", original_atomic_write)
+
+        assert data_path.read_bytes() == before
+        assert dataset.meta.total_episodes == 1
+        assert dataset.meta.total_frames == 2
+        assert not list(tmp_path.rglob(".lerobot_episode_txn_*"))
+        assert not list(tmp_path.rglob(".lerobot_episode_stage_*"))
     finally:
         dataset.finalize()
