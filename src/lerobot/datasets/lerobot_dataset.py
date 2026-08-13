@@ -444,8 +444,7 @@ class LeRobotDatasetMetadata:
             next_chunk_idx, next_file_idx = update_chunk_file_indices(chunk_idx, file_idx, self.chunks_size)
             return [
                 current,
-                self.root
-                / DEFAULT_EPISODES_PATH.format(chunk_index=next_chunk_idx, file_index=next_file_idx),
+                self.root / DEFAULT_EPISODES_PATH.format(chunk_index=next_chunk_idx, file_index=next_file_idx),
             ]
 
         if self.episodes is not None and len(self.episodes) > 0:
@@ -615,8 +614,7 @@ def _encode_video_worker(
     encoder_threads: int | None = None,
 ) -> Path:
     temp_path = (
-        Path(tempfile.mkdtemp(prefix=".lerobot_episode_stage_", dir=root))
-        / f"{video_key}_{episode_index:03d}.mp4"
+        Path(tempfile.mkdtemp(prefix=".lerobot_episode_stage_", dir=root)) / f"{video_key}_{episode_index:03d}.mp4"
     )
     fpath = DEFAULT_IMAGE_PATH.format(image_key=video_key, episode_index=episode_index, frame_index=0)
     img_dir = (root / fpath).parent
