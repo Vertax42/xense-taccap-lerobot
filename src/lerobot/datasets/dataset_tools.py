@@ -518,9 +518,7 @@ def convert_8_to_6_cameras(
             continue
 
         names = list(ft["names"])
-        keep_indices = [
-            i for i, name in enumerate(names) if not str(name).startswith(HEAD_CAMERA_STATE_NAME_PREFIX)
-        ]
+        keep_indices = [i for i, name in enumerate(names) if not str(name).startswith(HEAD_CAMERA_STATE_NAME_PREFIX)]
         if len(keep_indices) == len(names):
             continue
         if not keep_indices:
@@ -660,7 +658,7 @@ def _update_episodes_metadata_after_camera_conversion(
             for col in df.columns:
                 if not col.startswith(prefix) or col.rsplit("/", 1)[-1] == "count":
                     continue
-                df[col] = df[col].map(lambda value: np.asarray(value)[keep_indices])
+                df[col] = df[col].map(lambda value, keep_indices=keep_indices: np.asarray(value)[keep_indices])
 
         df.to_parquet(path)
 
@@ -681,8 +679,7 @@ def _update_stats_after_camera_conversion(
         if feature_key in vector_keep_indices:
             keep_indices = vector_keep_indices[feature_key]
             stats = {
-                stat: value if stat == "count" else np.asarray(value)[keep_indices]
-                for stat, value in stats.items()
+                stat: value if stat == "count" else np.asarray(value)[keep_indices] for stat, value in stats.items()
             }
         new_stats[feature_key] = stats
 
