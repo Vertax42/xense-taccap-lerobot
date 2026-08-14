@@ -170,8 +170,8 @@ import draccus
 
 from lerobot.configs import parser
 from lerobot.datasets.dataset_tools import (
-    convert_image_to_video_dataset,
     convert_8_to_6_cameras,
+    convert_image_to_video_dataset,
     delete_episodes,
     merge_datasets,
     modify_tasks,

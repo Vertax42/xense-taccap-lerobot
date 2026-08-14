@@ -50,9 +50,7 @@ def _taccap_8_camera_features() -> dict:
 
     state_names = []
     for side in ("left", "right"):
-        state_names.extend(
-            f"{side}_tcp.{key}" for key in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6")
-        )
+        state_names.extend(f"{side}_tcp.{key}" for key in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"))
     state_names.extend(["left_gripper.pos", "right_gripper.pos"])
     state_names.extend(f"head_camera.{key}" for key in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"))
 
@@ -630,9 +628,7 @@ def test_remove_camera_feature(sample_dataset, tmp_path):
 def test_convert_8_to_6_cameras(empty_lerobot_dataset_factory, tmp_path):
     """Test converting an 8-camera bimanual TacCap dataset to 6-camera format."""
     features = _taccap_8_camera_features()
-    all_camera_keys = [
-        key for key, ft in features.items() if ft["dtype"] == "image"
-    ]
+    all_camera_keys = [key for key, ft in features.items() if ft["dtype"] == "image"]
 
     dataset = empty_lerobot_dataset_factory(
         root=tmp_path / "source_8cam",
@@ -646,10 +642,7 @@ def test_convert_8_to_6_cameras(empty_lerobot_dataset_factory, tmp_path):
                 "action": state + 0.5,
                 "observation.state": state,
                 "task": "pick",
-                **{
-                    key: np.zeros((4, 6, 3), dtype=np.uint8) + ep_idx + frame_idx
-                    for key in all_camera_keys
-                },
+                **{key: np.zeros((4, 6, 3), dtype=np.uint8) + ep_idx + frame_idx for key in all_camera_keys},
             }
             dataset.add_frame(frame)
         dataset.save_episode()
