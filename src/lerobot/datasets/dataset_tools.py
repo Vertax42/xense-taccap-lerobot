@@ -23,6 +23,7 @@ This module provides utilities for:
 - Merging datasets (wrapper around aggregate functionality)
 """
 
+import copy
 import logging
 import shutil
 from collections.abc import Callable
@@ -54,6 +55,28 @@ from lerobot.datasets.utils import (
 )
 from lerobot.datasets.video_utils import encode_video_frames, get_video_info
 from lerobot.utils.constants import HF_LEROBOT_HOME, OBS_IMAGE
+
+TACCAP_6_CAMERA_FEATURE_KEYS = frozenset(
+    {
+        "observation.images.left_tactile_left",
+        "observation.images.left_tactile_right",
+        "observation.images.right_tactile_left",
+        "observation.images.right_tactile_right",
+        "observation.images.left_wrist",
+        "observation.images.right_wrist",
+    }
+)
+
+TACCAP_HEAD_CAMERA_FEATURE_KEYS = frozenset(
+    {
+        "observation.images.left_head",
+        "observation.images.right_head",
+    }
+)
+
+TACCAP_8_CAMERA_FEATURE_KEYS = TACCAP_6_CAMERA_FEATURE_KEYS | TACCAP_HEAD_CAMERA_FEATURE_KEYS
+
+HEAD_CAMERA_STATE_NAME_PREFIX = "head_camera."
 
 
 def _load_episode_with_stats(src_dataset: LeRobotDataset, episode_idx: int) -> dict:
@@ -438,6 +461,233 @@ def remove_feature(
         output_dir=output_dir,
         repo_id=repo_id,
     )
+
+
+def convert_8_to_6_cameras(
+    dataset: LeRobotDataset,
+    output_dir: str | Path | None = None,
+    repo_id: str | None = None,
+) -> LeRobotDataset:
+    """Convert a bimanual TacCap 8-camera dataset to the 6-camera format.
+
+    The 8-camera format consists of the six bimanual cameras (four tactile pads
+    and two wrist cameras) plus the two Pico headset eyes. This conversion drops
+    the headset image keys and the ``head_camera.*`` dimensions from
+    ``action``/``observation.state``, so downstream training sees the same schema
+    as a bimanual recording made with ``enable_head_camera=false``.
+
+    Args:
+        dataset: The source LeRobotDataset.
+        output_dir: Root directory where the edited dataset will be stored. If
+            not specified, defaults to $HF_LEROBOT_HOME/repo_id.
+        repo_id: Edited dataset identifier. If not specified, defaults to
+            ``{dataset.repo_id}_6cameras``.
+
+    Returns:
+        New dataset with the 6-camera format.
+    """
+    camera_keys = set(dataset.meta.camera_keys)
+    missing_six_camera_keys = TACCAP_6_CAMERA_FEATURE_KEYS - camera_keys
+    missing_head_camera_keys = TACCAP_HEAD_CAMERA_FEATURE_KEYS - camera_keys
+    extra_camera_keys = camera_keys - TACCAP_8_CAMERA_FEATURE_KEYS
+
+    if missing_six_camera_keys:
+        raise ValueError(
+            "Source dataset is missing required 6-camera keys: "
+            f"{sorted(missing_six_camera_keys)}. Camera keys: {sorted(camera_keys)}"
+        )
+    if missing_head_camera_keys:
+        raise ValueError(
+            "Source dataset is already in 6-camera format or does not contain the expected head cameras: "
+            f"missing {sorted(missing_head_camera_keys)}. Camera keys: {sorted(camera_keys)}"
+        )
+    if extra_camera_keys:
+        raise ValueError(
+            "Source dataset contains unexpected camera keys; refusing to convert to avoid schema confusion: "
+            f"{sorted(extra_camera_keys)}"
+        )
+
+    new_features = copy.deepcopy(dataset.meta.features)
+    for key in TACCAP_HEAD_CAMERA_FEATURE_KEYS:
+        new_features.pop(key, None)
+
+    vector_keep_indices: dict[str, list[int]] = {}
+    for feature_key in ("action", "observation.state"):
+        ft = new_features.get(feature_key)
+        if not isinstance(ft, dict) or ft.get("names") is None:
+            continue
+
+        names = list(ft["names"])
+        keep_indices = [
+            i for i, name in enumerate(names) if not str(name).startswith(HEAD_CAMERA_STATE_NAME_PREFIX)
+        ]
+        if len(keep_indices) == len(names):
+            continue
+        if not keep_indices:
+            raise ValueError(
+                f"Cannot convert {feature_key}: every dimension is a head_camera dimension. "
+                "Leaving no state/action dimensions would invalidate the dataset."
+            )
+
+        vector_keep_indices[feature_key] = keep_indices
+        new_features[feature_key] = {
+            **ft,
+            "shape": (len(keep_indices),),
+            "names": [names[i] for i in keep_indices],
+        }
+
+    missing_vector_names = [
+        feature_key
+        for feature_key in ("action", "observation.state")
+        if feature_key in new_features and new_features[feature_key].get("names") is None
+    ]
+    if missing_vector_names:
+        raise ValueError(
+            "Cannot safely convert head cameras from datasets without vector feature names: "
+            f"{missing_vector_names}. TacCap datasets store the raw state/action names in "
+            "`action`/`observation.state` feature metadata."
+        )
+
+    if repo_id is None:
+        repo_id = f"{dataset.repo_id}_6cameras"
+    output_dir = Path(output_dir) if output_dir is not None else HF_LEROBOT_HOME / repo_id
+
+    remaining_video_keys = [key for key, ft in new_features.items() if ft["dtype"] == "video"]
+    new_meta = LeRobotDatasetMetadata.create(
+        repo_id=repo_id,
+        fps=dataset.meta.fps,
+        features=new_features,
+        robot_type=dataset.meta.robot_type,
+        root=output_dir,
+        use_videos=len(remaining_video_keys) > 0,
+        chunks_size=dataset.meta.chunks_size,
+        data_files_size_in_mb=dataset.meta.data_files_size_in_mb,
+        video_files_size_in_mb=dataset.meta.video_files_size_in_mb,
+    )
+
+    _copy_data_with_feature_changes_and_vector_indices(
+        dataset=dataset,
+        new_meta=new_meta,
+        remove_features=list(TACCAP_HEAD_CAMERA_FEATURE_KEYS),
+        vector_keep_indices=vector_keep_indices,
+    )
+    if dataset.meta.episodes is None:
+        dataset.meta.episodes = load_episodes(dataset.meta.root)
+    _copy_videos(dataset, new_meta, exclude_keys=list(TACCAP_HEAD_CAMERA_FEATURE_KEYS))
+    _copy_episodes_metadata_and_stats(dataset, new_meta)
+    _update_episodes_metadata_after_camera_conversion(
+        dst_meta=new_meta,
+        remove_feature_keys=list(TACCAP_HEAD_CAMERA_FEATURE_KEYS),
+        vector_keep_indices=vector_keep_indices,
+    )
+    _update_stats_after_camera_conversion(dataset, new_meta, vector_keep_indices)
+
+    return LeRobotDataset(
+        repo_id=repo_id,
+        root=output_dir,
+        image_transforms=dataset.image_transforms,
+        delta_timestamps=dataset.delta_timestamps,
+        tolerance_s=dataset.tolerance_s,
+    )
+
+
+def _copy_data_with_feature_changes_and_vector_indices(
+    dataset: LeRobotDataset,
+    new_meta: LeRobotDatasetMetadata,
+    remove_features: list[str] | None = None,
+    vector_keep_indices: dict[str, list[int]] | None = None,
+) -> None:
+    """Copy data files, dropping features and narrowing named vector columns."""
+    remove_features = remove_features or []
+    vector_keep_indices = vector_keep_indices or {}
+
+    data_dir = dataset.root / DATA_DIR
+    parquet_files = sorted(data_dir.glob("*/*.parquet"))
+    if not parquet_files:
+        raise ValueError(f"No parquet files found in {data_dir}")
+
+    for src_path in tqdm(parquet_files, desc="Processing data files"):
+        df = pd.read_parquet(src_path).reset_index(drop=True)
+
+        if remove_features:
+            df = df.drop(columns=remove_features, errors="ignore")
+
+        for feature_key, keep_indices in vector_keep_indices.items():
+            if feature_key not in df.columns:
+                continue
+            sliced_values = []
+            for value in df[feature_key]:
+                arr = np.asarray(value, dtype=np.float32)
+                if arr.ndim == 0:
+                    arr = arr.reshape(1)
+                sliced_values.append(arr[keep_indices])
+            df[feature_key] = sliced_values
+
+        relative_path = src_path.relative_to(dataset.root)
+        chunk_dir = relative_path.parts[1]
+        file_name = relative_path.parts[2]
+        chunk_idx = int(chunk_dir.split("-")[1])
+        file_idx = int(file_name.split("-")[1].split(".")[0])
+
+        dst_path = new_meta.root / DEFAULT_DATA_PATH.format(chunk_index=chunk_idx, file_index=file_idx)
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_parquet(df, dst_path, new_meta)
+
+
+def _update_episodes_metadata_after_camera_conversion(
+    dst_meta: LeRobotDatasetMetadata,
+    remove_feature_keys: list[str],
+    vector_keep_indices: dict[str, list[int]],
+) -> None:
+    """Drop removed camera columns and narrow vector stats in episode metadata."""
+    episodes_dir = dst_meta.root / "meta/episodes"
+    parquet_files = sorted(episodes_dir.glob("*/*.parquet")) if episodes_dir.exists() else []
+
+    for path in parquet_files:
+        df = pd.read_parquet(path)
+        columns_to_drop = []
+        for feature_key in remove_feature_keys:
+            columns_to_drop.extend(
+                col
+                for col in df.columns
+                if col.startswith(f"videos/{feature_key}/") or col.startswith(f"stats/{feature_key}/")
+            )
+        if columns_to_drop:
+            df = df.drop(columns=columns_to_drop, errors="ignore")
+
+        for feature_key, keep_indices in vector_keep_indices.items():
+            prefix = f"stats/{feature_key}/"
+            for col in df.columns:
+                if not col.startswith(prefix) or col.rsplit("/", 1)[-1] == "count":
+                    continue
+                df[col] = df[col].map(lambda value: np.asarray(value)[keep_indices])
+
+        df.to_parquet(path)
+
+
+def _update_stats_after_camera_conversion(
+    dataset: LeRobotDataset,
+    dst_meta: LeRobotDatasetMetadata,
+    vector_keep_indices: dict[str, list[int]],
+) -> None:
+    """Write top-level stats after dropping head cameras and state dimensions."""
+    source_stats = dataset.meta.stats or {}
+    new_stats = {}
+
+    for feature_key in dst_meta.features:
+        stats = source_stats.get(feature_key)
+        if stats is None:
+            continue
+        if feature_key in vector_keep_indices:
+            keep_indices = vector_keep_indices[feature_key]
+            stats = {
+                stat: value if stat == "count" else np.asarray(value)[keep_indices]
+                for stat, value in stats.items()
+            }
+        new_stats[feature_key] = stats
+
+    dst_meta.stats = new_stats
+    write_stats(new_stats, dst_meta.root)
 
 
 def _fractions_to_episode_indices(

@@ -23,6 +23,7 @@ Verifies:
   - episodes metadata matches info.json episode count
   - data parquet files: row count, index continuity, frame_index continuity, NaN check
   - video files: existence, frame count alignment with parquet, fps, resolution
+  - camera format: TacCap 6-camera (no headset) vs 8-camera (headset)
 
 Examples:
 
@@ -46,6 +47,11 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from lerobot.datasets.dataset_tools import (
+    HEAD_CAMERA_STATE_NAME_PREFIX,
+    TACCAP_6_CAMERA_FEATURE_KEYS,
+    TACCAP_8_CAMERA_FEATURE_KEYS,
+)
 from lerobot.utils.constants import HF_LEROBOT_HOME
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -479,6 +485,82 @@ def check_videos(
             )
 
 
+def classify_camera_format(info: dict) -> tuple[str | None, list[str], list[str]]:
+    """Classify a dataset as TacCap 6-camera or 8-camera format.
+
+    Returns:
+        Tuple of (camera format, errors, warnings). ``camera format`` is
+        ``"6"``, ``"8"``, or ``None`` when the camera keys do not match either
+        known TacCap schema.
+    """
+    features = info.get("features", {})
+    camera_keys = {key for key, ft in features.items() if ft.get("dtype") in ("video", "image")}
+
+    if camera_keys == TACCAP_6_CAMERA_FEATURE_KEYS:
+        camera_format = "6"
+    elif camera_keys == TACCAP_8_CAMERA_FEATURE_KEYS:
+        camera_format = "8"
+    else:
+        missing_six = sorted(TACCAP_6_CAMERA_FEATURE_KEYS - camera_keys)
+        missing_head = sorted(TACCAP_8_CAMERA_FEATURE_KEYS - camera_keys)
+        extra = sorted(camera_keys - TACCAP_8_CAMERA_FEATURE_KEYS)
+        return (
+            None,
+            [],
+            [
+                "Camera keys do not match the TacCap 6-camera or 8-camera format "
+                f"(missing 6-camera keys: {missing_six}, missing 8-camera keys: {missing_head}, "
+                f"unexpected keys: {extra})"
+            ],
+        )
+
+    errors: list[str] = []
+    warnings: list[str] = []
+    for feature_key in ("action", "observation.state"):
+        ft = features.get(feature_key)
+        names = ft.get("names") if isinstance(ft, dict) else None
+        if names is None:
+            warnings.append(
+                f"{feature_key} has no feature names; cannot verify head_camera dimensions"
+            )
+            continue
+
+        head_camera_dims = [
+            name for name in names if str(name).startswith(HEAD_CAMERA_STATE_NAME_PREFIX)
+        ]
+        if camera_format == "6" and head_camera_dims:
+            errors.append(
+                f"6-camera dataset must not contain {feature_key} head_camera dims: "
+                f"{head_camera_dims}"
+            )
+        if camera_format == "8" and not head_camera_dims:
+            errors.append(
+                f"8-camera dataset must contain {feature_key} head_camera dims"
+            )
+
+    return camera_format, errors, warnings
+
+
+def check_camera_format(info: dict, errors: list, warnings: list) -> str | None:
+    """Log the TacCap camera format and add any schema consistency issues."""
+    logger.info("\n[camera format]")
+    camera_format, format_errors, format_warnings = classify_camera_format(info)
+
+    if camera_format == "6":
+        logger.info("  %s Camera format: 6-camera (no headset)", PASS)
+    elif camera_format == "8":
+        logger.info("  %s Camera format: 8-camera (headset)", PASS)
+
+    errors.extend(format_errors)
+    warnings.extend(format_warnings)
+    for issue in format_errors:
+        logger.warning("  %s %s", FAIL, issue)
+    for issue in format_warnings:
+        logger.warning("  %s %s", WARN, issue)
+
+    return camera_format
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -544,10 +626,20 @@ def main() -> None:
     data_df = check_data(dataset_root, info, episode_indices, errors, warnings)
     if not data_df.empty:
         check_videos(dataset_root, info, data_df, episode_indices, errors, warnings)
+    camera_format = check_camera_format(info, errors, warnings)
 
     # Summary
+    camera_format_label = {
+        "6": "6-camera (no headset)",
+        "8": "8-camera (headset)",
+    }.get(camera_format, "not recognized")
     logger.info("\n" + "=" * 60)
-    logger.info("Summary: %d error(s), %d warning(s)", len(errors), len(warnings))
+    logger.info(
+        "Summary: %d error(s), %d warning(s) | Camera format: %s",
+        len(errors),
+        len(warnings),
+        camera_format_label,
+    )
     if errors:
         logger.info("\nErrors:")
         for e in errors:
