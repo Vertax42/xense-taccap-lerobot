@@ -23,6 +23,7 @@ import torch
 
 from lerobot.datasets.dataset_tools import (
     add_features,
+    convert_8_to_6_cameras,
     delete_episodes,
     merge_datasets,
     modify_features,
@@ -31,6 +32,39 @@ from lerobot.datasets.dataset_tools import (
     split_dataset,
 )
 from lerobot.scripts.lerobot_edit_dataset import convert_image_to_video_dataset
+
+
+def _taccap_8_camera_features() -> dict:
+    six_camera_keys = [
+        "observation.images.left_tactile_left",
+        "observation.images.left_tactile_right",
+        "observation.images.right_tactile_left",
+        "observation.images.right_tactile_right",
+        "observation.images.left_wrist",
+        "observation.images.right_wrist",
+    ]
+    head_camera_keys = [
+        "observation.images.left_head",
+        "observation.images.right_head",
+    ]
+
+    state_names = []
+    for side in ("left", "right"):
+        state_names.extend(
+            f"{side}_tcp.{key}" for key in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6")
+        )
+    state_names.extend(["left_gripper.pos", "right_gripper.pos"])
+    state_names.extend(f"head_camera.{key}" for key in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"))
+
+    features = {
+        "action": {"dtype": "float32", "shape": (len(state_names),), "names": state_names},
+        "observation.state": {"dtype": "float32", "shape": (len(state_names),), "names": state_names},
+        **{
+            key: {"dtype": "image", "shape": (4, 6, 3), "names": ["height", "width", "channels"]}
+            for key in six_camera_keys + head_camera_keys
+        },
+    }
+    return features
 
 
 @pytest.fixture
@@ -591,6 +625,59 @@ def test_remove_camera_feature(sample_dataset, tmp_path):
 
     sample_item = dataset_without_camera[0]
     assert camera_to_remove not in sample_item
+
+
+def test_convert_8_to_6_cameras(empty_lerobot_dataset_factory, tmp_path):
+    """Test converting an 8-camera bimanual TacCap dataset to 6-camera format."""
+    features = _taccap_8_camera_features()
+    all_camera_keys = [
+        key for key, ft in features.items() if ft["dtype"] == "image"
+    ]
+
+    dataset = empty_lerobot_dataset_factory(
+        root=tmp_path / "source_8cam",
+        features=features,
+        use_videos=False,
+    )
+    for ep_idx in range(2):
+        for frame_idx in range(3):
+            state = np.arange(features["action"]["shape"][0], dtype=np.float32) + ep_idx * 10
+            frame = {
+                "action": state + 0.5,
+                "observation.state": state,
+                "task": "pick",
+                **{
+                    key: np.zeros((4, 6, 3), dtype=np.uint8) + ep_idx + frame_idx
+                    for key in all_camera_keys
+                },
+            }
+            dataset.add_frame(frame)
+        dataset.save_episode()
+    dataset.finalize()
+
+    converted = convert_8_to_6_cameras(
+        dataset,
+        output_dir=tmp_path / "converted_6cam",
+        repo_id="test/6cam",
+    )
+
+    expected_camera_keys = {
+        "observation.images.left_tactile_left",
+        "observation.images.left_tactile_right",
+        "observation.images.right_tactile_left",
+        "observation.images.right_tactile_right",
+        "observation.images.left_wrist",
+        "observation.images.right_wrist",
+    }
+    assert set(converted.meta.camera_keys) == expected_camera_keys
+    assert converted.meta.features["action"]["shape"] == (20,)
+    assert converted.meta.features["observation.state"]["shape"] == (20,)
+    assert not any(name.startswith("head_camera.") for name in converted.meta.features["action"]["names"])
+    assert converted.meta.stats["action"]["mean"].shape == (20,)
+    assert converted.meta.stats["observation.state"]["mean"].shape == (20,)
+    assert not any("left_head" in key or "right_head" in key for key in converted.meta.episodes.features)
+    assert converted.meta.total_episodes == 2
+    assert converted.meta.total_frames == 6
 
 
 def test_complex_workflow_integration(sample_dataset, tmp_path):
