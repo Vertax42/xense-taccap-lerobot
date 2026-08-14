@@ -24,9 +24,7 @@ from lerobot.scripts.lerobot_check_dataset import classify_camera_format
 def _state_names(head_camera_dims: bool) -> list[str]:
     names = []
     for side in ("left", "right"):
-        names.extend(
-            f"{side}_tcp.{key}" for key in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6")
-        )
+        names.extend(f"{side}_tcp.{key}" for key in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"))
     names.extend(["left_gripper.pos", "right_gripper.pos"])
     if head_camera_dims:
         names.extend(f"head_camera.{key}" for key in ("x", "y", "z", "r1", "r2", "r3", "r4", "r5", "r6"))
@@ -62,9 +60,7 @@ def test_classify_6_camera_format():
 
 
 def test_classify_8_camera_format():
-    camera_format, errors, warnings = classify_camera_format(
-        _info(TACCAP_8_CAMERA_FEATURE_KEYS, head_camera_dims=True)
-    )
+    camera_format, errors, warnings = classify_camera_format(_info(TACCAP_8_CAMERA_FEATURE_KEYS, head_camera_dims=True))
     assert camera_format == "8"
     assert errors == []
     assert warnings == []
@@ -80,9 +76,7 @@ def test_classify_8_camera_missing_head_dims():
 
 
 def test_classify_6_camera_with_head_dims():
-    camera_format, errors, warnings = classify_camera_format(
-        _info(TACCAP_6_CAMERA_FEATURE_KEYS, head_camera_dims=True)
-    )
+    camera_format, errors, warnings = classify_camera_format(_info(TACCAP_6_CAMERA_FEATURE_KEYS, head_camera_dims=True))
     assert camera_format == "6"
     assert len(errors) == 2
     assert warnings == []
@@ -90,9 +84,7 @@ def test_classify_6_camera_with_head_dims():
 
 def test_classify_unknown_camera_format():
     camera_keys = TACCAP_6_CAMERA_FEATURE_KEYS | {"observation.images.extra"}
-    camera_format, errors, warnings = classify_camera_format(
-        _info(camera_keys, head_camera_dims=False)
-    )
+    camera_format, errors, warnings = classify_camera_format(_info(camera_keys, head_camera_dims=False))
     assert camera_format is None
     assert errors == []
     assert len(warnings) == 1

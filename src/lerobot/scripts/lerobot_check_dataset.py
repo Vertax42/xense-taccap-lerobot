@@ -520,23 +520,14 @@ def classify_camera_format(info: dict) -> tuple[str | None, list[str], list[str]
         ft = features.get(feature_key)
         names = ft.get("names") if isinstance(ft, dict) else None
         if names is None:
-            warnings.append(
-                f"{feature_key} has no feature names; cannot verify head_camera dimensions"
-            )
+            warnings.append(f"{feature_key} has no feature names; cannot verify head_camera dimensions")
             continue
 
-        head_camera_dims = [
-            name for name in names if str(name).startswith(HEAD_CAMERA_STATE_NAME_PREFIX)
-        ]
+        head_camera_dims = [name for name in names if str(name).startswith(HEAD_CAMERA_STATE_NAME_PREFIX)]
         if camera_format == "6" and head_camera_dims:
-            errors.append(
-                f"6-camera dataset must not contain {feature_key} head_camera dims: "
-                f"{head_camera_dims}"
-            )
+            errors.append(f"6-camera dataset must not contain {feature_key} head_camera dims: {head_camera_dims}")
         if camera_format == "8" and not head_camera_dims:
-            errors.append(
-                f"8-camera dataset must contain {feature_key} head_camera dims"
-            )
+            errors.append(f"8-camera dataset must contain {feature_key} head_camera dims")
 
     return camera_format, errors, warnings
 
