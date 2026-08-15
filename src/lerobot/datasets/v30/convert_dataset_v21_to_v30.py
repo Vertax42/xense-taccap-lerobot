@@ -458,8 +458,6 @@ def convert_dataset(
     if video_file_size_in_mb is None:
         video_file_size_in_mb = DEFAULT_VIDEO_FILE_SIZE_IN_MB
 
-    root_provided = root is not None
-
     # First check if the dataset already has a v3.0 version
     if root is None and not force_conversion:
         try:
@@ -480,25 +478,13 @@ def convert_dataset(
     old_root = root.parent / f"{root.name}_old"
     new_root = root.parent / f"{root.name}_v30"
 
+    # Handle old_root cleanup if both old_root and root exist
     if old_root.is_dir() and root.is_dir():
-        raise FileExistsError(
-            f"Both {root} and backup {old_root} exist. Refusing to delete either directory automatically.\n"
-            "Remove or rename the stale directory, then retry."
-        )
-
-    if old_root.is_dir() and not root.exists():
-        raise FileNotFoundError(
-            f"Input dataset {root} is missing, but a previous conversion backup exists at {old_root}.\n"
-            "Restore the backup before retrying, or pass a different --root."
-        )
-
-    if root_provided and not root.exists():
-        raise FileNotFoundError(f"Input dataset directory does not exist: {root}")
+        shutil.rmtree(str(root))
+        shutil.move(str(old_root), str(root))
 
     if new_root.is_dir():
-        raise FileExistsError(
-            f"Conversion staging directory already exists: {new_root}. Remove it manually before retrying."
-        )
+        shutil.rmtree(new_root)
 
     if not use_local_dataset:
         snapshot_download(

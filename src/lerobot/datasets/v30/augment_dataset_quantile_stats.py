@@ -187,7 +187,6 @@ def augment_dataset_with_quantile_stats(
     dataset = LeRobotDataset(
         repo_id=repo_id,
         root=root,
-        local_files_only=root is not None,
     )
 
     if not overwrite and has_quantile_stats(dataset.meta.stats):
