@@ -497,8 +497,7 @@ def convert_dataset(
 
     if new_root.is_dir():
         raise FileExistsError(
-            f"Conversion staging directory already exists: {new_root}. "
-            "Remove it manually before retrying."
+            f"Conversion staging directory already exists: {new_root}. Remove it manually before retrying."
         )
 
     if not use_local_dataset:
