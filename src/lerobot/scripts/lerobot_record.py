@@ -434,6 +434,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
     try:
         if cfg.resume:
+            # Resume must operate on the local dataset; never fall back to a remote copy.
             dataset = LeRobotDataset(
                 cfg.dataset.repo_id,
                 root=cfg.dataset.root,
@@ -442,6 +443,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 streaming_encoding=cfg.dataset.streaming_encoding,
                 encoder_queue_maxsize=cfg.dataset.encoder_queue_maxsize,
                 encoder_threads=cfg.dataset.encoder_threads,
+                local_files_only=True,
             )
 
             if hasattr(robot, "cameras") and len(robot.cameras) > 0:

@@ -133,6 +133,7 @@ class LeRobotDatasetMetadata:
         revision: str | None = None,
         force_cache_sync: bool = False,
         metadata_buffer_size: int = 10,
+        local_files_only: bool = False,
     ):
         self.repo_id = repo_id
         self.revision = revision if revision else CODEBASE_VERSION
@@ -141,12 +142,21 @@ class LeRobotDatasetMetadata:
         self.latest_episode = None
         self.metadata_buffer: list[dict] = []
         self.metadata_buffer_size = metadata_buffer_size
+        self.local_files_only = local_files_only
+
+        if force_cache_sync and local_files_only:
+            raise ValueError("`force_cache_sync` and `local_files_only` cannot both be True.")
 
         try:
             if force_cache_sync:
                 raise FileNotFoundError
             self.load_metadata()
-        except (FileNotFoundError, NotADirectoryError):
+        except (FileNotFoundError, NotADirectoryError) as err:
+            if local_files_only:
+                raise FileNotFoundError(
+                    f"Cannot find dataset metadata in local directory: {self.root}. "
+                    "Set local_files_only=False to download metadata from the Hugging Face Hub."
+                ) from err
             if is_valid_version(self.revision):
                 self.revision = get_safe_version(self.repo_id, self.revision)
 
@@ -217,6 +227,7 @@ class LeRobotDatasetMetadata:
             repo_type="dataset",
             revision=self.revision,
             local_dir=self.root,
+            local_files_only=getattr(self, "local_files_only", False),
             allow_patterns=allow_patterns,
             ignore_patterns=ignore_patterns,
         )
@@ -641,6 +652,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         streaming_encoding: bool = False,
         encoder_queue_maxsize: int = 30,
         encoder_threads: int | None = None,
+        local_files_only: bool = False,
     ):
         """
         2 modes are available for instantiating this class, depending on 2 different use cases:
@@ -763,6 +775,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
             encoder_threads (int | None, optional): Number of threads per encoder instance. None lets the
                 codec auto-detect (default). Lower values reduce CPU usage per encoder. Maps to 'lp' (via svtav1-params) for
                 libsvtav1 and 'threads' for h264/hevc.
+            local_files_only (bool, optional): If True, never download from the Hugging Face Hub. Fails if
+                local metadata, data, or videos are missing or incomplete. Defaults to False.
         """
         super().__init__()
         self.repo_id = repo_id
@@ -778,6 +792,10 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.episodes_since_last_encoding = 0
         self.vcodec = resolve_vcodec(vcodec)
         self._encoder_threads = encoder_threads
+        self.local_files_only = local_files_only
+
+        if force_cache_sync and local_files_only:
+            raise ValueError("`force_cache_sync` and `local_files_only` cannot both be True.")
 
         # Unused attributes
         self.image_writer = None
@@ -790,7 +808,13 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self.root.mkdir(exist_ok=True, parents=True)
 
         # Load metadata
-        self.meta = LeRobotDatasetMetadata(self.repo_id, self.root, self.revision, force_cache_sync=force_cache_sync)
+        self.meta = LeRobotDatasetMetadata(
+            self.repo_id,
+            self.root,
+            self.revision,
+            force_cache_sync=force_cache_sync,
+            local_files_only=local_files_only,
+        )
 
         # Track dataset state for efficient incremental writing
         self._lazy_loading = False
@@ -805,7 +829,12 @@ class LeRobotDataset(torch.utils.data.Dataset):
             # Check if cached dataset contains all requested episodes
             if not self._check_cached_episodes_sufficient():
                 raise FileNotFoundError("Cached dataset doesn't contain all requested episodes")
-        except (FileNotFoundError, NotADirectoryError):
+        except (FileNotFoundError, NotADirectoryError) as err:
+            if local_files_only:
+                raise FileNotFoundError(
+                    f"Cannot find all requested dataset data and videos in local directory: {self.root}. "
+                    "Set local_files_only=False to download missing files from the Hugging Face Hub."
+                ) from err
             if is_valid_version(self.revision):
                 self.revision = get_safe_version(self.repo_id, self.revision)
             self.download(download_videos)
@@ -921,6 +950,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             repo_type="dataset",
             revision=self.revision,
             local_dir=self.root,
+            local_files_only=getattr(self, "local_files_only", False),
             allow_patterns=allow_patterns,
             ignore_patterns=ignore_patterns,
         )
