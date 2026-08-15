@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
+
 import draccus
 import pytest
 
@@ -28,6 +30,7 @@ from lerobot.scripts.lerobot_edit_dataset import (
     RemoveFeatureConfig,
     SplitConfig,
     _validate_config,
+    _validate_input_root,
 )
 
 
@@ -83,3 +86,16 @@ class TestOperationTypeParsing:
         cfg = parse_cfg(["--repo_id", "test/repo", "--new_repo_id", "test/merged", "--operation.type", type_name])
         resolved_name = OperationConfig.get_choice_name(type(cfg.operation))
         assert resolved_name == type_name
+
+
+class TestLocalInputValidation:
+    def test_missing_explicit_root_fails_without_download(self, tmp_path):
+        with pytest.raises(FileNotFoundError, match="does not exist"):
+            _validate_input_root("test/repo", tmp_path / "missing", local_files_only=True)
+
+    def test_stale_inplace_backup_gives_restore_hint(self, tmp_path):
+        backup = tmp_path / "dataset_old"
+        backup.mkdir()
+
+        with pytest.raises(FileNotFoundError, match="Restore the backup"):
+            _validate_input_root("test/repo", tmp_path / "dataset", local_files_only=True)

@@ -102,7 +102,7 @@ def push_dataset_to_hub(
         logging.info("Skipping video files")
 
     logging.info("Loading local LeRobot dataset...")
-    dataset = LeRobotDataset(repo_id=repo_id, root=dataset_path)
+    dataset = LeRobotDataset(repo_id=repo_id, root=dataset_path, local_files_only=True)
 
     logging.info("Starting upload...")
     try:
