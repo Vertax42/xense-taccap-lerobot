@@ -109,9 +109,9 @@ def test_local_files_only_does_not_download_missing_metadata(tmp_path):
     with (
         patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
         patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
+        pytest.raises(FileNotFoundError, match="Cannot find dataset metadata in local directory"),
     ):
-        with pytest.raises(FileNotFoundError, match="Cannot find dataset metadata in local directory"):
-            LeRobotDataset(DUMMY_REPO_ID, root=tmp_path / "missing", local_files_only=True)
+        LeRobotDataset(DUMMY_REPO_ID, root=tmp_path / "missing", local_files_only=True)
 
     mock_get_safe_version.assert_not_called()
     mock_snapshot_download.assert_not_called()
@@ -125,9 +125,9 @@ def test_local_files_only_does_not_download_missing_data(tmp_path, lerobot_datas
     with (
         patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
         patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
+        pytest.raises(FileNotFoundError, match="Cannot find all requested dataset data and videos"),
     ):
-        with pytest.raises(FileNotFoundError, match="Cannot find all requested dataset data and videos"):
-            LeRobotDataset(DUMMY_REPO_ID, root=root, local_files_only=True)
+        LeRobotDataset(DUMMY_REPO_ID, root=root, local_files_only=True)
 
     mock_get_safe_version.assert_not_called()
     mock_snapshot_download.assert_not_called()

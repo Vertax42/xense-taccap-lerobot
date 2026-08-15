@@ -1894,6 +1894,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         obj.episodes_since_last_encoding = 0
         obj.vcodec = vcodec
         obj._encoder_threads = encoder_threads
+        obj.local_files_only = False
 
         if image_writer_processes or image_writer_threads:
             obj.start_image_writer(image_writer_processes, image_writer_threads)
