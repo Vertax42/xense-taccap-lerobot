@@ -14,8 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import re
+import shutil
 from itertools import chain
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -101,6 +103,34 @@ def test_dataset_initialization(tmp_path, lerobot_dataset_factory):
     assert dataset.episodes == kwargs["episodes"]
     assert dataset.num_episodes == len(kwargs["episodes"])
     assert dataset.num_frames == len(dataset)
+
+
+def test_local_files_only_does_not_download_missing_metadata(tmp_path):
+    with (
+        patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
+        patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
+        pytest.raises(FileNotFoundError, match="Cannot find dataset metadata in local directory"),
+    ):
+        LeRobotDataset(DUMMY_REPO_ID, root=tmp_path / "missing", local_files_only=True)
+
+    mock_get_safe_version.assert_not_called()
+    mock_snapshot_download.assert_not_called()
+
+
+def test_local_files_only_does_not_download_missing_data(tmp_path, lerobot_dataset_factory):
+    root = tmp_path / "test"
+    lerobot_dataset_factory(root=root, total_episodes=1, total_frames=1)
+    shutil.rmtree(root / "data")
+
+    with (
+        patch("lerobot.datasets.lerobot_dataset.get_safe_version") as mock_get_safe_version,
+        patch("lerobot.datasets.lerobot_dataset.snapshot_download") as mock_snapshot_download,
+        pytest.raises(FileNotFoundError, match="Cannot find all requested dataset data and videos"),
+    ):
+        LeRobotDataset(DUMMY_REPO_ID, root=root, local_files_only=True)
+
+    mock_get_safe_version.assert_not_called()
+    mock_snapshot_download.assert_not_called()
 
 
 # TODO(rcadene, aliberts): do not run LeRobotDataset.create, instead refactor LeRobotDatasetMetadata.create

@@ -257,6 +257,8 @@ class EditDatasetConfig:
     repo_id: str | None = None
     # Root directory where the input dataset is stored. If not specified, defaults to $HF_LEROBOT_HOME/repo_id.
     root: str | None = None
+    # Only read from the local root/cache. Do not download missing files from the Hugging Face Hub.
+    local_files_only: bool = False
     # Edited dataset identifier. When both new_repo_id (resp. new_root) and repo_id (resp. root) are identical, modifications are applied in-place and a backup of the original dataset is created. Required for Merge operation.
     new_repo_id: str | None = None
     # Root directory where the edited dataset will be stored. If not specified, defaults to $HF_LEROBOT_HOME/new_repo_id. For Split operation, this is the base directory for the split datasets.
@@ -288,6 +290,38 @@ def get_output_path(
     return output_repo_id, output_path
 
 
+def _validate_input_root(
+    repo_id: str,
+    root: str | Path | None,
+    *,
+    local_files_only: bool,
+) -> None:
+    input_path = Path(root) if root else HF_LEROBOT_HOME / repo_id
+    if input_path.exists():
+        return
+
+    backup_path = input_path.with_name(input_path.name + "_old")
+    if backup_path.exists():
+        raise FileNotFoundError(
+            f"Input dataset directory does not exist: {input_path}\n"
+            f"A backup from a previous in-place edit exists at: {backup_path}\n"
+            "Restore the backup, or pass that path via --root (or --operation.roots)."
+        )
+
+    if root is not None or local_files_only:
+        raise FileNotFoundError(f"Input dataset directory does not exist: {input_path}")
+
+
+def _load_input_dataset(
+    repo_id: str,
+    root: str | Path | None,
+    *,
+    local_files_only: bool,
+) -> LeRobotDataset:
+    _validate_input_root(repo_id, root, local_files_only=local_files_only)
+    return LeRobotDataset(repo_id, root=root, local_files_only=local_files_only)
+
+
 def handle_delete_episodes(cfg: EditDatasetConfig) -> None:
     if not isinstance(cfg.operation, DeleteEpisodesConfig):
         raise ValueError("Operation config must be DeleteEpisodesConfig")
@@ -295,7 +329,11 @@ def handle_delete_episodes(cfg: EditDatasetConfig) -> None:
     if not cfg.operation.episode_indices:
         raise ValueError("episode_indices must be specified for delete_episodes operation")
 
-    dataset = LeRobotDataset(cfg.repo_id, root=cfg.root)
+    dataset = _load_input_dataset(
+        cfg.repo_id,
+        cfg.root,
+        local_files_only=cfg.local_files_only or cfg.root is not None,
+    )
     output_repo_id, output_dir = get_output_path(
         cfg.repo_id,
         new_repo_id=cfg.new_repo_id,
@@ -320,7 +358,7 @@ def handle_delete_episodes(cfg: EditDatasetConfig) -> None:
 
     if cfg.push_to_hub:
         logging.info(f"Pushing to hub as {output_repo_id}")
-        LeRobotDataset(output_repo_id, root=output_dir).push_to_hub()
+        LeRobotDataset(output_repo_id, root=output_dir, local_files_only=True).push_to_hub()
 
 
 def handle_split(cfg: EditDatasetConfig) -> None:
@@ -335,7 +373,11 @@ def handle_split(cfg: EditDatasetConfig) -> None:
             "split uses the original dataset identifier --repo_id to generate split names. The --new_repo_id parameter is ignored."
         )
 
-    dataset = LeRobotDataset(cfg.repo_id, root=cfg.root)
+    dataset = _load_input_dataset(
+        cfg.repo_id,
+        cfg.root,
+        local_files_only=cfg.local_files_only or cfg.root is not None,
+    )
 
     logging.info(f"Splitting dataset {cfg.repo_id} with splits: {cfg.operation.splits}")
     split_datasets = split_dataset(
@@ -349,7 +391,7 @@ def handle_split(cfg: EditDatasetConfig) -> None:
 
         if cfg.push_to_hub:
             logging.info(f"Pushing {split_name} split to hub as {split_ds.repo_id}")
-            LeRobotDataset(split_ds.repo_id, root=split_ds.root).push_to_hub()
+            LeRobotDataset(split_ds.repo_id, root=split_ds.root, local_files_only=True).push_to_hub()
 
 
 def handle_merge(cfg: EditDatasetConfig) -> None:
@@ -369,12 +411,15 @@ def handle_merge(cfg: EditDatasetConfig) -> None:
             raise ValueError("repo_ids and roots must have the same length for merge operation")
         logging.info(f"Loading {len(cfg.operation.roots)} datasets to merge")
         datasets = [
-            LeRobotDataset(repo_id=repo_id, root=root)
+            _load_input_dataset(repo_id, root, local_files_only=True)
             for repo_id, root in zip(cfg.operation.repo_ids, cfg.operation.roots, strict=True)
         ]
     else:
         logging.info(f"Loading {len(cfg.operation.repo_ids)} datasets to merge")
-        datasets = [LeRobotDataset(repo_id) for repo_id in cfg.operation.repo_ids]
+        datasets = [
+            _load_input_dataset(repo_id, None, local_files_only=cfg.local_files_only)
+            for repo_id in cfg.operation.repo_ids
+        ]
 
     output_dir = Path(cfg.new_root) if cfg.new_root else HF_LEROBOT_HOME / cfg.new_repo_id
 
@@ -390,7 +435,7 @@ def handle_merge(cfg: EditDatasetConfig) -> None:
 
     if cfg.push_to_hub:
         logging.info(f"Pushing to hub as {cfg.new_repo_id}")
-        LeRobotDataset(merged_dataset.repo_id, root=output_dir).push_to_hub()
+        LeRobotDataset(merged_dataset.repo_id, root=output_dir, local_files_only=True).push_to_hub()
 
 
 def handle_remove_feature(cfg: EditDatasetConfig) -> None:
@@ -400,7 +445,11 @@ def handle_remove_feature(cfg: EditDatasetConfig) -> None:
     if not cfg.operation.feature_names:
         raise ValueError("feature_names must be specified for remove_feature operation")
 
-    dataset = LeRobotDataset(cfg.repo_id, root=cfg.root)
+    dataset = _load_input_dataset(
+        cfg.repo_id,
+        cfg.root,
+        local_files_only=cfg.local_files_only or cfg.root is not None,
+    )
     output_repo_id, output_dir = get_output_path(
         cfg.repo_id,
         new_repo_id=cfg.new_repo_id,
@@ -425,14 +474,18 @@ def handle_remove_feature(cfg: EditDatasetConfig) -> None:
 
     if cfg.push_to_hub:
         logging.info(f"Pushing to hub as {output_repo_id}")
-        LeRobotDataset(output_repo_id, root=output_dir).push_to_hub()
+        LeRobotDataset(output_repo_id, root=output_dir, local_files_only=True).push_to_hub()
 
 
 def handle_convert_8_to_6_cameras(cfg: EditDatasetConfig) -> None:
     if not isinstance(cfg.operation, Convert8To6CamerasConfig):
         raise ValueError("Operation config must be Convert8To6CamerasConfig")
 
-    dataset = LeRobotDataset(cfg.repo_id, root=cfg.root)
+    dataset = _load_input_dataset(
+        cfg.repo_id,
+        cfg.root,
+        local_files_only=cfg.local_files_only or cfg.root is not None,
+    )
     output_repo_id, output_dir = get_output_path(
         cfg.repo_id,
         new_repo_id=cfg.new_repo_id,
@@ -457,7 +510,7 @@ def handle_convert_8_to_6_cameras(cfg: EditDatasetConfig) -> None:
 
     if cfg.push_to_hub:
         logging.info(f"Pushing to hub as {output_repo_id}")
-        LeRobotDataset(output_repo_id, root=output_dir).push_to_hub()
+        LeRobotDataset(output_repo_id, root=output_dir, local_files_only=True).push_to_hub()
 
 
 def handle_modify_tasks(cfg: EditDatasetConfig) -> None:
@@ -475,7 +528,11 @@ def handle_modify_tasks(cfg: EditDatasetConfig) -> None:
             "modify_tasks modifies datasets in-place. The --new_repo_id and --new_root parameters are ignored."
         )
 
-    dataset = LeRobotDataset(cfg.repo_id, root=cfg.root)
+    dataset = _load_input_dataset(
+        cfg.repo_id,
+        cfg.root,
+        local_files_only=cfg.local_files_only or cfg.root is not None,
+    )
     logging.warning(f"Modifying dataset in-place at {dataset.root}. Original data will be overwritten.")
 
     # Convert episode_tasks keys from string to int if needed (CLI passes strings)
@@ -506,7 +563,11 @@ def handle_modify_tasks(cfg: EditDatasetConfig) -> None:
 def handle_convert_image_to_video(cfg: EditDatasetConfig) -> None:
     # Note: Parser may create any config type with the right fields, so we access fields directly
     # instead of checking isinstance()
-    dataset = LeRobotDataset(cfg.repo_id, root=cfg.root)
+    dataset = _load_input_dataset(
+        cfg.repo_id,
+        cfg.root,
+        local_files_only=cfg.local_files_only or cfg.root is not None,
+    )
 
     # Determine output directory and repo_id
     # Priority: 1) new_root, 2) new_repo_id, 3) operation.output_dir, 4) auto-generated name
@@ -581,7 +642,11 @@ def handle_info(cfg: EditDatasetConfig):
     if not isinstance(cfg.operation, InfoConfig):
         raise ValueError("Operation config must be InfoConfig")
 
-    dataset = LeRobotDataset(cfg.repo_id, root=cfg.root)
+    dataset = _load_input_dataset(
+        cfg.repo_id,
+        cfg.root,
+        local_files_only=cfg.local_files_only or cfg.root is not None,
+    )
     sys.stdout.write(f"======Info {dataset.meta.repo_id}\n")
     sys.stdout.write(f"Repository ID: {dataset.meta.repo_id} \n")
     sys.stdout.write(f"Total episode: {dataset.meta.total_episodes} \n")
