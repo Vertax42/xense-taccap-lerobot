@@ -23,6 +23,8 @@ import time
 import numpy as np
 import pytest
 
+from lerobot.cameras.pico import SUPPORTED_MODES
+from lerobot.robots.bi_taccap_gripper.config_bi_taccap_gripper import BiTaccapGripperConfig
 from lerobot.robots.taccap_gripper.common import (
     HARDWARE_MANIFEST_PATH,
     HEAD_CAMERA_KEYS,
@@ -44,6 +46,7 @@ from lerobot.robots.taccap_gripper.common import (
     validate_robot_id,
     write_hardware_manifest,
 )
+from lerobot.robots.taccap_gripper.config_taccap_gripper import TaccapGripperConfig
 from lerobot.robots.taccap_gripper.ee_transform import resolve_tracker_to_ee, tracker_to_tcp
 
 
@@ -425,6 +428,27 @@ class TestBuildHeadCameraConfigs:
         config.head_camera_height = 1080
         with pytest.raises(ValueError, match="supports"):
             build_head_camera_configs(config)
+
+    @pytest.mark.parametrize("size", [(640, 480), (1024, 768), (1280, 960)])
+    def test_every_mode_the_headset_app_offers_is_accepted(self, size):
+        """The app's Resolution setting has these three; a size it can emit
+        must not be rejected here, or that setting becomes unusable."""
+        config = HeadConfig("left")
+        config.head_camera_width, config.head_camera_height = size
+        assert (configs := build_head_camera_configs(config))["left_head"].width == size[0]
+        assert configs["left_head"].height == size[1]
+
+
+class TestHeadCameraDefaultResolution:
+    """The default has to be the headset app's own default, or enabling the
+    head camera fails on the first frame's size until someone finds the flags."""
+
+    @pytest.mark.parametrize("config_class", [TaccapGripperConfig, BiTaccapGripperConfig], ids=["single", "bimanual"])
+    def test_defaults_to_the_app_default_mode(self, config_class):
+        assert (config_class.head_camera_width, config_class.head_camera_height) == (640, 480)
+
+    def test_app_default_is_first_in_supported_modes(self):
+        assert SUPPORTED_MODES[0] == (640, 480)
 
 
 class TestHeadPoseKeys:

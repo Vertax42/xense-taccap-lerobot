@@ -205,13 +205,15 @@ class TaccapGripperConfig(RobotConfig):
     head_camera_eyes: str = "both"
     """``"both"`` records the eyes side by side, ``"left"``/``"right"`` one of
     them. Merged frames are ``head_camera_height x (2 * head_camera_width)``."""
-    head_camera_width: int = 1024
-    head_camera_height: int = 768
+    head_camera_width: int = 640
+    head_camera_height: int = 480
     """Per-eye size, following the stereo convention that width is one eye and
-    a merge doubles it. Only 1024x768 and 1280x960 are supported — both 4:3,
-    matching the sensor (PICO's camera-access API caps a frame at 2328x1748,
-    which is 4:3, so a 16:9 request would crop or stretch rather than widen
-    the field of view)."""
+    a merge doubles it. Only 640x480 (the headset app's own default, and this
+    one), 1024x768 and 1280x960 are supported — all 4:3, matching the sensor
+    (PICO's camera-access API caps a frame at 2328x1748, which is 4:3, so a
+    16:9 request would crop or stretch rather than widen the field of view).
+    The headset is what produces the frames, so this has to match the app's
+    Resolution setting or ``connect()`` fails on the first frame's size."""
     head_camera_fps: int = 30
     head_camera_startup_timeout_s: float = 5.0
     head_camera_stale_after_s: float = 0.2

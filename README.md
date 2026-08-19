@@ -267,10 +267,12 @@ lerobot-record --robot.type=bi_taccap_gripper \
   something different here.
 - **`--robot.head_camera_eyes=left`** (or `right`) records a single eye, halving
   the JPEG decoding and the encoder load.
-- **`--robot.head_camera_width/_height`** accept `1024x768` (default) or
-  `1280x960`. Both are 4:3, matching the sensor. An unlisted size is an error
-  rather than a silent downgrade, and so is a first frame whose size disagrees
-  with the config — rescaling would quietly change the recorded field of view.
+- **`--robot.head_camera_width/_height`** accept `640x480` (default), `1024x768`
+  or `1280x960` — the three the headset app's Resolution setting offers, and the
+  default matches the app's own. All are 4:3, matching the sensor. An unlisted
+  size is an error rather than a silent downgrade, and so is a first frame whose
+  size disagrees with the config — rescaling would quietly change the recorded
+  field of view, so raising the app's setting means raising these too.
 - **`head_camera.*` shares the world frame with `tcp.*`**, remapped through the
   same Pico→world rotation the tracker uses, so the headset and the grippers can
   be compared directly and are drawn in one 3D scene.
