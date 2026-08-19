@@ -96,10 +96,11 @@ The bimanual rig can add the Pico headset camera with:
     --robot.head_camera_eyes=both \
 ```
 
-`head_camera_width`/`height` are **per eye** and default to 1024x768. Only that and
-1280x960 are accepted — both 4:3, matching the sensor — and an unlisted size is an error
-rather than a silent resize, as is a first frame whose size disagrees with the config,
-since rescaling would quietly change the recorded field of view.
+`head_camera_width`/`height` are **per eye** and default to 640x480, the headset app's
+own default. Only that, 1024x768 and 1280x960 are accepted — all 4:3, matching the sensor
+— and an unlisted size is an error rather than a silent resize, as is a first frame whose
+size disagrees with the config, since rescaling would quietly change the recorded field of
+view. The app's Resolution setting is what produces the frames, so the two must agree.
 
 Capture stores `left_head` and `right_head` — one video key per eye, not a merged frame —
 plus the headset pose as `head_camera.x/y/z/r1..r6`. That pose goes through the same

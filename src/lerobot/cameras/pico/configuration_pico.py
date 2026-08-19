@@ -19,15 +19,17 @@ from typing import ClassVar
 
 from ..configs import CameraConfig
 
-# The two modes the headset app is configured to emit. Both are 4:3, matching
-# the sensor: PICO's camera-access API caps a frame at 2328x1748 (= 1.332), so
-# a 16:9 request would be a crop or a stretch rather than more field of view.
+# The three modes the headset app offers, in the order its Resolution setting
+# lists them; the first is both the app's default and the one we default to.
+# All are 4:3, matching the sensor: PICO's camera-access API caps a frame at
+# 2328x1748 (= 1.332), so a 16:9 request would be a crop or a stretch rather
+# than more field of view.
 #
 # Unlike the ZED path in XenseVR-RobotVision-PC, which silently falls back to
 # HD720 when asked for a resolution it does not have, an unlisted size here is
 # an error. That silent fallback is exactly why that repo's README documents a
 # frame size the code never produces.
-SUPPORTED_MODES: tuple[tuple[int, int], ...] = ((1024, 768), (1280, 960))
+SUPPORTED_MODES: tuple[tuple[int, int], ...] = ((640, 480), (1024, 768), (1280, 960))
 
 
 @CameraConfig.register_subclass("pico")
@@ -42,7 +44,7 @@ class PicoCameraConfig(CameraConfig):
     ``width``/``height`` describe **one eye**, following the same convention as
     the ZED stereo path (``--width`` there is per-eye and the merge doubles it
     internally). With the default ``eyes="both"`` the recorded frame is
-    therefore ``height x (2 * width)`` — 768x2048 by default. The two eyes are
+    therefore ``height x (2 * width)`` — 480x1280 by default. The two eyes are
     concatenated at full resolution rather than squeezed into a single-eye
     budget, so nothing is thrown away; the cost is one extra video key's worth
     of pixels.
@@ -84,7 +86,7 @@ class PicoCameraConfig(CameraConfig):
             raise ValueError("Pico camera fps must be positive.")
 
         if (self.width, self.height) not in SUPPORTED_MODES:
-            modes = " or ".join(f"{w}x{h}" for w, h in SUPPORTED_MODES)
+            modes = ", ".join(f"{w}x{h}" for w, h in SUPPORTED_MODES)
             raise ValueError(
                 f"Pico camera supports {modes} per eye, got {self.width}x{self.height}. "
                 "These are the modes the headset app emits; a different size would have to "

@@ -116,20 +116,23 @@ and/or `--robot.right_tracker_serial=<SN>`. A pinned side uses its serial **verb
 enumeration, no rule check); un-pinned sides still auto-discover by the second-to-last-digit
 rule. Use this for a tracker whose serial does not follow the rule, or when enumeration is flaky.
 
-Enable the head camera with `--robot.enable_head_camera=true`. It records `width=1024`,
-`height=768` at dataset FPS 30 as **two keys, one per eye** — `left_head` and
-`right_head`, each 768x1024. `--robot.head_camera_eyes=left` (or `right`) records a
+Enable the head camera with `--robot.enable_head_camera=true`. It records `width=640`,
+`height=480` at dataset FPS 30 as **two keys, one per eye** — `left_head` and
+`right_head`, each 480x640. `--robot.head_camera_eyes=left` (or `right`) records a
 single eye, halving both the JPEG decoding and the encoder load.
 
 > These names refer to the headset's **eyes**, not to the left/right arm. There is one
 > headset on a bimanual rig, so they are not per-arm the way `{s}_wrist` is.
 
-Only `1024x768` and `1280x960` are accepted, via `--robot.head_camera_width/_height`.
-Both are 4:3, matching the sensor: PICO's camera-access API caps a frame at 2328x1748,
-which is 4:3, so a 16:9 request would crop or stretch rather than widen the field of
-view. An unlisted size is an error rather than a silent fallback. Changing the size or
-the eye selection changes the recorded frame, so episodes either side of such a change
-are not comparable.
+Only `640x480` (default), `1024x768` and `1280x960` are accepted, via
+`--robot.head_camera_width/_height` — the three the headset app's Resolution setting
+offers, and it defaults to `640` as well, so the defaults line up out of the box. Raise
+it in the app and the command line has to follow, or `connect()` fails on the first
+frame's size. All three are 4:3, matching the sensor: PICO's camera-access API caps a
+frame at 2328x1748, which is 4:3, so a 16:9 request would crop or stretch rather than
+widen the field of view. An unlisted size is an error rather than a silent fallback.
+Changing the size or the eye selection changes the recorded frame, so episodes either
+side of such a change are not comparable.
 
 The two eyes arrive as separate messages, each with its own sequence number and
 timestamp, and recording them under separate keys means a mismatched pair leaves no

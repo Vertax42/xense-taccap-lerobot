@@ -98,8 +98,10 @@ something different) plus `head_camera.*`, the headset pose.
   separate messages, left first, so sampling at loop rate catches one updated
   and not the other (measured 7% of frames). `cameras/pico/stereo_poller.py`
   polls at 120 Hz and publishes only pairs whose `frame_sequence` agrees.
-- **Resolution is a whitelist**, `1024x768` / `1280x960`, both 4:3 like the
-  sensor. Unlisted sizes and a first frame that disagrees with the config are
+- **Resolution is a whitelist**, `640x480` / `1024x768` / `1280x960`, all 4:3
+  like the sensor and all three offered by the headset app's Resolution setting.
+  The default is `640x480` because that is the app's default, so the two line up
+  untouched. Unlisted sizes and a first frame that disagrees with the config are
   errors, deliberately — silent rescaling would change the recorded field of
   view without trace. Do not "fix" this with a resize.
 
