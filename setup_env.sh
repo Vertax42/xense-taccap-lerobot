@@ -39,10 +39,10 @@ echo "Operating system check passed: $OS_NAME $OS_VERSION"
 # fixes it.
 #
 # Deliberately split: REQUIRED stops the run, RECOMMENDED only warns. v4l-utils
-# and usbutils are not needed to *run* anything — they are how you diagnose a
-# camera that will not open (`v4l2-ctl --list-formats-ext`, `lsusb -t`), which
-# on this hardware is the single most common bring-up problem, so a host without
-# them is a host that cannot be debugged.
+# is not needed to *run* anything — it is how you diagnose a camera that will
+# not open (`v4l2-ctl --list-formats-ext`), which on this hardware is the single
+# most common bring-up problem, so a host without it is a host that cannot be
+# debugged.
 check_system_packages() {
     local -a missing_required=() missing_recommended=()
 
@@ -61,7 +61,6 @@ check_system_packages() {
     # real ones.
     local -a recommended=(
         "v4l2-ctl:v4l-utils"
-        "lsusb:usbutils"
     )
 
     local entry cmd pkg
@@ -82,6 +81,20 @@ check_system_packages() {
     # which cameras/xense/camera_xense.py already resolves via ldconfig.
     # Those come from libudev1 and libusb-1.0-0, which are base packages, not
     # the -dev ones this used to demand.
+    #
+    # libusb-0.1 IS checked, as a warning — the prebuilt camera stack loads
+    # libusb-0.1.so.4 at runtime, and after a kernel upgrade a stale or absent
+    # libusb is the usual reason cameras stop connecting. It is not fatal here
+    # because nothing *builds* against it: the install would succeed and then
+    # fail at connect(), so say it now rather than on the rig. `libusb-dev` is
+    # the package that carries the runtime (via libusb-0.1-4) plus headers.
+    if ! ldconfig -p 2>/dev/null | grep -q 'libusb-0\.1\.so\.4'; then
+        echo ""
+        echo "  WARNING: libusb-0.1.so.4 not found — the cameras will not connect."
+        echo "    sudo apt update && sudo apt install -y libusb-dev"
+        echo "  (Kernel upgrades need a matching libusb; a stale one breaks camera"
+        echo "   enumeration long after this script has finished successfully.)"
+    fi
 
     # De-duplicate (build-essential is named twice above).
     local -a uniq_required=() uniq_recommended=()
@@ -92,7 +105,7 @@ check_system_packages() {
         echo ""
         echo "  NOTE: missing diagnostic tools — install them before you need them:"
         echo "    sudo apt install -y ${uniq_recommended[*]}"
-        echo "  (v4l-utils/usbutils are what you use to work out why a camera will not open.)"
+        echo "  (v4l-utils is what you use to work out why a camera will not open.)"
     fi
 
     if [[ ${#uniq_required[@]} -gt 0 ]]; then

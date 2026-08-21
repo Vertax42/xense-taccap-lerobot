@@ -126,15 +126,42 @@ Step 3, so a bare Ubuntu install is missing pieces the build needs:
 
 ```bash
 sudo apt install -y build-essential cmake pkg-config git curl
-sudo apt install -y v4l-utils usbutils   # not needed to run, but this is how you debug a camera
+sudo apt install -y libusb-dev   # ⚠️ cameras do not connect without a current libusb — read the box below
+sudo apt install -y v4l-utils   # not needed to run, but this is how you debug a camera
 ```
+
+> ### ⚠️ `libusb-dev` — install it, and keep it current
+>
+> **Recent Linux kernel updates require a matching libusb update. If libusb is
+> stale (or missing), the cameras will not connect.** This is the single most
+> common way a rig that worked yesterday stops working today: the host takes an
+> `apt upgrade` that includes a new kernel, libusb is left behind, and the
+> tactile / wrist cameras stop opening. Nothing in the error message points at
+> libusb, so people go hunting through hubs, cables and USB bandwidth first —
+> **check this before any of that.**
+>
+> `sudo apt install -y libusb-dev` pulls in the current `libusb-0.1-4` runtime
+> (`libusb-0.1.so.4`) alongside the headers; that runtime is what the prebuilt
+> camera stack loads. If it is already installed, upgrade it anyway after a
+> kernel bump — `apt update` first, so apt sees the newer version:
+>
+> ```bash
+> sudo apt update && sudo apt install -y --only-upgrade libusb-dev libusb-1.0-0
+> ```
+>
+> A reboot after a kernel upgrade is worth doing for the same reason: the
+> running kernel and the userspace USB stack should be from the same upgrade.
 
 `setup_env.sh` checks for these before it starts and stops with the exact command
 if any are missing — the build would otherwise fail much later, inside CMake or
-the linker, where the cause is far harder to see. `v4l-utils` and `usbutils` are
-the diagnostic half: `v4l2-ctl --list-formats-ext` and `lsusb -t` are what you
-reach for when a camera will not open, which on this hardware is the most common
-bring-up problem, so a host without them is a host you cannot debug.
+the linker, where the cause is far harder to see. `libusb-0.1.so.4` is checked
+too, but only as a warning: it is a **runtime** dependency of the cameras, not a
+build one, so a missing libusb lets the install finish and then fails at
+`connect()` — which is exactly why it is called out here rather than left to be
+discovered on the rig. `v4l-utils` is the diagnostic half:
+`v4l2-ctl --list-formats-ext` is what you reach for when a camera will not open,
+which on this hardware is the most common bring-up problem, so a host without it
+is a host you cannot debug.
 
 **Step 2:** 🐍 Create and activate the mamba environment:
 
