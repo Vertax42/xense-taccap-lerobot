@@ -881,7 +881,17 @@ def manifest_epochs(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     epochs = manifest.get("epochs")
     if isinstance(epochs, list):
         return epochs
-    return [{"from_episode": 0, "to_episode": None, "units": manifest.get("units", [])}]
+    # Pre-epoch file: the station labels sit at the top level, so lift them in
+    # to give callers one shape to read regardless of when the file was written.
+    return [
+        {
+            "from_episode": 0,
+            "to_episode": None,
+            "robot_id": manifest.get("robot_id"),
+            "role": manifest.get("role"),
+            "units": manifest.get("units", []),
+        }
+    ]
 
 
 def epoch_for_episode(manifest: dict[str, Any], episode_index: int) -> dict[str, Any] | None:
@@ -899,13 +909,21 @@ def epoch_for_episode(manifest: dict[str, Any], episode_index: int) -> dict[str,
     return None
 
 
-def _manifest_identity(manifest: dict[str, Any]) -> dict[str, Any]:
-    """The parts that must not differ between runs of the same dataset.
+def _epoch_payload(manifest: dict[str, Any]) -> dict[str, Any]:
+    """What a run records about the rig: the devices, and where they were run.
 
-    Excludes ``epochs`` / ``units`` on purpose — those are exactly what a swap
-    changes, and recording that change is the case this module now supports.
+    ``units`` is the identity that matters downstream — which physical sensor fed
+    which observation key. ``robot_id`` / ``role`` ride along as context: the
+    label names a *station*, and the devices are the parts you swap in and out of
+    it (see ``validate_robot_id``). So the same gripper moved to another PC is a
+    change worth recording, but it is not a change of hardware, and a consumer
+    picking a per-sensor calibration keys on ``units`` alone.
     """
-    return {key: manifest.get(key) for key in ("robot_type", "robot_id", "role")}
+    return {
+        "robot_id": manifest.get("robot_id"),
+        "role": manifest.get("role"),
+        "units": manifest.get("units", []),
+    }
 
 
 def write_hardware_manifest(
@@ -918,20 +936,32 @@ def write_hardware_manifest(
     """Write ``manifest`` to ``root/meta/hardware.json`` and return the path.
 
     ``episode_index`` is how many episodes the dataset already holds, i.e. the
-    first index this run will write. It is what closes the previous epoch and
-    opens the next one, so a caller that resumes must pass it
+    first index this run will write. It is what closes the open epoch and opens
+    the next one, so a caller that resumes must pass it
     (``dataset.num_episodes``); the default only suits a fresh dataset.
 
     Three cases:
 
     * **New dataset** — one open epoch starting at ``episode_index``.
-    * **Resumed on the same hardware** — nothing to record; the open epoch already
+    * **Resumed on the same rig** — nothing to record; the open epoch already
       covers what is about to be written.
-    * **Resumed on different hardware** — close the open epoch at ``episode_index``
-      and append a new one. Both rigs stay named, and every episode keeps pointing
-      at the devices that actually produced it.
+    * **Resumed on a different rig** — close the open epoch at ``episode_index``
+      and append a new one. Both stay named, and every episode keeps pointing at
+      the devices that actually produced it.
 
-    That last case used to keep the original file and warn. The warning went to
+    "Different" means anything in ``units`` / ``robot_id`` / ``role`` changed.
+    Note that this includes running the *same* devices from another PC: the
+    station label changes while the hardware does not. That is recorded rather
+    than refused, because refusing would also drop a device swap that happened
+    to coincide with the move — and the devices are the part downstream cannot
+    guess. Consumers key on ``units``; an epoch boundary with identical ``units``
+    is simply the rig moving.
+
+    Only ``robot_type`` is treated as a hard mismatch: single vs bimanual changes
+    the observation keys, so it is not the same dataset at all, and epochs do not
+    model that.
+
+    The swap case used to keep the original file and warn. The warning went to
     the log and never reached the dataset, so afterwards nothing on disk said the
     rig had changed, while the manifest quietly misattributed every episode
     recorded after the swap. Downstream that is worse than a loud failure:
@@ -943,13 +973,13 @@ def write_hardware_manifest(
     destroy the only record of it.
     """
     path = Path(root) / HARDWARE_MANIFEST_PATH
-    units = manifest.get("units", [])
+    payload = _epoch_payload(manifest)
 
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         fresh = {
-            **_manifest_identity(manifest),
-            "epochs": [{"from_episode": int(episode_index), "to_episode": None, "units": units}],
+            "robot_type": manifest.get("robot_type"),
+            "epochs": [{"from_episode": int(episode_index), "to_episode": None, **payload}],
         }
         path.write_text(json.dumps(fresh, indent=2) + "\n")
         logger.info(f"Hardware manifest written to {path}")
@@ -961,29 +991,28 @@ def write_hardware_manifest(
         logger.warn(f"Could not read the existing hardware manifest {path} ({e}); leaving it alone.")
         return path
 
-    if _manifest_identity(existing) != _manifest_identity(manifest):
-        # robot_type / robot_id / role identify the station, not the devices on
-        # it. A mismatch means this is not the same rig at all, which epochs do
-        # not model — appending would assert a continuity that is not there.
+    if existing.get("robot_type") != manifest.get("robot_type"):
         logger.warn(
-            f"Hardware manifest {path} describes a different robot "
-            f"({json.dumps(_manifest_identity(existing), sort_keys=True)}); keeping the original. "
-            f"Current: {json.dumps(_manifest_identity(manifest), sort_keys=True)}"
+            f"Hardware manifest {path} was recorded on {existing.get('robot_type')!r} but this run "
+            f"is {manifest.get('robot_type')!r}; keeping the original. A different robot type means "
+            f"different observation keys, which is not a hardware swap."
         )
         return path
 
     epochs = manifest_epochs(existing)
-    if epochs and epochs[-1].get("units") == units:
-        return path  # same hardware; the open epoch already covers this run
+    last = epochs[-1] if epochs else None
+    if last is not None and all(last.get(key) == value for key, value in payload.items()):
+        return path  # same rig; the open epoch already covers this run
 
-    # Different hardware. Close the epoch that was open and start a new one.
     updated = [dict(epoch) for epoch in epochs]
-    updated[-1]["to_episode"] = int(episode_index)
-    updated.append({"from_episode": int(episode_index), "to_episode": None, "units": units})
+    if updated:
+        updated[-1]["to_episode"] = int(episode_index)
+    updated.append({"from_episode": int(episode_index), "to_episode": None, **payload})
 
-    path.write_text(json.dumps({**_manifest_identity(existing), "epochs": updated}, indent=2) + "\n")
+    path.write_text(json.dumps({"robot_type": existing.get("robot_type"), "epochs": updated}, indent=2) + "\n")
+    hardware_changed = last is None or last.get("units") != payload["units"]
     logger.info(
-        f"Hardware changed at episode {episode_index}; recorded as a new epoch in {path}. "
-        f"This dataset now spans {len(updated)} hardware configurations."
+        f"{'Hardware' if hardware_changed else 'Station'} changed at episode {episode_index}; "
+        f"recorded as a new epoch in {path}. This dataset now spans {len(updated)} configurations."
     )
     return path
