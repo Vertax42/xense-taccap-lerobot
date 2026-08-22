@@ -20,6 +20,7 @@ import functools
 import json
 import re
 import time
+from datetime import datetime, timedelta
 
 import numpy as np
 import pytest
@@ -27,6 +28,7 @@ import pytest
 from lerobot.cameras.pico import SUPPORTED_MODES
 from lerobot.robots.bi_taccap_gripper.config_bi_taccap_gripper import BiTaccapGripperConfig
 from lerobot.robots.taccap_gripper.common import (
+    CAPTURE_TZ,
     HARDWARE_MANIFEST_PATH,
     HEAD_CAMERA_KEYS,
     HEAD_POSE_KEYS,
@@ -751,15 +753,17 @@ class TestWriteHardwareManifest:
         path = write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
         on_disk = json.loads(path.read_text())
         assert on_disk["robot_type"] == "taccap_gripper"
-        assert on_disk["epochs"] == [
-            {
-                "from_episode": 0,
-                "to_episode": None,
-                "robot_id": "taccap_0",
-                "role": "leader",
-                "units": self.MANIFEST["units"],
-            }
-        ]
+        (written,) = on_disk["epochs"]
+        # Its shape is checked where it is the subject; dropped here so this
+        # stays a test about the epoch boundary rather than about the clock.
+        assert written.pop("recorded_at")
+        assert written == {
+            "from_episode": 0,
+            "to_episode": None,
+            "robot_id": "taccap_0",
+            "role": "leader",
+            "units": self.MANIFEST["units"],
+        }
 
     def test_rewriting_the_same_hardware_is_a_silent_no_op(self, tmp_path):
         write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
@@ -1022,12 +1026,32 @@ class TestTactileRuntimes:
         assert (tmp_path / tactile_runtime_for_key(manifest, 0, "tactile_left")).read_bytes() == b"first"
         assert (tmp_path / tactile_runtime_for_key(manifest, 1, "tactile_left")).read_bytes() == b"second"
 
-    def test_the_filename_carries_the_serial_and_a_sortable_time(self, tmp_path):
+    def test_the_filename_reads_as_bench_local_time(self, tmp_path):
         """A content hash would never collapse duplicates (random salt) while
-        telling a reader nothing. The time is what the file actually is."""
+        telling a reader nothing. The time is what the file actually is — and in
+        the timezone of the bench it was taken at, so it reads without arithmetic.
+        """
         write_hardware_manifest(tmp_path, self._manifest(), FakeLogger(), runtimes={"GSPS01A25Z0011": b"b"})
         (name,) = [p.name for p in (tmp_path / RUNTIME_DIR).iterdir()]
-        assert re.fullmatch(r"GSPS01A25Z0011-\d{8}T\d{6}Z\.bin", name), name
+        assert re.fullmatch(r"GSPS01A25Z0011-\d{8}T\d{6}\.bin", name), name
+        stamped = datetime.strptime(name.split("-")[1][: -len(".bin")], "%Y%m%dT%H%M%S")
+        assert abs(stamped - datetime.now(CAPTURE_TZ).replace(tzinfo=None)) < timedelta(minutes=1)
+
+    def test_the_epoch_carries_the_unambiguous_time(self, tmp_path):
+        """The filename is a label a human reads; anything that computes with the
+        time uses this, which carries its offset."""
+        write_hardware_manifest(tmp_path, self._manifest(), FakeLogger(), runtimes={"GSPS01A25Z0011": b"b"})
+        (epoch,) = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())["epochs"]
+        recorded = datetime.fromisoformat(epoch["recorded_at"])
+        assert recorded.utcoffset() == timedelta(hours=8)
+        assert abs(recorded - datetime.now(CAPTURE_TZ)) < timedelta(minutes=1)
+
+    def test_the_clock_alone_does_not_open_an_epoch(self, tmp_path):
+        """``recorded_at`` differs on every run by construction. If it were part
+        of the rig comparison, every resume would look like a hardware change."""
+        for episode in (0, 20):
+            write_hardware_manifest(tmp_path, self._manifest(), FakeLogger(), episode_index=episode)
+        assert len(json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())["epochs"]) == 1
 
     def test_a_sensor_without_a_bundle_is_absent_not_null(self, tmp_path):
         """Absent means "not recorded"; a null would read like "recorded as
