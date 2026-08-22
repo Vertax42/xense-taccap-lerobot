@@ -74,6 +74,7 @@ __all__ = [
     "resolve_wrist_camera_path",
     "split_camera_read",
     "swap_tactile_display_features",
+    "tactile_serial_for_key",
     "tactile_camera_output_types",
     "tactile_display_key",
     "validate_robot_id",
@@ -924,6 +925,30 @@ def _epoch_payload(manifest: dict[str, Any]) -> dict[str, Any]:
         "role": manifest.get("role"),
         "units": manifest.get("units", []),
     }
+
+
+def tactile_serial_for_key(manifest: dict[str, Any], episode_index: int, observation_key: str) -> str | None:
+    """Which physical sensor fed ``observation_key`` in ``episode_index``.
+
+    The one lookup every consumer of this file actually wants, so it lives here
+    rather than being re-derived — getting it wrong is not visible in the output.
+    Deriving the multimodal tactile channels (depth, force, difference) needs the
+    sensor's own runtime config, and solving a stream against another unit's
+    calibration does not fail loudly: it reports plausible depth and force from
+    an untouched gel.
+
+    ``None`` means the manifest cannot answer — no epoch covers that episode, or
+    no sensor in it feeds that key. Callers must treat that as "do not derive",
+    never as "use whichever sensor is nearest".
+    """
+    epoch = epoch_for_episode(manifest, episode_index)
+    if epoch is None:
+        return None
+    for unit in epoch.get("units") or []:
+        for sensor in unit.get("tactile_sensors") or []:
+            if sensor.get("observation_key") == observation_key:
+                return sensor.get("serial")
+    return None
 
 
 def _describe_change(previous: dict[str, Any] | None, current: dict[str, Any]) -> str:
