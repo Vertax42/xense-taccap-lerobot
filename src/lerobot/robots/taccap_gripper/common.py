@@ -28,11 +28,11 @@ single gripper, ``"[left] "`` for one arm of the bimanual rig.
 from __future__ import annotations
 
 import glob
-import hashlib
 import json
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -923,17 +923,30 @@ makes that reconstruction possible from the dataset alone — no hunting down th
 physical unit months later, and no risk that the unit has since been recalibrated
 into a different reference.
 
-Files are named ``<serial>-<digest>.bin``. The digest is what makes it correct
-rather than merely tidy: a sensor removed for maintenance and reinstalled comes
-back with the same serial but a new reference image, so ``<serial>.bin`` alone
-would have one epoch silently overwrite the other's calibration. Identical
-bundles collapse onto one file, so re-recording on unchanged hardware costs
-nothing.
+Files are named ``<serial>-<UTC timestamp>.bin``, because a serial alone is not
+unique over time: a sensor pulled for maintenance and reinstalled keeps its
+serial and comes back with a new reference image, so ``<serial>.bin`` would have
+the later run overwrite the earlier one — silently re-deriving those episodes
+against a calibration they were never recorded with.
+
+The timestamp rather than a content hash: every export is a fresh AES-GCM
+encryption with a random salt and IV, so two exports of the *same* sensor state
+have different bytes. A digest would therefore never collapse duplicates while
+also saying nothing a reader can use. The time is what the file actually is —
+this unit's calibration as of that moment.
+
+One bundle per recording session is the right granularity, not an accident of
+naming: the reference image is captured fresh at every ``Sensor.create()``, so
+each session genuinely has its own. Measured on an untouched sensor, reusing the
+previous session's bundle moves ``Depth`` by 2.9e-4 and ``ForceResultant`` by
+7.3e-3 — the noise floor, and ~1000x smaller than the error from using another
+*unit's* bundle. Small, but there is no reason to accept it when the correct
+bundle costs 841 KB.
 """
 
 
-def _runtime_filename(serial: str, blob: bytes) -> str:
-    return f"{serial}-{hashlib.sha256(blob).hexdigest()[:12]}.bin"
+def _runtime_filename(serial: str, taken_at: datetime) -> str:
+    return f"{serial}-{taken_at.strftime('%Y%m%dT%H%M%SZ')}.bin"
 
 
 def write_tactile_runtimes(root: str | Path, runtimes: dict[str, bytes]) -> dict[str, str]:
@@ -943,13 +956,22 @@ def write_tactile_runtimes(root: str | Path, runtimes: dict[str, bytes]) -> dict
     different bundles from the same serial coexist. Paths are relative to the
     dataset root, which is what goes in the manifest.
     """
+    taken_at = datetime.now(timezone.utc)
     written: dict[str, str] = {}
     for serial, blob in sorted(runtimes.items()):
         if not blob:
             continue
-        relative = f"{RUNTIME_DIR}/{_runtime_filename(serial, blob)}"
+        relative = f"{RUNTIME_DIR}/{_runtime_filename(serial, taken_at)}"
         path = Path(root) / relative
         path.parent.mkdir(parents=True, exist_ok=True)
+        # Two exports in the same second would otherwise land on one name and the
+        # second would win, leaving an epoch pointing at a bundle that is not its
+        # own. Rare, but the failure is silent, so it gets a suffix instead.
+        suffix = 1
+        while path.exists() and path.read_bytes() != blob:
+            relative = f"{RUNTIME_DIR}/{_runtime_filename(serial, taken_at)[:-4]}-{suffix}.bin"
+            path = Path(root) / relative
+            suffix += 1
         if not path.exists():
             path.write_bytes(blob)
         written[serial] = relative
@@ -1048,13 +1070,26 @@ def _describe_change(previous: dict[str, Any] | None, current: dict[str, Any]) -
     def by_side(units: Any) -> dict[str, Any]:
         return {unit.get("side"): unit for unit in units or []}
 
+    def serials(unit: Any) -> tuple:
+        return (
+            unit.get("gripper_sn"),
+            tuple(s.get("serial") for s in unit.get("tactile_sensors") or []),
+        )
+
     before, after = by_side(previous.get("units")), by_side(current["units"])
-    sides = sorted(side for side in before.keys() | after.keys() if before.get(side) != after.get(side))
-    if sides:
-        return f"Hardware changed on the {' and '.join(sides)} unit(s)"
+    swapped = sorted(
+        side
+        for side in before.keys() | after.keys()
+        if serials(before.get(side) or {}) != serials(after.get(side) or {})
+    )
+    if swapped:
+        return f"Hardware changed on the {' and '.join(swapped)} unit(s)"
     if previous.get("robot_id") != current.get("robot_id"):
         return f"Station changed ({previous.get('robot_id')} -> {current.get('robot_id')})"
-    return "Rig changed"
+    # Same serials, same station: what differs is the runtime bundle, which the
+    # sensor re-captures at every ``Sensor.create()``. Calling that "hardware
+    # changed" would send someone hunting for a swap that never happened.
+    return "New capture session on the same hardware"
 
 
 def write_hardware_manifest(
