@@ -926,6 +926,28 @@ def _epoch_payload(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _describe_change(previous: dict[str, Any] | None, current: dict[str, Any]) -> str:
+    """Name what actually changed, so the log points at the thing to check.
+
+    The two grippers are swapped independently — a customer may replace only the
+    left one — so "hardware changed" alone would leave someone diffing the whole
+    manifest to find out which arm to look at.
+    """
+    if previous is None:
+        return "Hardware recorded"
+
+    def by_side(units: Any) -> dict[str, Any]:
+        return {unit.get("side"): unit for unit in units or []}
+
+    before, after = by_side(previous.get("units")), by_side(current["units"])
+    sides = sorted(side for side in before.keys() | after.keys() if before.get(side) != after.get(side))
+    if sides:
+        return f"Hardware changed on the {' and '.join(sides)} unit(s)"
+    if previous.get("robot_id") != current.get("robot_id"):
+        return f"Station changed ({previous.get('robot_id')} -> {current.get('robot_id')})"
+    return "Rig changed"
+
+
 def write_hardware_manifest(
     root: str | Path,
     manifest: dict[str, Any],
@@ -1010,9 +1032,8 @@ def write_hardware_manifest(
     updated.append({"from_episode": int(episode_index), "to_episode": None, **payload})
 
     path.write_text(json.dumps({"robot_type": existing.get("robot_type"), "epochs": updated}, indent=2) + "\n")
-    hardware_changed = last is None or last.get("units") != payload["units"]
     logger.info(
-        f"{'Hardware' if hardware_changed else 'Station'} changed at episode {episode_index}; "
-        f"recorded as a new epoch in {path}. This dataset now spans {len(updated)} configurations."
+        f"{_describe_change(last, payload)} at episode {episode_index}; recorded as a new epoch "
+        f"in {path}. This dataset now spans {len(updated)} configurations."
     )
     return path
