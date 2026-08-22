@@ -18,6 +18,7 @@ pinning. Nothing below touches hardware or either vendor SDK.
 
 import functools
 import json
+import re
 import time
 
 import numpy as np
@@ -978,19 +979,55 @@ class TestTactileRuntimes:
         assert (tmp_path / early).read_bytes() == b"bundle-v1"
         assert (tmp_path / late).read_bytes() == b"bundle-v2-after-maintenance"
 
-    def test_an_unchanged_rig_does_not_accumulate_epochs_or_files(self, tmp_path):
-        """Identical bundles are the same content, so re-recording costs nothing."""
-        for episode in (0, 20, 40):
+    def test_resuming_on_the_same_rig_is_not_reported_as_a_hardware_change(self, tmp_path):
+        """Every session exports different bytes even when nothing was touched:
+        the reference image is re-captured at ``Sensor.create()`` and the bundle
+        is freshly AES-GCM encrypted with a random salt and IV. So each resume
+        legitimately gets its own epoch and its own file — but calling that a
+        hardware change would send someone hunting for a swap that never
+        happened.
+
+        Measured on an untouched unit, the two sessions' bundles move ``Depth``
+        by 2.9e-4 and ``ForceResultant`` by 7.3e-3 — the noise floor, and ~1000x
+        smaller than using another *unit's* bundle. Keeping both is still right:
+        the correct one costs 841 KB.
+        """
+        logger = FakeLogger()
+        for episode, blob in ((0, b"session-1"), (20, b"session-2"), (40, b"session-3")):
             write_hardware_manifest(
                 tmp_path,
                 self._manifest(),
-                FakeLogger(),
+                logger,
                 episode_index=episode,
-                runtimes={"GSPS01A25Z0011": b"bundle-v1"},
+                runtimes={"GSPS01A25Z0011": blob},
             )
         manifest = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())
-        assert len(manifest["epochs"]) == 1
-        assert len(list((tmp_path / RUNTIME_DIR).iterdir())) == 1
+        assert len(manifest["epochs"]) == 3
+        assert len(list((tmp_path / RUNTIME_DIR).iterdir())) == 3
+        bundles = [tactile_runtime_for_key(manifest, ep, "tactile_left") for ep in (0, 20, 40)]
+        assert len(set(bundles)) == 3
+        assert [(tmp_path / b).read_bytes() for b in bundles] == [b"session-1", b"session-2", b"session-3"]
+        assert not any("Hardware changed" in message for message in logger.infos)
+        assert all("same hardware" in message for message in logger.infos[1:])
+
+    def test_two_bundles_exported_in_the_same_second_do_not_collide(self, tmp_path):
+        """The name carries a whole-second timestamp, so a fast re-export would
+        otherwise land on one file and the second would win — leaving an epoch
+        pointing at a bundle that is not its own."""
+        for episode, blob in ((0, b"first"), (1, b"second")):
+            write_hardware_manifest(
+                tmp_path, self._manifest(), FakeLogger(), episode_index=episode, runtimes={"GSPS01A25Z0011": blob}
+            )
+        manifest = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())
+        assert (tmp_path / tactile_runtime_for_key(manifest, 0, "tactile_left")).read_bytes() == b"first"
+        assert (tmp_path / tactile_runtime_for_key(manifest, 1, "tactile_left")).read_bytes() == b"second"
+
+    def test_the_filename_carries_the_serial_and_a_sortable_time(self, tmp_path):
+        """A content hash would never collapse duplicates (random salt) while
+        telling a reader nothing. The time is what the file actually is."""
+        write_hardware_manifest(tmp_path, self._manifest(), FakeLogger(), runtimes={"GSPS01A25Z0011": b"b"})
+        (name,) = [p.name for p in (tmp_path / RUNTIME_DIR).iterdir()]
+        assert re.fullmatch(r"GSPS01A25Z0011-\d{8}T\d{6}Z\.bin", name), name
 
     def test_a_sensor_without_a_bundle_is_absent_not_null(self, tmp_path):
         """Absent means "not recorded"; a null would read like "recorded as
