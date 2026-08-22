@@ -817,6 +817,37 @@ class TestWriteHardwareManifest:
         assert epochs[0]["units"] == epochs[1]["units"]
         assert logger.warnings == []
 
+    def test_swapping_one_arm_carries_the_other_over_untouched(self, tmp_path):
+        """The two grippers are swapped independently — a customer may replace
+        only the left one. The new epoch has to describe the *whole* rig, or the
+        arm that did not change would have no serial for those episodes."""
+        bimanual = build_hardware_manifest(
+            robot_type="bi_taccap_gripper",
+            robot_id="bi_taccap_0",
+            role="leader",
+            units=[
+                hardware_manifest_unit(
+                    side,
+                    endpoints=FakeEndpoints(f"TCGU01A24Z000{n}m"),
+                    tactile_serials={"left": f"GSPS01A25Z00{n}1", "right": f"GSPS01A25Z00{n}2"},
+                    key_prefix=f"{side}_",
+                )
+                for n, side in enumerate(("left", "right"), start=1)
+            ],
+        )
+        write_hardware_manifest(tmp_path, bimanual, FakeLogger())
+
+        swapped_left = json.loads(json.dumps(bimanual))
+        swapped_left["units"][0]["gripper_sn"] = "TCGU01A24Z0009m"
+        logger = FakeLogger()
+        write_hardware_manifest(tmp_path, swapped_left, logger, episode_index=40)
+
+        epochs = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())["epochs"]
+        assert len(epochs) == 2
+        assert epochs[1]["units"][0]["gripper_sn"] == "TCGU01A24Z0009m"  # the swap
+        assert epochs[1]["units"][1] == bimanual["units"][1]  # right arm carried over whole
+        assert logger.warnings == []
+
     def test_a_different_robot_type_is_kept_apart_not_appended(self, tmp_path):
         """Single vs bimanual changes the observation keys, so it is not the same
         dataset at all — epochs do not model that."""
