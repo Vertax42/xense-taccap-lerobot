@@ -30,6 +30,7 @@ from lerobot.robots.taccap_gripper.common import (
     HEAD_CAMERA_KEYS,
     HEAD_POSE_KEYS,
     POSE_KEYS,
+    RUNTIME_DIR,
     GripperReadGuard,
     HeadSkewMonitor,
     build_hardware_manifest,
@@ -45,6 +46,7 @@ from lerobot.robots.taccap_gripper.common import (
     swap_tactile_display_features,
     tactile_camera_output_types,
     tactile_display_key,
+    tactile_runtime_for_key,
     tactile_serial_for_key,
     validate_robot_id,
     write_hardware_manifest,
@@ -927,6 +929,81 @@ class TestManifestEpochs:
         — which is the failure this whole mechanism exists to prevent."""
         closed = {"epochs": [{"from_episode": 0, "to_episode": 57, "units": self.UNITS_A}]}
         assert epoch_for_episode(closed, 57) is None
+
+
+class TestTactileRuntimes:
+    """The bundles are what actually rebuild depth / force / difference, so the
+    cases that would hand an episode the wrong one are the ones worth pinning."""
+
+    def _manifest(self, serial="GSPS01A25Z0011"):
+        return build_hardware_manifest(
+            robot_type="taccap_gripper",
+            robot_id="taccap_0",
+            role="leader",
+            units=[
+                hardware_manifest_unit(
+                    "left",
+                    endpoints=FakeEndpoints("TCGU01A24Z0001m"),
+                    tactile_serials={"left": serial},
+                    key_prefix="",
+                )
+            ],
+        )
+
+    def test_the_bundle_lands_in_the_dataset_and_the_epoch_points_at_it(self, tmp_path):
+        write_hardware_manifest(tmp_path, self._manifest(), FakeLogger(), runtimes={"GSPS01A25Z0011": b"bundle-v1"})
+        relative = tactile_runtime_for_key(
+            json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text()), 0, "tactile_left"
+        )
+        assert relative.startswith(RUNTIME_DIR)
+        assert (tmp_path / relative).read_bytes() == b"bundle-v1"
+
+    def test_recalibration_keeps_both_bundles_and_splits_the_epoch(self, tmp_path):
+        """Same serial, new reference image. Naming the file by serial alone would
+        have the second run overwrite the first, silently re-deriving the earlier
+        episodes against a calibration they were not recorded with."""
+        write_hardware_manifest(tmp_path, self._manifest(), FakeLogger(), runtimes={"GSPS01A25Z0011": b"bundle-v1"})
+        write_hardware_manifest(
+            tmp_path,
+            self._manifest(),
+            FakeLogger(),
+            episode_index=40,
+            runtimes={"GSPS01A25Z0011": b"bundle-v2-after-maintenance"},
+        )
+
+        manifest = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())
+        early = tactile_runtime_for_key(manifest, 39, "tactile_left")
+        late = tactile_runtime_for_key(manifest, 40, "tactile_left")
+        assert early != late
+        assert (tmp_path / early).read_bytes() == b"bundle-v1"
+        assert (tmp_path / late).read_bytes() == b"bundle-v2-after-maintenance"
+
+    def test_an_unchanged_rig_does_not_accumulate_epochs_or_files(self, tmp_path):
+        """Identical bundles are the same content, so re-recording costs nothing."""
+        for episode in (0, 20, 40):
+            write_hardware_manifest(
+                tmp_path,
+                self._manifest(),
+                FakeLogger(),
+                episode_index=episode,
+                runtimes={"GSPS01A25Z0011": b"bundle-v1"},
+            )
+        manifest = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())
+        assert len(manifest["epochs"]) == 1
+        assert len(list((tmp_path / RUNTIME_DIR).iterdir())) == 1
+
+    def test_a_sensor_without_a_bundle_is_absent_not_null(self, tmp_path):
+        """Absent means "not recorded"; a null would read like "recorded as
+        nothing". Consumers check for the key."""
+        write_hardware_manifest(tmp_path, self._manifest(), FakeLogger(), runtimes={})
+        manifest = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())
+        sensor = manifest["epochs"][0]["units"][0]["tactile_sensors"][0]
+        assert "runtime" not in sensor
+        assert tactile_runtime_for_key(manifest, 0, "tactile_left") is None
+
+    def test_a_pre_bundle_dataset_reports_none_rather_than_guessing(self):
+        legacy = {"robot_type": "taccap_gripper", "units": self._manifest()["units"]}
+        assert tactile_runtime_for_key(legacy, 0, "tactile_left") is None
 
 
 class TestTactileSerialForKey:

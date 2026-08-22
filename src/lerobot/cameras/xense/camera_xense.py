@@ -569,6 +569,33 @@ class XenseTactileCamera(Camera):
         # Do NOT call _format_read_result() again, as it would double-convert BGR<->RGB.
         return data
 
+    def export_runtime_config(self) -> bytes | None:
+        """This sensor's runtime config as bytes, or ``None`` if unavailable.
+
+        The runtime bundle is what lets the multimodal tactile channels (depth,
+        force, difference) be rebuilt offline from the recorded ``rectify``
+        stream. It carries this unit's own calibration *and* the reference image
+        captured when the sensor came up, so it has to be taken from the sensor
+        that is recording — another unit's bundle, or this one's from another
+        session, does not fail loudly. It reports plausible depth and force from
+        an untouched gel.
+
+        Returns ``None`` rather than raising when the sensor is not connected or
+        the SDK cannot produce one: a missing bundle costs the derived channels
+        for those episodes, which is not a reason to lose the recording itself.
+        """
+        sensor = getattr(self, "sensor", None)
+        if sensor is None:
+            return None
+        try:
+            return sensor.exportRuntimeConfig(binary=True)
+        except Exception as e:  # noqa: BLE001 - vendor SDK, and no failure here is fatal
+            logger.warn(
+                f"{self}: could not export the runtime config ({e}); "
+                "tactile derivation will need this sensor's bundle from elsewhere."
+            )
+            return None
+
     def disconnect(self):
         """
         Disconnects from the sensor and cleans up resources.

@@ -493,6 +493,9 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 robot.hardware_manifest,
                 logger,
                 episode_index=dataset.num_episodes,
+                # Each tactile sensor's runtime bundle goes in with it, so the
+                # derived channels can be rebuilt from this dataset alone later.
+                runtimes=getattr(robot, "tactile_runtimes", None) or None,
             )
 
         # 3D pose + trajectory overlay (no-op if the device emits no tcp.* poses).
