@@ -36,7 +36,9 @@ from lerobot.robots.taccap_gripper.common import (
     build_head_camera_configs,
     build_tactile_camera_configs,
     connect_cameras_parallel,
+    epoch_for_episode,
     hardware_manifest_unit,
+    manifest_epochs,
     open_gripper,
     read_head_camera_skew,
     split_camera_read,
@@ -726,34 +728,82 @@ class TestWriteHardwareManifest:
         ],
     )
 
+    def _swapped(self, gripper_sn="TCGU01A24Z0003m"):
+        other = json.loads(json.dumps(self.MANIFEST))
+        other["units"][0]["gripper_sn"] = gripper_sn
+        return other
+
     def test_written_under_meta_not_into_info_json(self, tmp_path):
         """``meta/info.json`` is upstream's schema; a fork-local key there would
         collide on the next v5.x sync."""
         path = write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
         assert path == tmp_path / HARDWARE_MANIFEST_PATH
-        assert json.loads(path.read_text()) == self.MANIFEST
         assert not (tmp_path / "meta" / "info.json").exists()
+
+    def test_a_new_dataset_gets_one_open_epoch(self, tmp_path):
+        """``to_episode`` stays null until something closes it: the episode count
+        is only known once the run ends, and guessing would be worse than saying
+        "still open"."""
+        path = write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
+        on_disk = json.loads(path.read_text())
+        assert on_disk["robot_type"] == "taccap_gripper"
+        assert on_disk["epochs"] == [{"from_episode": 0, "to_episode": None, "units": self.MANIFEST["units"]}]
 
     def test_rewriting_the_same_hardware_is_a_silent_no_op(self, tmp_path):
         write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
+        before = (tmp_path / HARDWARE_MANIFEST_PATH).read_text()
+
         logger = FakeLogger()
-        write_hardware_manifest(tmp_path, self.MANIFEST, logger)
+        write_hardware_manifest(tmp_path, self.MANIFEST, logger, episode_index=12)
+
+        assert logger.warnings == []
+        assert (tmp_path / HARDWARE_MANIFEST_PATH).read_text() == before
+
+    def test_resuming_on_other_hardware_appends_an_epoch(self, tmp_path):
+        """Both rigs stay named and every episode keeps pointing at the devices
+        that produced it. Keeping only the first manifest (what this used to do)
+        left the file quietly wrong for everything recorded after the swap."""
+        write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
+
+        write_hardware_manifest(tmp_path, self._swapped(), FakeLogger(), episode_index=57)
+
+        epochs = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())["epochs"]
+        assert [(e["from_episode"], e["to_episode"]) for e in epochs] == [(0, 57), (57, None)]
+        assert epochs[0]["units"][0]["gripper_sn"] == "TCGU01A24Z0001m"
+        assert epochs[1]["units"][0]["gripper_sn"] == "TCGU01A24Z0003m"
+
+    def test_a_swap_is_reported_but_is_not_a_warning(self, tmp_path):
+        """It is now recorded rather than lost, so it is news, not a problem."""
+        write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
+        logger = FakeLogger()
+        write_hardware_manifest(tmp_path, self._swapped(), logger, episode_index=57)
         assert logger.warnings == []
 
-    def test_resuming_on_other_hardware_warns_and_keeps_the_original(self, tmp_path):
-        """The episodes already in the dataset came from the devices named in
-        the file; overwriting would misattribute every one of them."""
+    def test_three_rigs_chain_without_gaps_or_overlap(self, tmp_path):
+        """Bounds are half-open, so each episode belongs to exactly one epoch."""
         write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
-        swapped = json.loads(json.dumps(self.MANIFEST))
-        swapped["units"][0]["gripper_sn"] = "TCGU01A24Z0003m"
+        write_hardware_manifest(tmp_path, self._swapped("TCGU01A24Z0003m"), FakeLogger(), episode_index=57)
+        write_hardware_manifest(tmp_path, self._swapped("TCGU01A24Z0004m"), FakeLogger(), episode_index=90)
+
+        epochs = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())["epochs"]
+        assert [(e["from_episode"], e["to_episode"]) for e in epochs] == [(0, 57), (57, 90), (90, None)]
+
+    def test_a_different_robot_is_kept_apart_not_appended(self, tmp_path):
+        """``robot_type`` / ``robot_id`` / ``role`` identify the station, not the
+        devices on it. A mismatch is not a swap — appending would assert a
+        continuity that is not there."""
+        write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
+        other_station = json.loads(json.dumps(self.MANIFEST))
+        other_station["robot_id"] = "taccap_9"
 
         logger = FakeLogger()
-        write_hardware_manifest(tmp_path, swapped, logger)
+        write_hardware_manifest(tmp_path, other_station, logger, episode_index=57)
 
         on_disk = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())
-        assert on_disk == self.MANIFEST
+        assert on_disk["robot_id"] == "taccap_0"
+        assert len(on_disk["epochs"]) == 1
         assert len(logger.warnings) == 1
-        assert "TCGU01A24Z0003m" in logger.warnings[0]  # names what is connected now
+        assert "taccap_9" in logger.warnings[0]  # names what is connected now
 
     def test_an_unreadable_manifest_is_left_alone(self, tmp_path):
         """A truncated file is someone else's problem to fix; clobbering it would
@@ -767,6 +817,43 @@ class TestWriteHardwareManifest:
 
         assert path.read_text() == "{ truncated"
         assert len(logger.warnings) == 1
+
+
+class TestManifestEpochs:
+    """Reading side. Old files have no epochs at all, so this is where a wrong
+    assumption turns into an episode attributed to the wrong sensor."""
+
+    UNITS_A = [{"side": "left", "gripper_sn": "A", "tactile_sensors": []}]
+    UNITS_B = [{"side": "left", "gripper_sn": "B", "tactile_sensors": []}]
+
+    def test_a_pre_epoch_manifest_reads_as_one_open_epoch(self):
+        """Those datasets are real and mostly single-rig; rejecting them would
+        strand every recording made before epochs existed."""
+        legacy = {"robot_type": "taccap_gripper", "units": self.UNITS_A}
+        assert manifest_epochs(legacy) == [{"from_episode": 0, "to_episode": None, "units": self.UNITS_A}]
+
+    def test_an_open_epoch_claims_every_later_episode(self):
+        legacy = {"units": self.UNITS_A}
+        assert epoch_for_episode(legacy, 0)["units"] == self.UNITS_A
+        assert epoch_for_episode(legacy, 10_000)["units"] == self.UNITS_A
+
+    def test_each_episode_resolves_to_the_rig_that_recorded_it(self):
+        manifest = {
+            "epochs": [
+                {"from_episode": 0, "to_episode": 57, "units": self.UNITS_A},
+                {"from_episode": 57, "to_episode": None, "units": self.UNITS_B},
+            ]
+        }
+        assert epoch_for_episode(manifest, 56)["units"] == self.UNITS_A
+        assert epoch_for_episode(manifest, 57)["units"] == self.UNITS_B  # half-open
+        assert epoch_for_episode(manifest, 1_000)["units"] == self.UNITS_B
+
+    def test_an_episode_no_epoch_claims_is_none_not_the_nearest_rig(self):
+        """Past the last closed epoch nobody recorded that hardware. Falling back
+        to the nearest rig would attribute it to devices that did not produce it
+        — which is the failure this whole mechanism exists to prevent."""
+        closed = {"epochs": [{"from_episode": 0, "to_episode": 57, "units": self.UNITS_A}]}
+        assert epoch_for_episode(closed, 57) is None
 
 
 class TestSwapTactileDisplayFeatures:

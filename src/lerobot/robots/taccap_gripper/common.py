@@ -63,7 +63,9 @@ __all__ = [
     "build_wrist_camera_config",
     "connect_cameras_parallel",
     "disconnect_cameras_parallel",
+    "epoch_for_episode",
     "hardware_manifest_unit",
+    "manifest_epochs",
     "open_gripper",
     "prewarm_tactile_config_cache",
     "read_gripper_normalized",
@@ -785,6 +787,14 @@ file's schema belongs to upstream lerobot, and a fork-local key in it would
 collide on the next v5.x sync. ``robot.id`` does not reach the dataset at all
 (``LeRobotDataset.create`` takes only ``robot_type``), so this manifest is the
 only thing tying recorded episodes to the physical devices that produced them.
+
+The same reasoning is why a swap mid-dataset is recorded here as another
+``epochs`` entry rather than as a per-episode column in
+``meta/episodes/*.parquet``: adding a column part-way through makes the dataset
+unreadable. ``datasets.Dataset.from_parquet`` casts every later file to the
+*first* file's schema, so a dataset whose early files predate the column raises
+``CastError`` on load — not a missing column, the whole dataset. (The bare
+``pyarrow.dataset`` path is worse: it drops the column silently.)
 """
 
 
@@ -836,6 +846,10 @@ def build_hardware_manifest(
     ``robot_id`` is the station label (``--robot.id``, e.g. ``taccap_0``) and is
     free to be ``None``; the serials below are the actual identity, and they are
     what a dataset should be trusted to be traced by.
+
+    ``units`` describes what is connected *now*. Which episodes it produced is
+    decided at write time (``write_hardware_manifest``), because only the dataset
+    knows how many episodes precede this run.
     """
     return {
         "robot_type": robot_type,
@@ -845,31 +859,131 @@ def build_hardware_manifest(
     }
 
 
-def write_hardware_manifest(root: str | Path, manifest: dict[str, Any], logger: Any) -> Path:
+def manifest_epochs(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """The manifest's hardware epochs, oldest first, for old and new files alike.
+
+    A manifest written before epochs existed has a bare ``units`` and no episode
+    bounds. It is reported as a single open-ended epoch (``from_episode`` 0,
+    ``to_episode`` ``None``) rather than being rejected: those datasets are real
+    and mostly single-rig.
+
+    ``to_episode`` is exclusive, matching ``dataset_from_index`` /
+    ``dataset_to_index``. It is ``None`` on the epoch still being recorded — the
+    count is only known once the run ends, and guessing would be worse than
+    saying "still open".
+
+    .. warning::
+       An open-ended single epoch means *"nothing here says the rig changed"*,
+       **not** *"the rig did not change"*. Pre-epoch manifests could not express
+       a swap, so a consumer that must not mix rigs (per-sensor tactile solving,
+       for one) has to verify it some other way.
+    """
+    epochs = manifest.get("epochs")
+    if isinstance(epochs, list):
+        return epochs
+    return [{"from_episode": 0, "to_episode": None, "units": manifest.get("units", [])}]
+
+
+def epoch_for_episode(manifest: dict[str, Any], episode_index: int) -> dict[str, Any] | None:
+    """The epoch that recorded ``episode_index``, or ``None`` if none claims it.
+
+    ``None`` is a real answer, not an error: an episode past the last closed
+    epoch belongs to hardware nobody recorded. Callers that would otherwise
+    attribute it to the wrong rig need to see that.
+    """
+    for epoch in manifest_epochs(manifest):
+        start = epoch.get("from_episode") or 0
+        end = epoch.get("to_episode")
+        if episode_index >= start and (end is None or episode_index < end):
+            return epoch
+    return None
+
+
+def _manifest_identity(manifest: dict[str, Any]) -> dict[str, Any]:
+    """The parts that must not differ between runs of the same dataset.
+
+    Excludes ``epochs`` / ``units`` on purpose — those are exactly what a swap
+    changes, and recording that change is the case this module now supports.
+    """
+    return {key: manifest.get(key) for key in ("robot_type", "robot_id", "role")}
+
+
+def write_hardware_manifest(
+    root: str | Path,
+    manifest: dict[str, Any],
+    logger: Any,
+    *,
+    episode_index: int = 0,
+) -> Path:
     """Write ``manifest`` to ``root/meta/hardware.json`` and return the path.
 
-    Written once, when the file is absent. Resuming a dataset with *different*
-    hardware keeps the original file and warns instead of overwriting: the
-    episodes already in the dataset came from the devices named there, and
-    silently replacing them would misattribute every one of them. The warning is
-    the signal that the dataset now spans two rigs.
+    ``episode_index`` is how many episodes the dataset already holds, i.e. the
+    first index this run will write. It is what closes the previous epoch and
+    opens the next one, so a caller that resumes must pass it
+    (``dataset.num_episodes``); the default only suits a fresh dataset.
+
+    Three cases:
+
+    * **New dataset** — one open epoch starting at ``episode_index``.
+    * **Resumed on the same hardware** — nothing to record; the open epoch already
+      covers what is about to be written.
+    * **Resumed on different hardware** — close the open epoch at ``episode_index``
+      and append a new one. Both rigs stay named, and every episode keeps pointing
+      at the devices that actually produced it.
+
+    That last case used to keep the original file and warn. The warning went to
+    the log and never reached the dataset, so afterwards nothing on disk said the
+    rig had changed, while the manifest quietly misattributed every episode
+    recorded after the swap. Downstream that is worse than a loud failure:
+    solving a tactile stream against another sensor's calibration yields
+    plausible depth and force from an untouched gel — no error, no signal.
+
+    A truncated or unreadable file is still left alone: whatever episodes are
+    already there have provenance we cannot reconstruct, and clobbering it would
+    destroy the only record of it.
     """
     path = Path(root) / HARDWARE_MANIFEST_PATH
-    if path.exists():
-        try:
-            existing = json.loads(path.read_text())
-        except (OSError, ValueError) as e:
-            logger.warn(f"Could not read the existing hardware manifest {path} ({e}); leaving it alone.")
-            return path
-        if existing != manifest:
-            logger.warn(
-                f"Hardware manifest {path} does not match the devices connected now — this dataset "
-                f"already holds episodes recorded on other hardware. Keeping the original; "
-                f"current: {json.dumps(manifest, sort_keys=True)}"
-            )
+    units = manifest.get("units", [])
+
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fresh = {
+            **_manifest_identity(manifest),
+            "epochs": [{"from_episode": int(episode_index), "to_episode": None, "units": units}],
+        }
+        path.write_text(json.dumps(fresh, indent=2) + "\n")
+        logger.info(f"Hardware manifest written to {path}")
         return path
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest, indent=2) + "\n")
-    logger.info(f"Hardware manifest written to {path}")
+    try:
+        existing = json.loads(path.read_text())
+    except (OSError, ValueError) as e:
+        logger.warn(f"Could not read the existing hardware manifest {path} ({e}); leaving it alone.")
+        return path
+
+    if _manifest_identity(existing) != _manifest_identity(manifest):
+        # robot_type / robot_id / role identify the station, not the devices on
+        # it. A mismatch means this is not the same rig at all, which epochs do
+        # not model — appending would assert a continuity that is not there.
+        logger.warn(
+            f"Hardware manifest {path} describes a different robot "
+            f"({json.dumps(_manifest_identity(existing), sort_keys=True)}); keeping the original. "
+            f"Current: {json.dumps(_manifest_identity(manifest), sort_keys=True)}"
+        )
+        return path
+
+    epochs = manifest_epochs(existing)
+    if epochs and epochs[-1].get("units") == units:
+        return path  # same hardware; the open epoch already covers this run
+
+    # Different hardware. Close the epoch that was open and start a new one.
+    updated = [dict(epoch) for epoch in epochs]
+    updated[-1]["to_episode"] = int(episode_index)
+    updated.append({"from_episode": int(episode_index), "to_episode": None, "units": units})
+
+    path.write_text(json.dumps({**_manifest_identity(existing), "epochs": updated}, indent=2) + "\n")
+    logger.info(
+        f"Hardware changed at episode {episode_index}; recorded as a new epoch in {path}. "
+        f"This dataset now spans {len(updated)} hardware configurations."
+    )
     return path

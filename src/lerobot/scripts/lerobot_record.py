@@ -484,8 +484,16 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         # (asked of the class, not the instance: ``getattr(robot, ...)`` with a
         # default would also swallow an AttributeError raised *inside* the
         # property, turning a bug into a silently missing manifest.)
+        # ``num_episodes`` is where this run starts writing, and it is what
+        # bounds the hardware epochs: on a resume after a device swap it closes
+        # the epoch the earlier episodes belong to and opens the one for these.
         if hasattr(type(robot), "hardware_manifest"):
-            write_hardware_manifest(dataset.root, robot.hardware_manifest, logger)
+            write_hardware_manifest(
+                dataset.root,
+                robot.hardware_manifest,
+                logger,
+                episode_index=dataset.num_episodes,
+            )
 
         # 3D pose + trajectory overlay (no-op if the device emits no tcp.* poses).
         # The viewer is laid out from display_features when the robot has one —
