@@ -747,7 +747,15 @@ class TestWriteHardwareManifest:
         path = write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
         on_disk = json.loads(path.read_text())
         assert on_disk["robot_type"] == "taccap_gripper"
-        assert on_disk["epochs"] == [{"from_episode": 0, "to_episode": None, "units": self.MANIFEST["units"]}]
+        assert on_disk["epochs"] == [
+            {
+                "from_episode": 0,
+                "to_episode": None,
+                "robot_id": "taccap_0",
+                "role": "leader",
+                "units": self.MANIFEST["units"],
+            }
+        ]
 
     def test_rewriting_the_same_hardware_is_a_silent_no_op(self, tmp_path):
         write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
@@ -788,22 +796,42 @@ class TestWriteHardwareManifest:
         epochs = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())["epochs"]
         assert [(e["from_episode"], e["to_episode"]) for e in epochs] == [(0, 57), (57, 90), (90, None)]
 
-    def test_a_different_robot_is_kept_apart_not_appended(self, tmp_path):
-        """``robot_type`` / ``robot_id`` / ``role`` identify the station, not the
-        devices on it. A mismatch is not a swap — appending would assert a
-        continuity that is not there."""
+    def test_the_same_devices_on_another_station_are_recorded_not_refused(self, tmp_path):
+        """``robot_id`` labels the station; the devices are the parts you swap in
+        and out of it. Moving a rig to another PC must not block the record —
+        refusing would also drop a device swap that coincided with the move, and
+        the devices are the part downstream cannot guess."""
         write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
-        other_station = json.loads(json.dumps(self.MANIFEST))
-        other_station["robot_id"] = "taccap_9"
+        moved = json.loads(json.dumps(self.MANIFEST))
+        moved["robot_id"] = "taccap_9"
 
         logger = FakeLogger()
-        write_hardware_manifest(tmp_path, other_station, logger, episode_index=57)
+        write_hardware_manifest(tmp_path, moved, logger, episode_index=57)
+
+        epochs = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())["epochs"]
+        assert [(e["from_episode"], e["robot_id"]) for e in epochs] == [
+            (0, "taccap_0"),
+            (57, "taccap_9"),
+        ]
+        # Same hardware either side, so nothing downstream has to change sensor.
+        assert epochs[0]["units"] == epochs[1]["units"]
+        assert logger.warnings == []
+
+    def test_a_different_robot_type_is_kept_apart_not_appended(self, tmp_path):
+        """Single vs bimanual changes the observation keys, so it is not the same
+        dataset at all — epochs do not model that."""
+        write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
+        other_type = json.loads(json.dumps(self.MANIFEST))
+        other_type["robot_type"] = "bi_taccap_gripper"
+
+        logger = FakeLogger()
+        write_hardware_manifest(tmp_path, other_type, logger, episode_index=57)
 
         on_disk = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())
-        assert on_disk["robot_id"] == "taccap_0"
+        assert on_disk["robot_type"] == "taccap_gripper"
         assert len(on_disk["epochs"]) == 1
         assert len(logger.warnings) == 1
-        assert "taccap_9" in logger.warnings[0]  # names what is connected now
+        assert "bi_taccap_gripper" in logger.warnings[0]
 
     def test_an_unreadable_manifest_is_left_alone(self, tmp_path):
         """A truncated file is someone else's problem to fix; clobbering it would
@@ -829,8 +857,21 @@ class TestManifestEpochs:
     def test_a_pre_epoch_manifest_reads_as_one_open_epoch(self):
         """Those datasets are real and mostly single-rig; rejecting them would
         strand every recording made before epochs existed."""
-        legacy = {"robot_type": "taccap_gripper", "units": self.UNITS_A}
-        assert manifest_epochs(legacy) == [{"from_episode": 0, "to_episode": None, "units": self.UNITS_A}]
+        legacy = {
+            "robot_type": "taccap_gripper",
+            "robot_id": "taccap_0",
+            "role": "leader",
+            "units": self.UNITS_A,
+        }
+        assert manifest_epochs(legacy) == [
+            {
+                "from_episode": 0,
+                "to_episode": None,
+                "robot_id": "taccap_0",  # lifted from the top level
+                "role": "leader",
+                "units": self.UNITS_A,
+            }
+        ]
 
     def test_an_open_epoch_claims_every_later_episode(self):
         legacy = {"units": self.UNITS_A}
