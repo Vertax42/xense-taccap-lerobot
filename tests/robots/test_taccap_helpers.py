@@ -1032,7 +1032,7 @@ class TestTactileRuntimes:
         the timezone of the bench it was taken at, so it reads without arithmetic.
         """
         write_hardware_manifest(tmp_path, self._manifest(), FakeLogger(), runtimes={"GSPS01A25Z0011": b"b"})
-        (name,) = [p.name for p in (tmp_path / RUNTIME_DIR).iterdir()]
+        (name,) = (p.name for p in (tmp_path / RUNTIME_DIR).iterdir())
         assert re.fullmatch(r"GSPS01A25Z0011-\d{8}T\d{6}\.bin", name), name
         stamped = datetime.strptime(name.split("-")[1][: -len(".bin")], "%Y%m%dT%H%M%S")
         assert abs(stamped - datetime.now(CAPTURE_TZ).replace(tzinfo=None)) < timedelta(minutes=1)
