@@ -45,6 +45,7 @@ from lerobot.robots.taccap_gripper.common import (
     swap_tactile_display_features,
     tactile_camera_output_types,
     tactile_display_key,
+    tactile_serial_for_key,
     validate_robot_id,
     write_hardware_manifest,
 )
@@ -926,6 +927,55 @@ class TestManifestEpochs:
         — which is the failure this whole mechanism exists to prevent."""
         closed = {"epochs": [{"from_episode": 0, "to_episode": 57, "units": self.UNITS_A}]}
         assert epoch_for_episode(closed, 57) is None
+
+
+class TestTactileSerialForKey:
+    """The lookup post-processing actually performs: which sensor fed this video
+    stream in this episode. Getting it wrong is invisible in the output, so the
+    unanswerable cases matter as much as the answerable ones."""
+
+    MANIFEST = {
+        "epochs": [
+            {
+                "from_episode": 0,
+                "to_episode": 40,
+                "units": [
+                    {
+                        "side": "left",
+                        "tactile_sensors": [{"observation_key": "left_tactile_left", "serial": "GSPS01A30Z0015"}],
+                    }
+                ],
+            },
+            {
+                "from_episode": 40,
+                "to_episode": None,
+                "units": [
+                    {
+                        "side": "left",
+                        "tactile_sensors": [{"observation_key": "left_tactile_left", "serial": "GSPS01A30Z0088"}],
+                    }
+                ],
+            },
+        ]
+    }
+
+    def test_the_same_key_resolves_to_different_sensors_across_a_swap(self):
+        assert tactile_serial_for_key(self.MANIFEST, 39, "left_tactile_left") == "GSPS01A30Z0015"
+        assert tactile_serial_for_key(self.MANIFEST, 40, "left_tactile_left") == "GSPS01A30Z0088"
+
+    def test_an_unknown_key_is_none_not_the_first_sensor(self):
+        """Falling back to "some sensor on that rig" is exactly the misattribution
+        this file exists to prevent."""
+        assert tactile_serial_for_key(self.MANIFEST, 0, "right_tactile_left") is None
+
+    def test_an_episode_outside_every_epoch_is_none(self):
+        closed = {"epochs": [{"from_episode": 0, "to_episode": 10, "units": self.MANIFEST["epochs"][0]["units"]}]}
+        assert tactile_serial_for_key(closed, 10, "left_tactile_left") is None
+
+    def test_a_pre_epoch_manifest_still_answers(self):
+        """Those datasets are the majority today; the lookup has to work on them."""
+        legacy = {"robot_type": "taccap_gripper", "units": self.MANIFEST["epochs"][0]["units"]}
+        assert tactile_serial_for_key(legacy, 9999, "left_tactile_left") == "GSPS01A30Z0015"
 
 
 class TestSwapTactileDisplayFeatures:
