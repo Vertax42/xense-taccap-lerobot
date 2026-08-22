@@ -28,6 +28,7 @@ single gripper, ``"[left] "`` for one arm of the bimanual rig.
 from __future__ import annotations
 
 import glob
+import hashlib
 import json
 import os
 import time
@@ -55,6 +56,7 @@ __all__ = [
     "HEAD_POSE_KEYS",
     "HEAD_CAMERA_KEYS",
     "HARDWARE_MANIFEST_PATH",
+    "RUNTIME_DIR",
     "GripperReadGuard",
     "HeadSkewMonitor",
     "build_hardware_manifest",
@@ -74,11 +76,13 @@ __all__ = [
     "resolve_wrist_camera_path",
     "split_camera_read",
     "swap_tactile_display_features",
+    "tactile_runtime_for_key",
     "tactile_serial_for_key",
     "tactile_camera_output_types",
     "tactile_display_key",
     "validate_robot_id",
     "write_hardware_manifest",
+    "write_tactile_runtimes",
 ]
 
 
@@ -910,6 +914,65 @@ def epoch_for_episode(manifest: dict[str, Any], episode_index: int) -> dict[str,
     return None
 
 
+RUNTIME_DIR = "meta/runtimes"
+"""Where a dataset keeps the tactile runtime bundles its episodes need.
+
+Rebuilding depth / force / difference from the recorded ``rectify`` stream needs
+the recording sensor's own runtime config. Keeping it *in* the dataset is what
+makes that reconstruction possible from the dataset alone — no hunting down the
+physical unit months later, and no risk that the unit has since been recalibrated
+into a different reference.
+
+Files are named ``<serial>-<digest>.bin``. The digest is what makes it correct
+rather than merely tidy: a sensor removed for maintenance and reinstalled comes
+back with the same serial but a new reference image, so ``<serial>.bin`` alone
+would have one epoch silently overwrite the other's calibration. Identical
+bundles collapse onto one file, so re-recording on unchanged hardware costs
+nothing.
+"""
+
+
+def _runtime_filename(serial: str, blob: bytes) -> str:
+    return f"{serial}-{hashlib.sha256(blob).hexdigest()[:12]}.bin"
+
+
+def write_tactile_runtimes(root: str | Path, runtimes: dict[str, bytes]) -> dict[str, str]:
+    """Write each sensor's runtime bundle and return ``{serial: relative path}``.
+
+    Content-addressed, so writing the same bundle twice is a no-op and two
+    different bundles from the same serial coexist. Paths are relative to the
+    dataset root, which is what goes in the manifest.
+    """
+    written: dict[str, str] = {}
+    for serial, blob in sorted(runtimes.items()):
+        if not blob:
+            continue
+        relative = f"{RUNTIME_DIR}/{_runtime_filename(serial, blob)}"
+        path = Path(root) / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_bytes(blob)
+        written[serial] = relative
+    return written
+
+
+def _stamp_runtimes(units: list[dict[str, Any]], paths: dict[str, str]) -> list[dict[str, Any]]:
+    """Copy ``units`` with each tactile sensor pointing at its runtime bundle.
+
+    A sensor with no bundle is left without the key rather than given a null:
+    absent means "not recorded", and a null would read like "recorded as
+    nothing". Consumers check for the key.
+    """
+    stamped = []
+    for unit in units:
+        sensors = []
+        for sensor in unit.get("tactile_sensors") or []:
+            relative = paths.get(sensor.get("serial"))
+            sensors.append({**sensor, "runtime": relative} if relative else dict(sensor))
+        stamped.append({**unit, "tactile_sensors": sensors})
+    return stamped
+
+
 def _epoch_payload(manifest: dict[str, Any]) -> dict[str, Any]:
     """What a run records about the rig: the devices, and where they were run.
 
@@ -951,6 +1014,27 @@ def tactile_serial_for_key(manifest: dict[str, Any], episode_index: int, observa
     return None
 
 
+def tactile_runtime_for_key(manifest: dict[str, Any], episode_index: int, observation_key: str) -> str | None:
+    """Path (dataset-relative) of the runtime bundle needed to rebuild this
+    stream's derived channels, or ``None`` if the dataset does not carry one.
+
+    ``None`` covers both "no epoch claims that episode" and "recorded before
+    bundles were stored". Either way the honest move is to skip derivation for
+    those episodes rather than reach for another bundle: a bundle from a
+    different unit — or from the same unit after a recalibration — turns an
+    untouched gel into plausible depth and force, with nothing in the output
+    saying so.
+    """
+    epoch = epoch_for_episode(manifest, episode_index)
+    if epoch is None:
+        return None
+    for unit in epoch.get("units") or []:
+        for sensor in unit.get("tactile_sensors") or []:
+            if sensor.get("observation_key") == observation_key:
+                return sensor.get("runtime")
+    return None
+
+
 def _describe_change(previous: dict[str, Any] | None, current: dict[str, Any]) -> str:
     """Name what actually changed, so the log points at the thing to check.
 
@@ -979,6 +1063,7 @@ def write_hardware_manifest(
     logger: Any,
     *,
     episode_index: int = 0,
+    runtimes: dict[str, bytes] | None = None,
 ) -> Path:
     """Write ``manifest`` to ``root/meta/hardware.json`` and return the path.
 
@@ -1015,12 +1100,26 @@ def write_hardware_manifest(
     solving a tactile stream against another sensor's calibration yields
     plausible depth and force from an untouched gel — no error, no signal.
 
+    ``runtimes`` maps a tactile serial to its runtime bundle
+    (``XenseCamera.export_runtime_config()``). Given one, each bundle is written
+    under ``meta/runtimes/`` and the epoch's sensors point at it, so the derived
+    tactile channels can be rebuilt from the dataset alone. A sensor that comes
+    back from maintenance with a new reference image produces a different bundle
+    under the same serial, which counts as a change and opens its own epoch.
+
     A truncated or unreadable file is still left alone: whatever episodes are
     already there have provenance we cannot reconstruct, and clobbering it would
     destroy the only record of it.
     """
     path = Path(root) / HARDWARE_MANIFEST_PATH
     payload = _epoch_payload(manifest)
+    if runtimes:
+        # Written before the comparison below, so a re-calibrated sensor — same
+        # serial, new reference image, hence a new bundle path — is seen as a
+        # change and opens its own epoch. That is the point: the old episodes
+        # must keep pointing at the bundle that was current when they were
+        # recorded.
+        payload["units"] = _stamp_runtimes(payload["units"], write_tactile_runtimes(root, runtimes))
 
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
