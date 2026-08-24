@@ -38,7 +38,11 @@ auto-discover by rule.
 from dataclasses import dataclass, field
 
 from ..config import RobotConfig
-from ..taccap_gripper.common import build_head_camera_configs, validate_robot_id
+from ..taccap_gripper.common import (
+    build_head_camera_configs,
+    validate_robot_id,
+    validate_wrist_undistort_size,
+)
 
 _SIDES = ("left", "right")
 
@@ -186,6 +190,26 @@ class BiTaccapGripperConfig(RobotConfig):
     wrist_camera_height: int = 480
     wrist_camera_fps: int = 30
 
+    wrist_undistort: bool = False
+    """Rectify both wrist fisheye streams before the frames are recorded.
+
+    Shared by the two arms like the other ``wrist_camera_*`` settings, but the
+    intrinsics are per unit: each gripper is asked for its own, so one arm can be
+    rectified from its flash while the other falls back to the SDK reference.
+
+    **Off by default, and turning it on changes what lands in the dataset**: a
+    rectified ``{side}_wrist`` and a raw fisheye one have identical shape and
+    dtype, so the two are not interchangeable and nothing downstream can tell
+    them apart. Which of the two each arm used is written into
+    ``meta/hardware.json`` for exactly that reason. See the single-arm config for
+    what the reference fallback costs."""
+
+    wrist_undistort_balance: float = 0.0
+    """Output focal length, ``0`` = the calibrated value (also the PC calibration
+    tool's default), ``1`` = 0.70x for the widest field of view at the cost of
+    more black border. Only fx/fy move; the principal point stays put. Clamped to
+    [0, 1] by the SDK."""
+
     wrist_camera_fourcc: str | None = "MJPG"
     """Pixel format to negotiate with both wrist cameras. Defaults to MJPEG
     because the alternative OpenCV would pick on its own (YUYV) reserves enough
@@ -257,6 +281,14 @@ class BiTaccapGripperConfig(RobotConfig):
                 f"got {self.tactile_output_types}. For an extra Rerun-only view use "
                 "--robot.tactile_display_output_types."
             )
+        if self.wrist_undistort:
+            if not any(getattr(self, f"{side}_enable_wrist_camera") for side in _SIDES):
+                raise ValueError(
+                    "wrist_undistort=True but neither arm has a wrist camera enabled — there "
+                    "is no wrist stream to rectify."
+                )
+            validate_wrist_undistort_size(self.wrist_camera_width, self.wrist_camera_height)
+
         for side in _SIDES:
             if getattr(self, f"{side}_enable_gripper") and getattr(self, f"{side}_gripper_open_rad") <= 0:
                 raise ValueError(

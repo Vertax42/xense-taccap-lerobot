@@ -617,6 +617,102 @@ def open_gripper(
     return gripper, "firmware"
 
 
+# ------------------------------------------------------- wrist fisheye undistort
+
+#: The wrist lens is calibrated at this size and the firmware record carries the
+#: 8 intrinsic/distortion floats and **no image size**, so serving another
+#: resolution would mean guessing a scale factor and rectifying wrongly without
+#: a trace. ``FisheyeUndistorter`` rejects anything else; the configs check it at
+#: CLI-parse time so it does not wait until ``connect()`` to say so.
+WRIST_CALIB_SIZE = (640, 480)
+
+
+def validate_wrist_undistort_size(width: int, height: int) -> None:
+    """Reject a wrist resolution the fisheye intrinsics do not describe.
+
+    Called from both configs' ``__post_init__`` so the failure lands at
+    CLI-parse time. ``FisheyeUndistorter`` would raise at ``connect()`` anyway —
+    after the grippers, tracker and every other camera are already open — and the
+    error there does not name the flag that caused it.
+    """
+    if (width, height) != WRIST_CALIB_SIZE:
+        w, h = WRIST_CALIB_SIZE
+        raise ValueError(
+            f"wrist_undistort=True requires the wrist camera at {w}x{h}, got {width}x{height}. "
+            f"The firmware's fisheye record holds only the 8 intrinsic/distortion floats and no "
+            f"image size, so another resolution would mean guessing a scale factor and rectifying "
+            f"wrongly with nothing in the frames to show it. Either drop --robot.wrist_undistort "
+            f"or record at {w}x{h}."
+        )
+
+
+def resolve_wrist_undistorter(
+    gripper: Any,
+    *,
+    undistorter_cls: Any,
+    fallback_cal: Any,
+    balance: float,
+    logger: Any,
+    label: str = "",
+) -> tuple[Any, str]:
+    """Build the undistorter for one wrist camera, and say where its numbers came from.
+
+    We own the wrist UVC device (the cameras come from the LeRobot camera
+    framework, and ``open_gripper`` leaves the SDK's ``open_cameras`` at its
+    default ``False``), so the SDK's own ``Config::undistort_wrist`` never
+    applies to us. ``Calibration::resolve_fisheye`` exists precisely for this
+    case: it hands callers that own the device the *identical* read-and-fall-back
+    answer the SDK uses internally, instead of each consumer re-deriving it and
+    drifting from the other.
+
+    Falls back to the SDK's reference intrinsics rather than refusing, matching
+    the SDK: every unit carries the same lens on the same sensor, so the shared
+    numbers beat no rectification at all. It is **approximate** — lens placement
+    varies per assembly so the principal point drifts — hence the warning, and
+    hence ``hardware_manifest_unit`` records which of the two was used. A warning
+    at connect scrolls past; the manifest is what can still be checked afterwards.
+
+    ``gripper`` may be ``None`` (``enable_gripper=False``), which leaves no MCU to
+    ask and therefore no way to read this unit's own calibration.
+
+    ``undistorter_cls`` (``FisheyeUndistorter``) and ``fallback_cal``
+    (``FISHEYE_FALLBACK_CAL``) are injected rather than imported here, for the
+    same reason ``open_gripper`` takes ``gripper_cls``: this module is helper
+    code the robots share, and importing the SDK in it would make every one of
+    these helpers untestable on a machine without the SDK — which includes CI.
+
+    Returns:
+        ``(undistorter, source)`` where ``source`` is ``"unit"`` when the numbers
+        came off this gripper's flash and ``"reference"`` when they did not.
+    """
+    if gripper is None:
+        cal, is_reference, reason = (
+            fallback_cal,
+            True,
+            "the gripper MCU is disabled (--robot.enable_gripper=false), so this unit's own calibration cannot be read",
+        )
+    else:
+        cal, is_reference, reason = gripper.calibration.resolve_fisheye()
+
+    if is_reference:
+        logger.warn(
+            f"  {label}Wrist undistortion is using the SDK's REFERENCE intrinsics because "
+            f"{reason}. Rectification will be approximate — lens placement varies per "
+            f"assembly, so the principal point drifts, and anything measuring in pixels off "
+            f"these frames needs a real calibration. Store this unit's own with: "
+            f"python third_party/taccap-gripper/python/examples/fisheye_cal.py set-fisheye"
+        )
+
+    width, height = WRIST_CALIB_SIZE
+    undistorter = undistorter_cls(cal, width, height, balance)
+    source = "reference" if is_reference else "unit"
+    logger.info(
+        f"  {label}Wrist fisheye undistortion on (balance={undistorter.balance:.2f}, "
+        f"focal_scale={undistorter.focal_scale:.3f}, calibration={source})"
+    )
+    return undistorter, source
+
+
 #: How long the jaw encoder may fail continuously before the gripper counts as
 #: physically lost. Shorter than :data:`camera_health.CAM_FREEZE_TIMEOUT_S`
 #: because an encoder read is one serial round-trip with nothing to buffer, and
@@ -809,6 +905,7 @@ def hardware_manifest_unit(
     endpoints: Any,
     tactile_serials: dict[str, str],
     key_prefix: str,
+    wrist_undistort: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One TacCap unit's identity: its gripper, and the tactiles on that gripper.
 
@@ -824,8 +921,21 @@ def hardware_manifest_unit(
     carries the ``observation_key`` it feeds (``{key_prefix}tactile_{finger}``),
     letting a dataset column trace back to a physical sensor without re-deriving
     the naming rule.
+
+    ``wrist_undistort`` records whether this unit's wrist frames were rectified
+    and from whose intrinsics — ``{"applied": bool, "calibration": "unit" |
+    "reference", "balance": float}``, or ``None`` when there is no wrist camera,
+    in which case the key is left out entirely.
+
+    That may look like it contradicts leaving trackers and wrist cameras out of
+    the manifest, but it does not: what is excluded is an accessory's *identity*,
+    and this records how the recorded frames were *processed*. A rectified
+    ``wrist_cam`` and a raw fisheye one have the same shape and dtype, so without
+    this nothing downstream — or later — can tell which it is holding. It rides
+    in ``units``, so changing it part-way through a dataset opens a new epoch on
+    its own (see ``write_hardware_manifest``).
     """
-    return {
+    unit: dict[str, Any] = {
         "side": side,
         "gripper_sn": getattr(endpoints, "firmware_sn", None) or None,
         "tactile_sensors": [
@@ -837,6 +947,28 @@ def hardware_manifest_unit(
             for finger, sn in sorted(tactile_serials.items())
         ],
     }
+    if wrist_undistort is not None:
+        unit["wrist_undistort"] = wrist_undistort
+    return unit
+
+
+def wrist_undistort_record(*, has_wrist_camera: bool, source: str | None, balance: float) -> dict[str, Any] | None:
+    """The ``wrist_undistort`` entry for one unit's manifest, or ``None`` to omit it.
+
+    ``None`` — and therefore no key at all — means "this unit has no wrist
+    camera", so there is nothing for the question to be about. A unit that *has*
+    one always records an answer, including ``{"applied": False}``: absent and
+    false would otherwise be indistinguishable, and "we did not rectify" is a
+    fact about the data worth stating rather than inferring from a missing key.
+
+    ``balance`` is left out when nothing was applied — it describes a
+    rectification that did not happen.
+    """
+    if not has_wrist_camera:
+        return None
+    if source is None:
+        return {"applied": False}
+    return {"applied": True, "calibration": source, "balance": float(balance)}
 
 
 def build_hardware_manifest(

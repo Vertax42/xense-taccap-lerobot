@@ -623,7 +623,48 @@ at connect). Leave it unset (default) to keep auto-discovery.
   comes from the GSPS serial's **last digit** (odd → `left`, even → `right`, 单左双右).
 
 - **Wrist** → obs key `wrist_cam`; `--robot.enable_wrist_camera=false` skips. Tune
-  `--robot.wrist_camera_width/_height/_fps`.
+  `--robot.wrist_camera_width/_height/_fps`. `--robot.wrist_undistort=true` (off by
+  default) rectifies the fisheye **before the frame is recorded** — see below.
+
+### Wrist fisheye undistortion (`--robot.wrist_undistort`, off by default)
+
+The wrist lens is a 190° fisheye and what gets recorded is, by default, the raw
+frame. Turning this on rectifies it with the intrinsics stored in that gripper's
+own flash (`Cmd 0x2B`, command set V2.0+), read through the SDK's
+`Calibration::resolve_fisheye()`.
+
+**It changes what lands in the dataset, and the change is invisible.** A rectified
+`wrist_cam` and a raw one have the same shape and dtype, so datasets recorded with
+and without it are not interchangeable and nothing downstream can tell them apart.
+That is why `meta/hardware.json` records, per unit, whether it was applied and
+which intrinsics were used — and why flipping the flag part-way through a dataset
+opens a new epoch.
+
+Three things worth knowing before turning it on:
+
+- **An uncalibrated unit does not fail.** The SDK's shared reference intrinsics
+  stand in and `connect()` warns: every unit carries the same lens on the same
+  sensor, so reference numbers beat raw fisheye. They are **approximate** — lens
+  placement varies per assembly, so the principal point drifts. Anything that
+  measures in pixels off these frames wants this unit's own calibration:
+  `python third_party/taccap-gripper/python/examples/fisheye_cal.py set-fisheye`.
+  The manifest records `"calibration": "reference"` when this happened, because a
+  warning at connect scrolls past and the dataset is what remains.
+- **640x480 only.** The firmware record holds the 8 intrinsic/distortion floats
+  and no image size, so any other resolution would mean guessing a scale factor
+  and rectifying wrongly with nothing in the frames to show it. Combining
+  `--robot.wrist_undistort=true` with another `--robot.wrist_camera_width/_height`
+  fails at **CLI-parse time**, before any device is touched.
+- **`--robot.wrist_undistort_balance`** (0..1, default 0) trades field of view
+  against black border: 0 keeps the calibrated focal length (also the PC
+  calibration tool's default), 1 shortens it to 0.70x for the widest view. Only
+  fx/fy move, so the view does not drift as the knob turns.
+
+Note this is *not* the SDK's own `Config::undistort_wrist`. That one only applies
+when the SDK owns the wrist UVC device, which it never does here — the cameras
+come from the LeRobot camera framework. `resolve_fisheye()` exists precisely for
+callers in that position, so both paths make the same read-and-fall-back
+decision instead of drifting apart.
 - **Head** → obs keys `left_head` / `right_head`, off by default;
   `--robot.enable_head_camera=true` streams the Pico headset's stereo camera as **one key
   per eye**. `--robot.head_camera_width/_height` accept `640x480` (default), `1024x768` or
@@ -690,28 +731,43 @@ defaults it to `taccap_0`.
 ```json
 {
   "robot_type": "bi_taccap_gripper",
-  "robot_id": "taccap_0",
-  "role": "leader",
-  "units": [
+  "epochs": [
     {
-      "side": "left",
-      "gripper_sn": "TCGU01A24Z0001m",
-      "tactile_sensors": [
+      "from_episode": 0,
+      "to_episode": null,
+      "recorded_at": "2026-08-22T16:03:09+08:00",
+      "robot_id": "taccap_0",
+      "role": "leader",
+      "units": [
         {
-          "finger": "left",
-          "observation_key": "left_tactile_left",
-          "serial": "GSPS01A25Z0011"
-        },
-        {
-          "finger": "right",
-          "observation_key": "left_tactile_right",
-          "serial": "GSPS01A25Z0012"
+          "side": "left",
+          "gripper_sn": "TCGU01A24Z0001m",
+          "tactile_sensors": [
+            {
+              "finger": "left",
+              "observation_key": "left_tactile_left",
+              "serial": "GSPS01A25Z0011",
+              "runtime": "meta/runtimes/GSPS01A25Z0011-20260822T160309.bin"
+            },
+            {
+              "finger": "right",
+              "observation_key": "left_tactile_right",
+              "serial": "GSPS01A25Z0012",
+              "runtime": "meta/runtimes/GSPS01A25Z0012-20260822T160309.bin"
+            }
+          ],
+          "wrist_undistort": { "applied": false }
         }
       ]
     }
   ]
 }
 ```
+
+`epochs` is a list because a rig can be swapped part-way through a dataset: the
+open epoch is closed at the current episode count and a new one starts, so every
+episode keeps pointing at the devices that produced it. `to_episode` is exclusive
+and `null` on the epoch still being recorded.
 
 - `side` is which gripper; `finger` is which sensor on it. Both are called
   left/right and they are **independent** — 单左双右 is applied once to the
@@ -727,15 +783,25 @@ defaults it to `taccap_0`.
   omitted; `enable_tactile=false` gives it an empty `tactile_sensors`.
 - It is a file of its own, **not** a key in `meta/info.json`: that schema is
   upstream's and a fork-local key in it would collide on the next v5.x sync.
-- Resuming a dataset on _different_ hardware keeps the original file and warns.
-  The episodes already recorded came from the devices named there, and
-  overwriting would misattribute every one of them — the warning is the signal
-  that the dataset now spans two rigs.
+- `runtime` points at the tactile runtime bundle under `meta/runtimes/` that was
+  current when those episodes were recorded — what the derived channels have to
+  be rebuilt against.
+- `wrist_undistort` says whether that unit's wrist frames were rectified and from
+  whose intrinsics (`"unit"` or `"reference"`). Present whenever the unit has a
+  wrist camera, including as `{"applied": false}`.
+- Resuming a dataset on _different_ hardware **closes the open epoch and appends a
+  new one**. It used to keep the original file and warn, but that warning only
+  reached the log: nothing on disk said the rig had changed, while the manifest
+  went on attributing post-swap episodes to the old devices. Only a `robot_type`
+  mismatch is still keep-and-warn — single vs bimanual is a different dataset,
+  not a swap.
 
-Trackers and wrist cameras are deliberately not in the manifest: they are
-mounted accessories, while the gripper + its two tactiles are the unit whose
-serials the data is about. `hardware_manifest_unit()` in `common.py` is where
-that would change.
+Trackers are deliberately not in the manifest, and neither is the wrist camera's
+_identity_: they are mounted accessories, while the gripper + its two tactiles are
+the unit whose serials the data is about. `wrist_undistort` is not an exception to
+that — it records how the recorded frames were **processed**, which is invisible in
+the frames themselves. `hardware_manifest_unit()` in `common.py` is where all of
+this is decided.
 
 ## What gets recorded per frame
 
