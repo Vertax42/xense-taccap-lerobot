@@ -79,8 +79,21 @@ to left/right by its serial's **second-to-last digit** (odd → left, even → r
 missing/duplicate/malformed tracker raises a clear error. Set `--robot.enable_tracker=false`
 to record tactile + gripper only (no PC service needed). Other knobs: `--robot.role`,
 `--robot.{side}_gripper_open_rad` (fallback only — see below), `--robot.tactile_fps`,
-`--robot.wrist_camera_{width,height,fps}`,
+`--robot.wrist_camera_{width,height,fps}`, `--robot.wrist_undistort`,
 `--robot.expected_tactiles_per_side`, `--robot.enable_tactile`.
+
+**Wrist fisheye undistortion.** `--robot.wrist_undistort=true` (off by default)
+rectifies both wrist streams **before the frames are recorded**, with
+`--robot.wrist_undistort_balance` (0..1, default 0) trading field of view against
+black border. The flag is **shared by both arms** like the other
+`wrist_camera_*` settings, but the intrinsics are **per unit**: each gripper is
+asked for its own, so one arm can rectify from its flash while the other falls
+back to the SDK's reference values — and `meta/hardware.json` records which,
+per unit. Only 640x480 is accepted, checked at CLI-parse time. Everything else
+about it — what the reference fallback costs, and why an off-centre picture does
+not mean the calibration is wrong — is in the
+[single-arm README](../taccap_gripper/README.md#wrist-fisheye-undistortion-robotwrist_undistort-off-by-default);
+the behaviour is identical per arm.
 
 **Jaw normalisation.** `{side}_gripper.pos` comes from each leader's own encoder-max
 calibration in MCU flash (firmware ≥ V2.1), so 1.0 is _that_ unit's real full-open rather
