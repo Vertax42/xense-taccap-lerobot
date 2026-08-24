@@ -74,7 +74,7 @@ manifest quietly misattributed every episode recorded after the swap. Only a
 `robot_type` mismatch is still keep-and-warn — single vs bimanual changes the
 observation keys, so it is not the same dataset and epochs do not model it.
 A pre-epoch file reads back as one open epoch (`manifest_epochs`), but an open
-single epoch means *"nothing here says the rig changed"*, **not** *"it didn't"*.
+single epoch means _"nothing here says the rig changed"_, **not** _"it didn't"_.
 
 Each tactile sensor's **runtime bundle** goes in beside it, at
 `meta/runtimes/<serial>-<local time>.bin` (`RUNTIME_DIR`), with the epoch's
