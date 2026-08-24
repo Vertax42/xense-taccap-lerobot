@@ -660,11 +660,12 @@ Three things worth knowing before turning it on:
   calibration tool's default), 1 shortens it to 0.70x for the widest view. Only
   fx/fy move, so the view does not drift as the knob turns.
 
-Note this is *not* the SDK's own `Config::undistort_wrist`. That one only applies
+Note this is _not_ the SDK's own `Config::undistort_wrist`. That one only applies
 when the SDK owns the wrist UVC device, which it never does here — the cameras
 come from the LeRobot camera framework. `resolve_fisheye()` exists precisely for
 callers in that position, so both paths make the same read-and-fall-back
 decision instead of drifting apart.
+
 - **Head** → obs keys `left_head` / `right_head`, off by default;
   `--robot.enable_head_camera=true` streams the Pico headset's stereo camera as **one key
   per eye**. `--robot.head_camera_width/_height` accept `640x480` (default), `1024x768` or
