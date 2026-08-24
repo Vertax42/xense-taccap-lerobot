@@ -349,7 +349,7 @@ python third_party/taccap-gripper/python/examples/fisheye_cal.py show --sn TCGU0
 ```
 
 ```
-Firmware 1.2.1  (fisheye needs cmd set >= V2.0, encoder-max >= V2.1: leader >= 1.2.0 / follower >= 1.1.0)
+Firmware 1.2.2  (fisheye needs cmd set >= V2.0, encoder-max >= V2.1: leader >= 1.2.0 / follower >= 1.1.0)
 
 Fisheye camera calibration (Cmd 0x2B)
   not calibrated — firmware returned CalNotSet
@@ -382,7 +382,7 @@ constructor would throw instead.
 
 `Cmd::GetVersion` returns the constant compiled into the running image, not OTA
 bank metadata, so it is proof of what actually landed. Two things it is not:
-`xense.taccap.__version__` is the **SDK** version (`0.1.7`), unrelated to
+`xense.taccap.__version__` is the **SDK** version (`0.1.9`), unrelated to
 firmware; and `ack.data[3]`, the fourth "build" byte, is pinned to 0 and
 meaningless — versions are `MAJOR.MINOR.PATCH` everywhere, so do not write the
 trailing zero into a version comparison.
@@ -448,7 +448,7 @@ python -c "from xense.taccap import scan_grippers
 for g in scan_grippers(): print(g.firmware_sn, '->', 'leader' if g.firmware_sn.endswith('m') else 'follower')"
 
 python third_party/taccap-gripper/python/examples/ota_update.py \
-    tc-gu-01-master.bin --side left --target-version 1.2.1
+    tc-gu-01-master.bin --side left --target-version 1.2.2
 ```
 
 Naming the image is enough — `ota_update.py` finds it in the SDK's own
