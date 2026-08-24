@@ -54,7 +54,12 @@ from lerobot.datasets.utils import (
     write_tasks,
 )
 from lerobot.datasets.video_utils import encode_video_frames, get_video_info
-from lerobot.utils.constants import HF_LEROBOT_HOME, OBS_IMAGE
+from lerobot.utils.constants import (
+    HF_LEROBOT_HOME,
+    OBS_IMAGE,
+    TACCAP_HARDWARE_MANIFEST_PATH,
+    TACCAP_RUNTIME_DIR,
+)
 
 TACCAP_6_CAMERA_FEATURE_KEYS = frozenset(
     {
@@ -152,6 +157,7 @@ def delete_episodes(
 
     _copy_and_reindex_episodes_metadata(dataset, new_meta, episode_mapping, data_metadata, video_metadata)
 
+    _copy_taccap_local_metadata(dataset.meta.root, output_dir)
     new_dataset = LeRobotDataset(
         repo_id=repo_id,
         root=output_dir,
@@ -240,6 +246,7 @@ def split_dataset(
 
         _copy_and_reindex_episodes_metadata(dataset, new_meta, episode_mapping, data_metadata, video_metadata)
 
+        _copy_taccap_local_metadata(dataset.meta.root, split_output_dir)
         new_dataset = LeRobotDataset(
             repo_id=split_repo_id,
             root=split_output_dir,
@@ -269,6 +276,8 @@ def merge_datasets(
     """
     if not datasets:
         raise ValueError("No datasets to merge")
+
+    _reject_merge_of_taccap_hardware_metadata(datasets)
 
     output_dir = Path(output_dir) if output_dir is not None else HF_LEROBOT_HOME / output_repo_id
 
@@ -386,6 +395,7 @@ def modify_features(
     if new_meta.video_keys:
         _copy_videos(dataset, new_meta, exclude_keys=video_keys_to_remove if video_keys_to_remove else None)
 
+    _copy_taccap_local_metadata(dataset.meta.root, output_dir)
     new_dataset = LeRobotDataset(
         repo_id=repo_id,
         root=output_dir,
@@ -579,6 +589,7 @@ def convert_8_to_6_cameras(
         vector_keep_indices=vector_keep_indices,
     )
     _update_stats_after_camera_conversion(dataset, new_meta, vector_keep_indices)
+    _copy_taccap_local_metadata(dataset.meta.root, output_dir)
 
     return LeRobotDataset(
         repo_id=repo_id,
@@ -587,6 +598,78 @@ def convert_8_to_6_cameras(
         delta_timestamps=dataset.delta_timestamps,
         tolerance_s=dataset.tolerance_s,
     )
+
+
+def _reject_merge_of_taccap_hardware_metadata(datasets: list[LeRobotDataset]) -> None:
+    """Refuse to merge datasets that carry a TacCap hardware manifest.
+
+    The other dataset operations derive one output from one input, so their
+    manifest carries over unchanged. Merging cannot: each input names its own
+    grippers and tactile serials for the same `observation_key`, and the merged
+    episodes interleave them. There is no single manifest that describes the
+    result.
+
+    Silently dropping it would be the worst outcome. The merged dataset would look
+    complete, and deriving tactile depth / force from it later would pick whatever
+    sensor happened to be guessed — which does not fail loudly, it reports
+    plausible values from the wrong calibration. Erroring costs the caller one
+    decision; the alternative costs data nobody can tell is wrong.
+
+    Merging these properly means expressing the result as an epoch sequence
+    (`epochs` in the manifest, one per input, remapped onto the merged episode
+    indices). That is a real feature, not a copy step, so it is left undone rather
+    than approximated.
+    """
+    with_manifest = [ds.repo_id for ds in datasets if (Path(ds.root) / TACCAP_HARDWARE_MANIFEST_PATH).is_file()]
+    if not with_manifest:
+        return
+    raise NotImplementedError(
+        f"Cannot merge datasets that carry {TACCAP_HARDWARE_MANIFEST_PATH}: {with_manifest}. "
+        "Each input maps the same observation keys to different physical sensors, and the merged "
+        "episodes interleave them, so no single manifest describes the result. Deriving tactile "
+        "channels against the wrong sensor's calibration does not fail loudly. Merge the datasets "
+        "manually, or extend the manifest to an epoch sequence covering the merged episode ranges."
+    )
+
+
+def _copy_taccap_local_metadata(src_root: Path, dst_root: Path) -> None:
+    """Carry TacCap's fork-local metadata into a derived dataset.
+
+    `LeRobotDatasetMetadata.create` builds a fresh standard metadata set
+    (`info.json`, `tasks.parquet`, `stats.json`, `episodes/*`), and the copy
+    helpers above move only data, videos and episode metadata. Anything this fork
+    adds under `meta/` is therefore dropped unless copied here.
+
+    Two things live there and both matter:
+
+    * `meta/hardware.json` maps each tactile `observation_key` to the **physical
+      sensor serial** that produced it.
+    * `meta/runtimes/*.bin` holds those sensors' calibration bundles.
+
+    Losing them is not a cosmetic regression. Deriving depth / force / difference
+    from a tactile stream needs that sensor's own calibration, and solving a
+    stream against **another** unit's bundle does not fail loudly — measured on
+    untouched gels it inflates `Depth` by ~800x and `ForceResultant` by ~1000x
+    while reporting no error at all. A converted dataset that lost its manifest
+    cannot be reconstructed from the dataset alone; the mapping only exists in
+    whatever record the capture side kept.
+
+    Copies verbatim. The 8-to-6 conversion only removes headset cameras, and the
+    manifest names no cameras — only grippers and tactile sensors — so there is
+    nothing in it to prune.
+    """
+    src_root, dst_root = Path(src_root), Path(dst_root)
+    for relative in (TACCAP_HARDWARE_MANIFEST_PATH, TACCAP_RUNTIME_DIR):
+        src = src_root / relative
+        if not src.exists():
+            continue
+        dst = dst_root / relative
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if src.is_dir():
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+        else:
+            shutil.copy2(src, dst)
+        logging.info(f"Carried {relative} into {dst_root}")
 
 
 def _copy_data_with_feature_changes_and_vector_indices(
@@ -2007,6 +2090,8 @@ def convert_image_to_video_dataset(
 
     logging.info(f"Completed converting {dataset.repo_id} to video format")
     logging.info(f"New dataset saved to: {output_dir}")
+
+    _copy_taccap_local_metadata(dataset.meta.root, output_dir)
 
     # Return new dataset
     return LeRobotDataset(repo_id=repo_id, root=output_dir)
