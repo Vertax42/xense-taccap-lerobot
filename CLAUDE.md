@@ -165,6 +165,35 @@ The same trap has now appeared twice: once in the video concatenation path, and
 once in a proposed `_atomic_write_parquet` that would have moved data parquet
 from `0644` to `0600` (reviewed on PR #19).
 
+### Host gotcha — `import xense.taccap` must precede torchvision
+
+torchvision ships a vendored `libjpeg` that claims the `LIBJPEG_8.0` symbol
+version but carries **none** of the `jpeg12_*` symbols conda's `libtiff` needs.
+Whichever loads first wins the version slot, so once torchvision is in, every
+later `import xense.taccap` — which reaches libtiff via
+`libopencv_videoio` → `libopencv_imgcodecs` → `libtiff` — dies with:
+
+```text
+ImportError: .../libtiff.so.6: undefined symbol: jpeg12_write_raw_data, version LIBJPEG_8.0
+```
+
+`lerobot_record.py`, `lerobot_replay.py` and `lerobot_teleoperate.py` each carry
+a `contextlib.suppress(ImportError)` import of `xense.taccap` **above every
+lerobot import** for exactly this. Moving it below them puts the bug back.
+
+Only those three need it: they are the entry points that both pull torchvision
+(through `lerobot.datasets`) and touch the SDK. `lerobot-calibrate` never loads
+torchvision at all, so it is fine as-is — verify before adding the block
+elsewhere rather than sprinkling it.
+
+The failure is nasty out of proportion to its cause: nothing fails at startup,
+because the SDK import is what breaks and the robots only reach for it later. On
+the sister repo `lerobot-xense`, whose `XenseWristCamera` imports
+`FisheyeUndistorter` lazily inside `connect()`, the same conflict surfaced as a
+recording dying at camera-connect time. `LD_PRELOAD` does not help — torchvision's
+copy is auditwheel-renamed (`libjpeg.4af9affd.so.8`), so it is not competing on
+soname but on the symbol version, and preloading cannot outrank it.
+
 ## Vendored SDK
 
 `third_party/taccap-gripper` is the TacCap-Gripper SDK submodule (has its own
