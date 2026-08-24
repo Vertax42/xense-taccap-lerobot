@@ -15,6 +15,8 @@
 # limitations under the License.
 """Tests for dataset tools utilities."""
 
+import json
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -32,6 +34,7 @@ from lerobot.datasets.dataset_tools import (
     split_dataset,
 )
 from lerobot.scripts.lerobot_edit_dataset import convert_image_to_video_dataset
+from lerobot.utils.constants import TACCAP_HARDWARE_MANIFEST_PATH, TACCAP_RUNTIME_DIR
 
 
 def _taccap_8_camera_features() -> dict:
@@ -670,6 +673,61 @@ def test_convert_8_to_6_cameras(empty_lerobot_dataset_factory, tmp_path):
     assert converted.meta.stats["observation.state"]["mean"].shape == (20,)
     assert not any("left_head" in key or "right_head" in key for key in converted.meta.episodes.features)
     assert converted.meta.total_episodes == 2
+
+
+def test_convert_8_to_6_cameras_keeps_the_taccap_hardware_metadata(empty_lerobot_dataset_factory, tmp_path):
+    """End-to-end: the sensor manifest and runtime bundles survive a real conversion.
+
+    Checked here rather than only on the copy helper because the loss was never in
+    the helper — it was that no one called it. `LeRobotDatasetMetadata.create`
+    builds a fresh standard metadata set, so this fork's `meta/` additions vanish
+    unless the conversion carries them, and nothing about the converted dataset
+    looks wrong afterwards. Re-deriving tactile depth/force against another unit's
+    calibration reports plausible values instead of failing.
+    """
+    features = _taccap_8_camera_features()
+    all_camera_keys = [key for key, ft in features.items() if ft["dtype"] == "image"]
+
+    dataset = empty_lerobot_dataset_factory(root=tmp_path / "source_8cam", features=features, use_videos=False)
+    for ep_idx in range(2):
+        for _ in range(3):
+            state = np.arange(features["action"]["shape"][0], dtype=np.float32) + ep_idx * 10
+            dataset.add_frame(
+                {
+                    "action": state + 0.5,
+                    "observation.state": state,
+                    "task": "pick",
+                    **{k: np.zeros((4, 6, 3), dtype=np.uint8) for k in all_camera_keys},
+                }
+            )
+        dataset.save_episode()
+    dataset.finalize()
+
+    manifest = json.dumps(
+        {
+            "robot_type": "bi_taccap_gripper",
+            "units": [
+                {
+                    "side": "left",
+                    "gripper_sn": "TCGU01A28Z0033m",
+                    "tactile_sensors": [{"observation_key": "left_tactile_left", "serial": "GSPS01A29Z0017"}],
+                }
+            ],
+        }
+    )
+    (dataset.meta.root / TACCAP_HARDWARE_MANIFEST_PATH).write_text(manifest)
+    bundle = dataset.meta.root / TACCAP_RUNTIME_DIR / "GSPS01A29Z0017-20260824T101500.bin"
+    bundle.parent.mkdir(parents=True, exist_ok=True)
+    bundle.write_bytes(b"encrypted-runtime-bundle")
+
+    converted = convert_8_to_6_cameras(dataset, output_dir=tmp_path / "converted_6cam", repo_id="test/6cam_hw")
+
+    out = Path(converted.meta.root)
+    assert (out / TACCAP_HARDWARE_MANIFEST_PATH).read_text() == manifest
+    assert (out / TACCAP_RUNTIME_DIR / bundle.name).read_bytes() == b"encrypted-runtime-bundle"
+    # The manifest names sensors, not cameras — a head-camera removal must not
+    # rewrite it, so it has to come through byte-identical.
+    assert "GSPS01A29Z0017" in (out / TACCAP_HARDWARE_MANIFEST_PATH).read_text()
     assert converted.meta.total_frames == 6
 
 
