@@ -62,8 +62,30 @@ after `connect()` from `robot.hardware_manifest`: per unit, the gripper's
 tagged with `side` (which gripper), `finger` (which sensor on it) and the
 `observation_key` it feeds. Keep it a separate file — `meta/info.json` is
 upstream's schema and a fork-local key there collides on the next v5.x sync.
-Helpers live in `taccap_gripper/common.py`; a resume against different hardware
-warns and keeps the original file rather than misattributing recorded episodes.
+Helpers live in `taccap_gripper/common.py`.
+
+The file is a list of **`epochs`**, not one flat `units`: each carries
+`from_episode` / `to_episode` (half-open, matching `dataset_from_index` /
+`dataset_to_index`) and `recorded_at`, so a rig swapped **mid-dataset** closes
+the open epoch at the current episode count and opens the next one. It used to
+warn and keep the original file; that warning went to the log and never reached
+the dataset, so afterwards nothing on disk said the rig had changed while the
+manifest quietly misattributed every episode recorded after the swap. Only a
+`robot_type` mismatch is still keep-and-warn — single vs bimanual changes the
+observation keys, so it is not the same dataset and epochs do not model it.
+A pre-epoch file reads back as one open epoch (`manifest_epochs`), but an open
+single epoch means *"nothing here says the rig changed"*, **not** *"it didn't"*.
+
+Each tactile sensor's **runtime bundle** goes in beside it, at
+`meta/runtimes/<serial>-<local time>.bin` (`RUNTIME_DIR`), with the epoch's
+sensors pointing at their own. Deriving depth / force / difference from the
+recorded `rectify` stream needs the bundle that was current **when the episodes
+were recorded** — it carries the reference image captured at `Sensor.create()`,
+and a sensor that comes back from maintenance keeps its serial but produces a
+different bundle, which is why the name is timestamped and why a new bundle
+opens its own epoch. Solving against the wrong one does not fail: an untouched
+gel returns plausible depth and force. So `tactile_runtime_for_key` returning
+`None` means **skip derivation**, never "use whichever bundle is nearest".
 
 ### On mis-burned / mis-installed hardware
 
