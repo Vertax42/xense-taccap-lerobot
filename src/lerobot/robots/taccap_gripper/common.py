@@ -40,6 +40,7 @@ import numpy as np
 
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.cameras.xense.configuration_xense import XenseTactileCameraConfig
+from lerobot.utils.constants import TACCAP_HARDWARE_MANIFEST_PATH, TACCAP_RUNTIME_DIR
 
 # 6D rotation convention (matches ``vive_tracker``): r1..r3 is the first column
 # of the rotation matrix, r4..r6 the second. Position first, so the tuple is the
@@ -879,7 +880,7 @@ def validate_robot_id(robot_id: str | None, robot_type: str) -> str:
 
 # ------------------------------------------------------------ hardware manifest
 
-HARDWARE_MANIFEST_PATH = "meta/hardware.json"
+HARDWARE_MANIFEST_PATH = TACCAP_HARDWARE_MANIFEST_PATH
 """Where a recorded dataset keeps its TacCap hardware manifest, relative to the
 dataset root.
 
@@ -1046,7 +1047,7 @@ def epoch_for_episode(manifest: dict[str, Any], episode_index: int) -> dict[str,
     return None
 
 
-RUNTIME_DIR = "meta/runtimes"
+RUNTIME_DIR = TACCAP_RUNTIME_DIR
 """Where a dataset keeps the tactile runtime bundles its episodes need.
 
 Rebuilding depth / force / difference from the recorded ``rectify`` stream needs
