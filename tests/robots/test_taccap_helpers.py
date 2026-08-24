@@ -27,6 +27,7 @@ import pytest
 
 from lerobot.cameras.pico import SUPPORTED_MODES
 from lerobot.robots.bi_taccap_gripper.config_bi_taccap_gripper import BiTaccapGripperConfig
+from lerobot.robots.taccap_gripper.camera_health import CameraReadGuard
 from lerobot.robots.taccap_gripper.common import (
     CAPTURE_TZ,
     HARDWARE_MANIFEST_PATH,
@@ -45,6 +46,7 @@ from lerobot.robots.taccap_gripper.common import (
     manifest_epochs,
     open_gripper,
     read_head_camera_skew,
+    resolve_wrist_undistorter,
     split_camera_read,
     swap_tactile_display_features,
     tactile_camera_output_types,
@@ -52,6 +54,8 @@ from lerobot.robots.taccap_gripper.common import (
     tactile_runtime_for_key,
     tactile_serial_for_key,
     validate_robot_id,
+    validate_wrist_undistort_size,
+    wrist_undistort_record,
     write_hardware_manifest,
 )
 from lerobot.robots.taccap_gripper.config_taccap_gripper import TaccapGripperConfig
@@ -1282,3 +1286,227 @@ class TestOpenGripper:
         assert source == "config"
         assert gripper.normalize_position is False
         assert any("gripper_open_rad=1.7" in m for m in logger.infos)
+
+
+# --------------------------------------------------------- wrist fisheye undistort
+
+
+class FakeCalibration:
+    """``gripper.calibration``, whose ``resolve_fisheye`` the SDK implements by
+    reading flash. Returns the SDK's own tuple shape."""
+
+    def __init__(self, cal, is_reference, reason):
+        self._answer = (cal, is_reference, reason)
+        self.calls = 0
+
+    def resolve_fisheye(self, *args, **kwargs):
+        self.calls += 1
+        return self._answer
+
+
+class FakeUndistortGripper:
+    def __init__(self, calibration):
+        self.calibration = calibration
+
+
+class FakeUndistorter:
+    """Stand-in for the SDK's ``FisheyeUndistorter``, recording what it was
+    handed. The focal-length maths behind ``balance`` belongs to the SDK and is
+    tested there; what matters here is which calibration and size reach it."""
+
+    def __init__(self, calibration, width, height, balance):
+        self.calibration = calibration
+        self.width = width
+        self.height = height
+        self.balance = balance
+        self.focal_scale = 1.0
+
+
+UNIT_CAL = object()  # this gripper's own, read from flash
+REFERENCE_CAL = object()  # the SDK's FISHEYE_FALLBACK_CAL
+
+
+def _resolve(gripper, **kwargs):
+    kwargs.setdefault("balance", 0.0)
+    kwargs.setdefault("logger", FakeLogger())
+    return resolve_wrist_undistorter(gripper, undistorter_cls=FakeUndistorter, fallback_cal=REFERENCE_CAL, **kwargs)
+
+
+class TestResolveWristUndistorter:
+    """Which intrinsics a recording rectified with is not visible in the frames,
+    so the source this reports is what the manifest — and any later audit — has
+    to go on."""
+
+    def test_this_units_own_calibration_is_used_without_warning(self):
+        cal = FakeCalibration(UNIT_CAL, False, "")
+        logger = FakeLogger()
+        undistorter, source = _resolve(FakeUndistortGripper(cal), logger=logger)
+        assert source == "unit"
+        assert cal.calls == 1
+        assert undistorter.calibration is UNIT_CAL
+        assert logger.warnings == []
+        # The firmware record carries no image size, so this is the only one the
+        # intrinsics describe — see validate_wrist_undistort_size.
+        assert (undistorter.width, undistorter.height) == (640, 480)
+
+    def test_reference_fallback_warns_and_says_why(self):
+        """The fallback is deliberately not an error, so the warning is the only
+        thing standing between an approximate rectification and a whole dataset
+        recorded without anyone noticing."""
+        logger = FakeLogger()
+        undistorter, source = _resolve(
+            FakeUndistortGripper(FakeCalibration(REFERENCE_CAL, True, "the wrist lens has never been calibrated")),
+            logger=logger,
+        )
+        assert source == "reference"
+        assert undistorter.calibration is REFERENCE_CAL
+        assert len(logger.warnings) == 1
+        warning = logger.warnings[0]
+        assert "REFERENCE" in warning
+        assert "never been calibrated" in warning  # the SDK's reason is passed through
+        assert "fisheye_cal.py set-fisheye" in warning  # and how to fix it
+
+    def test_no_gripper_means_no_calibration_to_read(self):
+        """``--robot.enable_gripper=false`` leaves no MCU to ask. That is the
+        reference case too, but for a reason the SDK never sees, so we supply it."""
+        logger = FakeLogger()
+        undistorter, source = _resolve(None, logger=logger)
+        assert source == "reference"
+        assert undistorter.calibration is REFERENCE_CAL
+        assert "enable_gripper" in logger.warnings[0]
+
+    def test_balance_reaches_the_undistorter(self):
+        undistorter, _ = _resolve(FakeUndistortGripper(FakeCalibration(UNIT_CAL, False, "")), balance=1.0)
+        assert undistorter.balance == pytest.approx(1.0)
+
+
+class TestValidateWristUndistortSize:
+    def test_the_calibrated_size_passes(self):
+        validate_wrist_undistort_size(640, 480)
+
+    def test_any_other_size_is_refused_at_parse_time(self):
+        """The firmware record carries no image size, so another resolution means
+        guessing a scale factor and rectifying wrongly with nothing in the frames
+        to show it."""
+        with pytest.raises(ValueError) as excinfo:
+            validate_wrist_undistort_size(1280, 960)
+        assert "640x480" in str(excinfo.value)
+        assert "1280x960" in str(excinfo.value)
+
+
+class TestWristUndistortRecord:
+    def test_no_wrist_camera_omits_the_key_entirely(self):
+        """Absent means the question does not apply, not that the answer is no."""
+        assert wrist_undistort_record(has_wrist_camera=False, source=None, balance=0.0) is None
+
+    def test_a_wrist_camera_always_records_an_answer(self):
+        """Including "we did not rectify" — absent and false would otherwise be
+        indistinguishable in a recorded dataset."""
+        assert wrist_undistort_record(has_wrist_camera=True, source=None, balance=0.0) == {"applied": False}
+
+    def test_applied_records_which_calibration_and_the_balance(self):
+        assert wrist_undistort_record(has_wrist_camera=True, source="reference", balance=0.5) == {
+            "applied": True,
+            "calibration": "reference",
+            "balance": 0.5,
+        }
+
+
+class FrozenCamera:
+    """A stream that keeps handing back the *same* object — how an unplugged
+    Xense sensor behaves, since its read thread survives the error."""
+
+    def __init__(self):
+        self.frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+    def async_read(self):
+        return self.frame
+
+
+class RectifiedFrozenCamera(FrozenCamera):
+    """The same dead stream, but with rectification applied *before* the guard
+    sees it — a fresh array every call, exactly like ``FisheyeUndistorter.apply``.
+    """
+
+    def async_read(self):
+        return self.frame.copy()
+
+
+class TestFreezeDetectionConstrainsWhereUndistortionGoes:
+    """Why ``get_observation`` rectifies *after* ``CameraReadGuard.read``.
+
+    The guard spots a dead-but-not-raising stream by frame object identity, so
+    anything that hands it a fresh array each call — rectifying upstream by
+    wrapping the camera, say — makes a frozen wrist camera undetectable and the
+    recording silently keeps writing stale frames.
+    """
+
+    def test_a_frozen_stream_is_flagged(self):
+        guard = CameraReadGuard({}, FakeLogger(), freeze_timeout_s=0.0)
+        camera = FrozenCamera()
+        guard.read("wrist_cam", camera)  # first read establishes the baseline
+        guard.read("wrist_cam", camera)
+        assert guard.lost
+
+    def test_a_fresh_array_each_call_hides_the_same_dead_stream(self):
+        """Not a feature — the hazard the ordering avoids. If this ever stops
+        holding, the comment in get_observation can go."""
+        guard = CameraReadGuard({}, FakeLogger(), freeze_timeout_s=0.0)
+        camera = RectifiedFrozenCamera()
+        for _ in range(5):
+            guard.read("wrist_cam", camera)
+        assert not guard.lost
+
+
+class TestWristUndistortOpensItsOwnEpoch:
+    """Rectified and raw frames are indistinguishable in the dataset, so a change
+    of setting part-way through has to be recorded as its own epoch."""
+
+    def _manifest(self, **wrist):
+        return build_hardware_manifest(
+            robot_type="taccap_gripper",
+            robot_id="taccap_0",
+            role="leader",
+            units=[
+                hardware_manifest_unit(
+                    "left",
+                    endpoints=FakeEndpoints("TCGU01A24Z0001m"),
+                    tactile_serials={"left": "GSPS01A25Z0011"},
+                    key_prefix="",
+                    wrist_undistort=wrist_undistort_record(**wrist),
+                )
+            ],
+        )
+
+    def test_turning_it_on_mid_dataset_closes_the_old_epoch(self, tmp_path):
+        off = self._manifest(has_wrist_camera=True, source=None, balance=0.0)
+        on = self._manifest(has_wrist_camera=True, source="unit", balance=0.0)
+
+        write_hardware_manifest(tmp_path, off, FakeLogger())
+        path = write_hardware_manifest(tmp_path, on, FakeLogger(), episode_index=7)
+
+        epochs = json.loads(path.read_text())["epochs"]
+        assert len(epochs) == 2
+        assert epochs[0]["to_episode"] == 7
+        assert epochs[0]["units"][0]["wrist_undistort"]["applied"] is False
+        assert epochs[1]["units"][0]["wrist_undistort"]["applied"] is True
+
+    def test_changing_only_the_balance_also_opens_one(self, tmp_path):
+        """It changes the geometry of every recorded frame, so it is a different
+        configuration even though the hardware is identical."""
+        write_hardware_manifest(
+            tmp_path, self._manifest(has_wrist_camera=True, source="unit", balance=0.0), FakeLogger()
+        )
+        path = write_hardware_manifest(
+            tmp_path,
+            self._manifest(has_wrist_camera=True, source="unit", balance=1.0),
+            FakeLogger(),
+            episode_index=4,
+        )
+        assert len(json.loads(path.read_text())["epochs"]) == 2
+
+    def test_an_unchanged_setting_does_not(self, tmp_path):
+        same = self._manifest(has_wrist_camera=True, source="unit", balance=0.0)
+        write_hardware_manifest(tmp_path, same, FakeLogger())
+        path = write_hardware_manifest(tmp_path, same, FakeLogger(), episode_index=9)
+        assert len(json.loads(path.read_text())["epochs"]) == 1

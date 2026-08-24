@@ -70,9 +70,11 @@ from ..taccap_gripper.common import (
     open_gripper,
     prewarm_tactile_config_cache,
     read_head_pose,
+    resolve_wrist_undistorter,
     split_camera_read,
     swap_tactile_display_features,
     tactile_camera_output_types,
+    wrist_undistort_record,
 )
 from ..taccap_gripper.ee_transform import resolve_tracker_to_ee
 from .config_bi_taccap_gripper import BiTaccapGripperConfig
@@ -82,6 +84,8 @@ _SIDES = ("left", "right")
 # ---- TacCap-Gripper SDK -----------------------------------------------------
 try:
     from xense.taccap import (
+        FISHEYE_FALLBACK_CAL,
+        FisheyeUndistorter,
         FollowerGripper,
         LeaderGripper,
     )
@@ -139,6 +143,11 @@ class BiTaccapGripper(Robot):
         # Per-side hardware handles, populated on connect.
         self._gripper: dict[str, Any] = dict.fromkeys(_SIDES)  # Leader/FollowerGripper
         self._endpoints: dict[str, Any] = dict.fromkeys(_SIDES)  # GripperEndpoints
+        # {observation key: FisheyeUndistorter}, empty unless wrist_undistort is
+        # on. The flag is shared by both arms but the intrinsics are per unit, so
+        # one arm can rectify from its own flash while the other falls back.
+        self._wrist_undistorters: dict[str, Any] = {}
+        self._wrist_undistort_source: dict[str, str | None] = dict.fromkeys(_SIDES)
         self._tracker: dict[str, Pico4TrackerReader | None] = dict.fromkeys(_SIDES)
         # Auto-discover tactile + wrist cameras and build their configs so the
         # observation schema is ready before connect(). Tactiles are paired to a
@@ -281,6 +290,11 @@ class BiTaccapGripper(Robot):
                     endpoints=self._endpoints[side],
                     tactile_serials=self._disc_tactiles.get(side, {}),
                     key_prefix=f"{side}_",
+                    wrist_undistort=wrist_undistort_record(
+                        has_wrist_camera=f"{side}_wrist" in self._camera_configs,
+                        source=self._wrist_undistort_source[side],
+                        balance=self.config.wrist_undistort_balance,
+                    ),
                 )
                 for side in _SIDES
             ],
@@ -448,6 +462,22 @@ class BiTaccapGripper(Robot):
                 )
                 self.logger.info(f"  [{side}] ✅ {gripper_cls.__name__} attached (MCU-only, read-only)")
 
+            if self.config.wrist_undistort and f"{side}_wrist" in self._camera_configs:
+                # Per arm: each gripper is asked for its own intrinsics, so one
+                # side falling back to the SDK reference does not drag the other
+                # onto it. Built before the cameras open so an uncalibrated unit
+                # warns during connect, not mid-recording.
+                undistorter, source = resolve_wrist_undistorter(
+                    self._gripper[side],
+                    undistorter_cls=FisheyeUndistorter,
+                    fallback_cal=FISHEYE_FALLBACK_CAL,
+                    balance=self.config.wrist_undistort_balance,
+                    logger=self.logger,
+                    label=f"[{side}] ",
+                )
+                self._wrist_undistorters[f"{side}_wrist"] = undistorter
+                self._wrist_undistort_source[side] = source
+
             # 2. Pico4 tracker (auto-discovered SN per side, pinned here).
             if side in self._tracker_sn_by_side:
                 # None means "use this side's built-in mount transform"; the
@@ -518,7 +548,9 @@ class BiTaccapGripper(Robot):
                 # Gripper has no explicit close; transport released on GC.
                 self._gripper[side] = None
             self._endpoints[side] = None
+            self._wrist_undistort_source[side] = None
 
+        self._wrist_undistorters = {}
         self._is_connected = False
 
     def calibrate(self) -> None:
@@ -568,10 +600,17 @@ class BiTaccapGripper(Robot):
         # cameras, and the pose comes from the SDK above, not from a frame.
         # Insight bundled the two, which is why this used to be read apart.
         for cam_name, cam in self.cameras.items():
+            frame = self._cam_guard.read(cam_name, cam)
+            # After the guard, not before — see the single-arm robot for why
+            # (the guard spots a frozen stream by frame identity, and apply()
+            # returns a fresh array every call).
+            undistorter = self._wrist_undistorters.get(cam_name)
+            if undistorter is not None:
+                frame = undistorter.apply(frame)
             obs.update(
                 split_camera_read(
                     cam_name,
-                    self._cam_guard.read(cam_name, cam),
+                    frame,
                     self._tactile_display_keys.get(cam_name),
                 )
             )

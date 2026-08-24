@@ -71,9 +71,11 @@ from .common import (
     open_gripper,
     prewarm_tactile_config_cache,
     read_head_pose,
+    resolve_wrist_undistorter,
     split_camera_read,
     swap_tactile_display_features,
     tactile_camera_output_types,
+    wrist_undistort_record,
 )
 from .config_taccap_gripper import TaccapGripperConfig
 from .ee_transform import resolve_tracker_to_ee
@@ -81,6 +83,8 @@ from .ee_transform import resolve_tracker_to_ee
 # ---- TacCap-Gripper SDK -----------------------------------------------------
 try:
     from xense.taccap import (
+        FISHEYE_FALLBACK_CAL,
+        FisheyeUndistorter,
         FollowerGripper,
         LeaderGripper,
     )
@@ -139,6 +143,13 @@ class TaccapGripper(Robot):
         self._gripper: Any = None  # Leader/FollowerGripper
         self._endpoints: Any = None  # xense.taccap.GripperEndpoints
         self._tracker: Pico4TrackerReader | None = None
+        # {observation key: FisheyeUndistorter} — empty unless wrist_undistort is
+        # on. Keyed by camera name so get_observation can look one up without
+        # knowing which key the wrist camera landed under.
+        self._wrist_undistorters: dict[str, Any] = {}
+        #: Which calibration each undistorter used ("unit" / "reference"), for
+        #: the hardware manifest.
+        self._wrist_undistort_source: str | None = None
 
         # Discover devices → resolve which side this single unit is, then build its
         # tactile + wrist camera configs. Tactiles are paired to a gripper by USB
@@ -292,6 +303,11 @@ class TaccapGripper(Robot):
                     endpoints=self._endpoints,
                     tactile_serials=self._disc_tactiles.get(self._side, {}),
                     key_prefix="",
+                    wrist_undistort=wrist_undistort_record(
+                        has_wrist_camera="wrist_cam" in self._camera_configs,
+                        source=self._wrist_undistort_source,
+                        balance=self.config.wrist_undistort_balance,
+                    ),
                 )
             ],
         )
@@ -453,6 +469,21 @@ class TaccapGripper(Robot):
             )
             self.logger.info(f"  ✅ {gripper_cls.__name__} attached (MCU-only, read-only — motor stays disabled)")
 
+        # 1b. Wrist fisheye undistortion, if asked for. Built here — after the
+        #     gripper, whose MCU holds the intrinsics, and before the cameras open
+        #     — so a unit that cannot supply a calibration warns during connect
+        #     rather than on the first frame of a recording.
+        if self.config.wrist_undistort and "wrist_cam" in self._camera_configs:
+            undistorter, source = resolve_wrist_undistorter(
+                self._gripper,
+                undistorter_cls=FisheyeUndistorter,
+                fallback_cal=FISHEYE_FALLBACK_CAL,
+                balance=self.config.wrist_undistort_balance,
+                logger=self.logger,
+            )
+            self._wrist_undistorters["wrist_cam"] = undistorter
+            self._wrist_undistort_source = source
+
         # 2. Pico4 tracker.
         if self._tracker_sn is not None:
             # None means "use this side's built-in mount transform"; anything
@@ -520,6 +551,8 @@ class TaccapGripper(Robot):
             self._gripper = None
 
         self._endpoints = None
+        self._wrist_undistorters = {}
+        self._wrist_undistort_source = None
         self._is_connected = False
 
     def calibrate(self) -> None:
@@ -574,10 +607,20 @@ class TaccapGripper(Robot):
         # The head cameras need no special case here — they are ordinary
         # cameras, and the pose comes from the SDK above, not from a frame.
         for cam_name, cam in self.cameras.items():
+            frame = self._cam_guard.read(cam_name, cam)
+            # Rectify *after* the guard, deliberately. The guard detects a frozen
+            # stream by frame object identity (camera_health.CameraReadGuard.read),
+            # and FisheyeUndistorter.apply() returns a fresh array every call — so
+            # rectifying upstream of it (by wrapping the camera, say) would make a
+            # frozen wrist camera undetectable. The guard's fallback frame is the
+            # last good *raw* one, which rectifies here like any other.
+            undistorter = self._wrist_undistorters.get(cam_name)
+            if undistorter is not None:
+                frame = undistorter.apply(frame)
             obs.update(
                 split_camera_read(
                     cam_name,
-                    self._cam_guard.read(cam_name, cam),
+                    frame,
                     self._tactile_display_keys.get(cam_name),
                 )
             )

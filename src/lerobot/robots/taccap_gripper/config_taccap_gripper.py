@@ -34,7 +34,7 @@ Unity-app launch time.
 from dataclasses import dataclass, field
 
 from ..config import RobotConfig
-from .common import build_head_camera_configs, validate_robot_id
+from .common import build_head_camera_configs, validate_robot_id, validate_wrist_undistort_size
 
 
 @RobotConfig.register_subclass("taccap_gripper")
@@ -186,6 +186,29 @@ class TaccapGripperConfig(RobotConfig):
     wrist_camera_height: int = 480
     wrist_camera_fps: int = 30
 
+    wrist_undistort: bool = False
+    """Rectify the wrist fisheye before the frame is recorded.
+
+    **Off by default, and turning it on changes what lands in the dataset**: a
+    rectified ``wrist_cam`` and a raw fisheye one have identical shape and dtype,
+    so the two are not interchangeable and nothing downstream can tell them
+    apart. Which of the two a recording used is written into
+    ``meta/hardware.json`` for exactly that reason.
+
+    The intrinsics come from this gripper's flash (``Cmd 0x2B``, command set
+    V2.0+) via the SDK's ``resolve_fisheye()``. A unit that has never been
+    calibrated does not fail — the SDK's shared reference intrinsics stand in and
+    connect() warns, since every unit carries the same lens and reference numbers
+    beat raw fisheye. They are approximate: lens placement varies per assembly so
+    the principal point drifts, and anything measuring in pixels off these frames
+    wants a real calibration (``fisheye_cal.py set-fisheye``)."""
+
+    wrist_undistort_balance: float = 0.0
+    """Output focal length, ``0`` = the calibrated value (also the PC calibration
+    tool's default), ``1`` = 0.70x for the widest field of view at the cost of
+    more black border. Only fx/fy move; the principal point stays put so the view
+    does not drift as the knob turns. Clamped to [0, 1] by the SDK."""
+
     wrist_camera_fourcc: str | None = "MJPG"
     """Pixel format to negotiate with the wrist camera. Defaults to MJPEG
     because the alternative OpenCV would pick on its own (YUYV) reserves enough
@@ -244,6 +267,13 @@ class TaccapGripperConfig(RobotConfig):
             # Delegate to the camera config so there is one definition of what
             # a valid mode is, rather than a copy here that can drift from it.
             build_head_camera_configs(self)
+
+        if self.wrist_undistort:
+            if not self.enable_wrist_camera:
+                raise ValueError(
+                    "wrist_undistort=True but enable_wrist_camera=False — there is no wrist stream to rectify."
+                )
+            validate_wrist_undistort_size(self.wrist_camera_width, self.wrist_camera_height)
 
         if self.role.strip().lower() not in ("leader", "master", "follower", "slave"):
             # master/slave are legacy spellings kept for compatibility; see
