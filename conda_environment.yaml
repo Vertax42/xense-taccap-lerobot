@@ -52,11 +52,11 @@ dependencies:
   # PyAV/torchcodec are installed from wheels later in setup_env.sh; ffmpeg is
   # kept out of the conda solve to avoid ICU/libxml2 conflicts.
   # ── Python base tools ─────────────────────────────────────────────────────
-  - numpy>=1.26.4 # xensesdk==2.1.1 is installed by setup_env.sh with --no-deps; keep numpy <2.3.0 compatible
+  - numpy>=1.26.4 # xensesdk==2.1.2 is installed by setup_env.sh with --no-deps; keep numpy <2.3.0 compatible
   - pip
   - wheel
   - pip:
       - uv
-      # xensesdk==2.1.1 is installed by ./setup_env.sh --install with --no-deps.
+      # xensesdk==2.1.2 is installed by ./setup_env.sh --install with --no-deps.
       - pyrealsense2
       - matplotlib
