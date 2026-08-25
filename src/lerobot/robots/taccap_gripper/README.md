@@ -608,7 +608,7 @@ at connect). Leave it unset (default) to keep auto-discovery.
     same thing.)
 
   Set the display type to something else and it becomes a second output on the same
-  read, published as `tactile_{left,right}_<type>` and fed to Rerun *instead of* the
+  read, published as `tactile_{left,right}_<type>` and fed to Rerun _instead of_ the
   recorded stream (`display_features`), so the tile count never changes. The one worth
   knowing is `'["difference"]'` (SDK `OutputType.AugDifference`), which amplifies
   deformation against the rest baseline. That **used to be the default**: on the gel

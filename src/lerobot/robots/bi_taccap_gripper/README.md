@@ -17,17 +17,17 @@ the single [`taccap_gripper`](../taccap_gripper/README.md).
 
 Per side `{s}` ∈ {left, right}:
 
-| Key                                      | When                           | Meaning                                                                                   |
-| ---------------------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------- |
-| `{s}_tcp.x/y/z`, `{s}_tcp.r1..r6`        | `{s}_enable_tracker`           | Pico4 → EE 6D pose                                                                        |
-| `{s}_gripper.pos`                        | `{s}_enable_gripper`           | normalised jaw, 0=closed / 1=open                                                         |
-| `{s}_imu.{accel,gyro,mag}.{x,y,z}`       | `{s}_enable_imu`               | IMU                                                                                       |
-| `{s}_wrist`                              | `{s}_enable_wrist_camera`      | wrist UVC frame                                                                           |
-| `{s}_tactile_left` / `{s}_tactile_right` | auto-discovered                | **recorded** tactile frame from the left / right finger sensor (`rectify`)                |
+| Key                                      | When                                            | Meaning                                                                                                    |
+| ---------------------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `{s}_tcp.x/y/z`, `{s}_tcp.r1..r6`        | `{s}_enable_tracker`                            | Pico4 → EE 6D pose                                                                                         |
+| `{s}_gripper.pos`                        | `{s}_enable_gripper`                            | normalised jaw, 0=closed / 1=open                                                                          |
+| `{s}_imu.{accel,gyro,mag}.{x,y,z}`       | `{s}_enable_imu`                                | IMU                                                                                                        |
+| `{s}_wrist`                              | `{s}_enable_wrist_camera`                       | wrist UVC frame                                                                                            |
+| `{s}_tactile_left` / `{s}_tactile_right` | auto-discovered                                 | **recorded** tactile frame from the left / right finger sensor (`rectify`)                                 |
 | `{s}_tactile_{left,right}_difference`    | `tactile_display_output_types='["difference"]'` | **display-only** amplified-deformation view of the same read — Rerun only, never recorded (off by default) |
-| `left_head` / `right_head`               | `enable_head_camera`           | headset camera, one key per **eye** (not per arm) — `head_camera_eyes` can select one     |
-| `head_camera.x/y/z`                      | `enable_head_camera`           | headset position, same world frame as `{s}_tcp.*`                                         |
-| `head_camera.r1..r6`                     | `enable_head_camera`           | headset orientation as the first two rotation-matrix columns                              |
+| `left_head` / `right_head`               | `enable_head_camera`                            | headset camera, one key per **eye** (not per arm) — `head_camera_eyes` can select one                      |
+| `head_camera.x/y/z`                      | `enable_head_camera`                            | headset position, same world frame as `{s}_tcp.*`                                                          |
+| `head_camera.r1..r6`                     | `enable_head_camera`                            | headset orientation as the first two rotation-matrix columns                                               |
 
 `action_features` = the per-side gripper pose + `{s}_gripper.pos` subset; the head
 camera pose and all images remain observation-only. With both Pico4 trackers, both
