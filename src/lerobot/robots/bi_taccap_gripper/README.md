@@ -24,7 +24,7 @@ Per side `{s}` ∈ {left, right}:
 | `{s}_imu.{accel,gyro,mag}.{x,y,z}`       | `{s}_enable_imu`               | IMU                                                                                       |
 | `{s}_wrist`                              | `{s}_enable_wrist_camera`      | wrist UVC frame                                                                           |
 | `{s}_tactile_left` / `{s}_tactile_right` | auto-discovered                | **recorded** tactile frame from the left / right finger sensor (`rectify`)                |
-| `{s}_tactile_{left,right}_difference`    | `tactile_display_output_types` | **display-only** amplified-deformation view of the same read — Rerun only, never recorded |
+| `{s}_tactile_{left,right}_difference`    | `tactile_display_output_types='["difference"]'` | **display-only** amplified-deformation view of the same read — Rerun only, never recorded (off by default) |
 | `left_head` / `right_head`               | `enable_head_camera`           | headset camera, one key per **eye** (not per arm) — `head_camera_eyes` can select one     |
 | `head_camera.x/y/z`                      | `enable_head_camera`           | headset position, same world frame as `{s}_tcp.*`                                         |
 | `head_camera.r1..r6`                     | `enable_head_camera`           | headset orientation as the first two rotation-matrix columns                              |
@@ -33,15 +33,22 @@ Per side `{s}` ∈ {left, right}:
 camera pose and all images remain observation-only. With both Pico4 trackers, both
 grippers and the head camera enabled, `observation.state` has 29 dimensions (20 + 9).
 
-**Two tactile streams, two destinations.** Each sensor is read once per frame for two
-views: `rectify` (recorded) and the amplified `difference` (displayed). Only the
-recorded one is in `observation_features`, so only it reaches the dataset; the
+**Recorded and displayed are the same stream by default.** `tactile_output_types` and
+`tactile_display_output_types` both name `rectify`, so each sensor is read once, the
+one view goes to both the dataset and Rerun, and what the operator watches is exactly
+what lands on disk.
+
+The split exists for the case where they differ. Point
+`--robot.tactile_display_output_types` at another type — `'["difference"]'`, the
+amplified-deformation view — and the sensor returns both from the same read: only the
+recorded one is in `observation_features`, so only it reaches the dataset, while the
 `*_difference` keys live in `display_features`, which is what the Rerun layout and
-`log_rerun_data` are fed — the recorded stream is not sent to the viewer at all, so
-the tactile grid stays at four tiles. `difference` is the easier view to read contact
-from live, but its baseline is captured at sensor init, so a finger resting on
-something at connect would have that pressure subtracted out of the whole recording —
-which is exactly why the dataset gets `rectify`.
+`log_rerun_data` are fed. The recorded stream is then not sent to the viewer at all,
+so the tactile grid stays at four tiles either way. `difference` was the default until
+the 2026-08 silicone change, which made contact readable on the raw `rectify` image; its
+baseline is captured at sensor init, so a finger resting on something at connect would
+have that pressure subtracted out of the whole recording — which is exactly why the
+dataset always gets `rectify` and why the amplified view is display-only.
 
 For each fixed-rate robot sample, the adapter takes the newest cached frame for each
 eye and the current headset pose. The source XYZW quaternion is converted with the shared
@@ -119,10 +126,12 @@ convention on hardware, is in the
 not be mixed with newer ones without re-transforming.
 
 Tactile streams: `--robot.tactile_output_types` (recorded, default `rectify`, exactly
-one type) and `--robot.tactile_display_output_types` (Rerun-only, default `difference`;
-set to `'[]'` to drop the second read and show the recorded stream instead).
-`--robot.tactile_diff_gain` (default `1.0`, sensors ship at `1.5`) scales the difference
-image, i.e. the displayed one only.
+one type) and `--robot.tactile_display_output_types` (what Rerun shows, default
+`rectify` — the same stream, so there is no second read; `'[]'` means the same thing).
+Set it to `'["difference"]'` for the amplified live view, which then costs a second
+output on the same read and never touches the dataset. `--robot.tactile_diff_gain`
+(default `1.0`, sensors ship at `1.5`) scales that difference image and does nothing
+while it is not requested.
 
 To bypass the tracker side rule, pin serials directly with `--robot.left_tracker_serial=<SN>`
 and/or `--robot.right_tracker_serial=<SN>`. A pinned side uses its serial **verbatim** (no

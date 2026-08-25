@@ -37,8 +37,10 @@ Observation features (per side ``{s}`` in left/right):
                                        (also an action -- see action_features)
 
 Display-only keys (in ``get_observation()`` and ``display_features``, absent from
-``observation_features``, so Rerun shows them but the dataset never sees them —
-see ``tactile_display_output_types``):
+``observation_features``, so Rerun shows them but the dataset never sees them).
+None by default: ``tactile_display_output_types`` is ``rectify``, the recorded
+type, so Rerun watches the recorded ``{s}_tactile_{left,right}``. Ask for a
+different type there and each one appears as a sibling key, e.g.
     {s}_tactile_{left,right}_difference -- amplified deformation view of the same
                                        sensor read
 """
@@ -336,12 +338,13 @@ class BiTaccapGripper(Robot):
         """Rerun-facing schema: ``observation_features`` with each tactile camera's
         recorded stream swapped for its display-only view(s), in place.
 
-        The dataset gets ``rectify`` (``observation_features``), the operator gets
-        the amplified ``difference`` (this). Swapping rather than adding keeps the
-        recorded stream out of the viewer entirely — four tactile tiles, not eight,
-        and no extra Rerun image bandwidth. Cameras with no display-only view are
-        passed through, so without ``tactile_display_output_types`` this is just
-        ``observation_features``.
+        By default there is nothing to swap: ``tactile_display_output_types`` names
+        the recorded type (``rectify``), so the viewer watches the recorded stream
+        and this is ``observation_features``. Point it at another type — the
+        amplified ``difference``, say — and the swap kicks in: swapping rather than
+        adding keeps the recorded stream out of the viewer entirely, four tactile
+        tiles and not eight, with no extra Rerun image bandwidth. Cameras with no
+        display-only view are passed through.
         """
         features = swap_tactile_display_features(self.observation_features, self._tactile_display_keys)
 

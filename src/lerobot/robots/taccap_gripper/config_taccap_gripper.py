@@ -147,32 +147,47 @@ class TaccapGripperConfig(RobotConfig):
     one output type (each sensor contributes one (H, W, 3) image to
     ``observation_features``, hence one dataset video key). Default ``rectify``:
     the unsubtracted image, which keeps every bit the sensor saw. The amplified
-    ``difference`` view is easier to read live but is destructive — it is taken
-    against a baseline captured at sensor init, so any pressure resting on the
-    gel at connect is subtracted away for the whole run, and that must not reach
-    the dataset. See ``tactile_display_output_types`` for the live view.
+    ``difference`` view is destructive — it is taken against a baseline captured
+    at sensor init, so any pressure resting on the gel at connect is subtracted
+    away for the whole run, and that must not reach the dataset. See
+    ``tactile_display_output_types`` for the live view.
     Width/height are auto-derived from the SDK's rectify_size (do not hard-code)."""
 
-    tactile_display_output_types: list[str] = field(default_factory=lambda: ["difference"])
-    """Extra tactile streams requested from the sensor for **display only**.
-    Default ``difference`` (SDK ``OutputType.AugDifference``): on this gel the raw
-    ``rectify`` image carries so little visible deformation that contact is hard
-    to read, and the augmented difference against the rest baseline amplifies it,
-    so this is what the operator watches in Rerun.
+    tactile_display_output_types: list[str] = field(default_factory=lambda: ["rectify"])
+    """The tactile stream the operator watches in **Rerun**, which need not be the
+    recorded one. Default ``rectify`` — the same type ``tactile_output_types``
+    records, so what is on screen is what lands on disk and the viewer cannot
+    flatter a stream the dataset does not have.
 
-    Each type here is published under ``{camera}_{type}`` (e.g.
-    ``tactile_left_difference``). Those keys are deliberately absent from
-    ``observation_features``, so ``build_dataset_frame`` never sees them and they
-    never land on disk; they are what ``display_features`` puts in front of Rerun
-    *instead of* the recorded stream. Both image types are inference-free and come
-    from the same ``selectSensorInfo`` call, so the extra stream is cheap. Set to
-    an empty list to skip it entirely (Rerun then shows the recorded stream)."""
+    A display type that equals the recorded one collapses to a single sensor
+    request (``tactile_camera_output_types``) and no extra key: Rerun is simply
+    fed the recorded ``tactile_{left,right}``. Any *other* type is published under
+    ``{camera}_{type}`` (e.g. ``tactile_left_difference``), deliberately absent
+    from ``observation_features``, so ``build_dataset_frame`` never sees it and it
+    never lands on disk; ``display_features`` then puts it in front of Rerun
+    *instead of* the recorded stream. The alternative to know about is
+    ``difference`` (SDK ``OutputType.AugDifference``), which amplifies deformation
+    against the rest baseline; it is inference-free and comes from the same
+    ``selectSensorInfo`` call, so it is cheap to add back with
+    ``--robot.tactile_display_output_types='["difference"]'``. An empty list also
+    means "show the recorded stream".
+
+    ``difference`` **was** the default, because on the gel this rig shipped with,
+    the raw ``rectify`` image carried so little visible deformation that contact
+    was hard to read live. The silicone was changed in 2026-08 and contact now
+    reads directly off ``rectify``, so the amplified view no longer buys enough to
+    justify showing the operator a stream the dataset does not contain."""
 
     tactile_diff_gain: float | None = 1.0
     """Linear gain the SDK applies to the ``difference`` image
-    (``ctx_patch.process.diff_gain``), i.e. to the display stream only. The sensors
-    ship at 1.5, which is noisy and clips on this gel; 1.0 measures ~1.18 grey
-    levels of per-pixel temporal noise instead of ~1.77 and stops saturating.
+    (``ctx_patch.process.diff_gain``). Inert unless something actually asks for
+    that image, which the defaults no longer do — it is applied at
+    ``Sensor.create()`` regardless, so it stays correct the moment ``difference``
+    is put back in ``tactile_display_output_types``. The sensors
+    ship at 1.5, which was noisy and clipped on the pre-2026-08 gel; 1.0 measured
+    ~1.18 grey levels of per-pixel temporal noise there instead of ~1.77 and
+    stopped saturating. Both numbers are from that gel — re-measure on the current
+    silicone before treating them as current.
     Because it scales signal and noise together the SNR is unchanged — it buys
     headroom, not clarity. Set to None to leave whatever the sensor was flashed
     with."""

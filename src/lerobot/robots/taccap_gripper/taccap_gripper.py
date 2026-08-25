@@ -39,7 +39,9 @@ Observation features:
 
 Display-only keys (present in ``get_observation()`` and in ``display_features``,
 absent from ``observation_features``, so Rerun shows them but the dataset never
-sees them — see ``tactile_display_output_types``):
+sees them). None by default: ``tactile_display_output_types`` is ``rectify``,
+the recorded type, so Rerun watches the recorded ``tactile_{left,right}``. Ask
+for a different type there and each one appears as a sibling key, e.g.
     tactile_{left,right}_difference  -- amplified deformation view of the same
                                         sensor read
 """
@@ -347,13 +349,13 @@ class TaccapGripper(Robot):
         """Rerun-facing schema: ``observation_features`` with each tactile camera's
         recorded stream swapped for its display-only view(s), in place.
 
-        The dataset gets ``rectify`` (``observation_features``), the operator gets
-        the amplified ``difference`` (this). Swapping rather than adding keeps the
-        recorded stream out of the viewer entirely — same tile count, same Rerun
-        image bandwidth as before the split — and keeps tactile in the same slot
-        of the blueprint. Cameras with no display-only view are passed through, so
-        without ``tactile_display_output_types`` this is just
-        ``observation_features``.
+        By default there is nothing to swap: ``tactile_display_output_types`` names
+        the recorded type (``rectify``), so the viewer watches the recorded stream
+        and this is ``observation_features``. Point it at another type — the
+        amplified ``difference``, say — and the swap kicks in: swapping rather than
+        adding keeps the recorded stream out of the viewer entirely (same tile
+        count, same Rerun image bandwidth) and keeps tactile in the same slot of
+        the blueprint. Cameras with no display-only view are passed through.
         """
         features = swap_tactile_display_features(self.observation_features, self._tactile_display_keys)
 

@@ -160,28 +160,38 @@ class BiTaccapGripperConfig(RobotConfig):
     """The **recorded** tactile stream, applied to every discovered sensor. Exactly
     one output type → one (H, W, 3) image per sensor, i.e. one dataset video key.
     Default ``rectify``, the unsubtracted image: the amplified ``difference`` view
-    is easier to read live but is taken against a baseline captured at sensor init,
-    so any pressure resting on a gel at connect would be subtracted out of the
-    whole recording. Width/height auto-derive from the SDK rectify_size — don't
+    is taken against a baseline captured at sensor init, so any pressure resting on
+    a gel at connect would be subtracted out of the whole recording. Width/height auto-derive from the SDK rectify_size — don't
     hard-code."""
 
-    tactile_display_output_types: list[str] = field(default_factory=lambda: ["difference"])
-    """Extra tactile streams requested for **display only**. Default ``difference``
-    (SDK ``OutputType.AugDifference``), which amplifies deformation the raw
-    ``rectify`` image barely shows, so it is what the operator watches in Rerun.
+    tactile_display_output_types: list[str] = field(default_factory=lambda: ["rectify"])
+    """The tactile stream the operator watches in **Rerun**, which need not be the
+    recorded one. Default ``rectify``, the same type ``tactile_output_types``
+    records: what is on screen is what lands on disk.
 
-    Each type is published under ``{camera}_{type}`` (e.g.
-    ``left_tactile_right_difference``). Those keys are deliberately absent from
-    ``observation_features`` — they never reach the dataset — and ``display_features``
-    puts them in front of Rerun *instead of* the recorded stream. Both image types
-    are inference-free and come from one ``selectSensorInfo`` call, so the extra
-    stream is cheap; an empty list skips it (Rerun then shows the recorded stream).
-    The difference baseline is taken at sensor init, so keep all four fingers
-    unloaded at connect."""
+    A display type equal to the recorded one collapses to a single sensor request
+    and no extra key — Rerun is fed the recorded ``{side}_tactile_{left,right}``.
+    Any other type is published under ``{camera}_{type}`` (e.g.
+    ``left_tactile_right_difference``), deliberately absent from
+    ``observation_features`` — it never reaches the dataset — and
+    ``display_features`` puts it in front of Rerun *instead of* the recorded
+    stream. The alternative to know about is ``difference`` (SDK
+    ``OutputType.AugDifference``), which amplifies deformation against the rest
+    baseline; it is inference-free and comes from the same ``selectSensorInfo``
+    call, so it costs little. Its baseline is taken at sensor init, so if you turn
+    it back on keep all four fingers unloaded at connect. An empty list also means
+    "show the recorded stream".
+
+    ``difference`` **was** the default, for the gel this rig shipped with: raw
+    ``rectify`` barely showed deformation on it. The silicone was changed in
+    2026-08 and contact now reads directly off ``rectify``, so the amplified view
+    is no longer worth putting a non-recorded stream in front of the operator."""
 
     tactile_diff_gain: float | None = 1.0
     """Linear gain applied to the ``difference`` image
-    (``ctx_patch.process.diff_gain``, stock 1.5), i.e. to the display stream only.
+    (``ctx_patch.process.diff_gain``, stock 1.5). Inert unless ``difference`` is
+    actually requested, which the defaults no longer do; it is applied at
+    ``Sensor.create()`` regardless, so it holds the moment that view is put back.
     1.0 gives roughly a third less per-pixel temporal noise and no clipping; it
     scales signal and noise alike, so SNR is unchanged. None leaves the sensor's
     flashed value."""

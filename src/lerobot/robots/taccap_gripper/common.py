@@ -216,13 +216,14 @@ def prewarm_tactile_config_cache(camera_configs: dict[str, Any], logger) -> None
 
 
 # ------------------------------------------- recorded vs display-only tactile
-# One sensor read carries two views: the recorded one (rectify — everything the
-# sensor saw) and the display one (the amplified difference the operator reads
-# contact from). The SDK hands both back from a single ``selectSensorInfo``, so
-# the split is purely a matter of which observation key each lands on: the
-# recorded view keeps the camera's own key and is the only one in
-# ``observation_features``; each display view gets a ``{camera}_{type}`` sibling
-# that only Rerun ever sees.
+# One sensor read can carry several views. By default recorded and displayed are
+# the same one (rectify — everything the sensor saw), so a single request comes
+# back and there is nothing to split. Ask for a different display type (the
+# amplified difference, say) and the SDK hands both back from a single
+# ``selectSensorInfo``; the split is then purely a matter of which observation
+# key each lands on: the recorded view keeps the camera's own key and is the only
+# one in ``observation_features``; each display view gets a ``{camera}_{type}``
+# sibling that only Rerun ever sees.
 
 
 def tactile_display_key(cam_name: str, output_type: str) -> str:
@@ -321,12 +322,12 @@ def swap_tactile_display_features(
     """``observation_features`` with each tactile camera's recorded stream
     swapped for its display-only view(s), in place.
 
-    The dataset gets ``rectify`` (``observation_features``), the operator gets
-    the amplified ``difference`` (this). Swapping rather than adding keeps the
-    recorded stream out of the viewer entirely — same tile count, same Rerun
-    image bandwidth as before the split — and keeps tactile in the same slot of
-    the blueprint. Cameras with no display-only view are passed through, so
-    without ``tactile_display_output_types`` this is the input unchanged.
+    With the default display type (``rectify``, the recorded one) no camera has a
+    display-only view and this is the input unchanged — dataset and viewer watch
+    the same stream. When a different display type is configured, swapping rather
+    than adding keeps the recorded stream out of the viewer entirely — same tile
+    count, same Rerun image bandwidth — and keeps tactile in the same slot of the
+    blueprint. Cameras with no display-only view are passed through.
     """
     features: dict[str, type | tuple] = {}
     for key, spec in observation_features.items():

@@ -513,13 +513,15 @@ camera) that resolves to:
 With `--robot.enable_tracker=false` there is no 3D view, and the wrist + tactile views take
 the whole top half.
 
-The tactile pads you see are the **display-only** `difference` view
-(`tactile_{left,right}_difference`), not the `rectify` stream being recorded: the viewer is
-laid out from the robot's `display_features` rather than `observation_features` — same
-schema, with each tactile sensor's recorded stream swapped in place for its display one —
-and `log_rerun_data` is fed the matching subset of the observation
-(`select_display_observation`), so the recorded stream never reaches Rerun. The tile count
-is unchanged; what is easiest to read live is simply not what lands in the dataset.
+The tactile pads you see are the recorded `rectify` stream (`tactile_{left,right}`) —
+`tactile_display_output_types` defaults to the recorded type, so screen and dataset show
+the same image. (Before the 2026-08 silicone change the pads were the amplified
+`difference` view, because contact barely showed on the old gel.) The viewer is laid out from the robot's `display_features` rather than
+`observation_features`, which is the same schema **unless** a display-only tactile view is
+configured (`--robot.tactile_display_output_types='["difference"]'`); then each sensor's
+recorded stream is swapped in place for its display one, `log_rerun_data` is fed the
+matching subset of the observation (`select_display_observation`), and the recorded stream
+never reaches Rerun. The tile count is unchanged either way.
 
 ### 3D trajectory
 
@@ -596,26 +598,32 @@ serial is used **verbatim**: no enumeration, no rule check (a typo surfaces as a
 at connect). Leave it unset (default) to keep auto-discovery.
 
 - **Tactile** → obs keys `tactile_left` / `tactile_right`; landscape `(400,700,3)` uint8
-  (width/height auto-derive — don't hard-code). Each sensor is read once per frame for
-  **two views with two destinations**:
+  (width/height auto-derive — don't hard-code). Each sensor has **two destinations**,
+  which by default read the same view:
   - **recorded** — `--robot.tactile_output_types`, default `rectify` (exactly one type).
     The unsubtracted image; this is the only tactile key in `observation_features`, so
     it is the only one that lands in the dataset.
-  - **displayed** — `--robot.tactile_display_output_types`, default `difference` (SDK
-    `OutputType.AugDifference`), published as `tactile_{left,right}_difference`. It
-    amplifies deformation the raw `rectify` image barely shows, which is what you want
-    to watch live, but it is deliberately kept out of `observation_features` and never
-    recorded: its baseline is taken at sensor init, so a finger loaded at connect would
-    have that pressure subtracted out of the whole run. Keep the fingers **unloaded** at
-    connect for a readable live view. Set to `'[]'` to skip the second read; Rerun then
-    shows the recorded stream.
+  - **displayed** — `--robot.tactile_display_output_types`, default `rectify` as well,
+    i.e. Rerun shows the recorded stream and the sensor is read once. (`'[]'` means the
+    same thing.)
 
-  Rerun is fed `display_features` (recorded stream swapped for the displayed one), so
-  the viewer shows only `difference` and the tile count is unchanged.
+  Set the display type to something else and it becomes a second output on the same
+  read, published as `tactile_{left,right}_<type>` and fed to Rerun *instead of* the
+  recorded stream (`display_features`), so the tile count never changes. The one worth
+  knowing is `'["difference"]'` (SDK `OutputType.AugDifference`), which amplifies
+  deformation against the rest baseline. That **used to be the default**: on the gel
+  the rig shipped with, raw `rectify` showed too little deformation to read contact
+  from live. The silicone was changed in 2026-08 and `rectify` now shows contact
+  directly, so the viewer no longer trades away showing what is actually recorded.
+  `difference` is deliberately kept out of
+  `observation_features` and never recorded: its baseline is taken at sensor init, so a
+  finger loaded at connect would have that pressure subtracted out of the whole run —
+  keep the fingers **unloaded** at connect for a readable live view.
   `--robot.tactile_diff_gain` (default `1.0`, sensors ship at `1.5`) is the linear gain on
-  that difference: 1.0 cuts per-pixel temporal noise from ~1.77 to ~1.18 grey levels and
-  stops the image clipping, but scales signal down with it — raise it if light contact
-  becomes invisible, set it to `None` to keep whatever the sensor was flashed with.
+  that difference — inert unless you ask for it: 1.0 cuts per-pixel temporal noise from
+  ~1.77 to ~1.18 grey levels and stops the image clipping, but scales signal down with
+  it — raise it if light contact becomes invisible, set it to `None` to keep whatever
+  the sensor was flashed with.
   Tune `--robot.tactile_fps`; `--robot.expected_tactiles_per_side` validates the count.
   `--robot.enable_tactile=false` takes the sensors out of the run altogether — a way to
   bisect a USB bandwidth problem (see the troubleshooting section), not a way to record.
@@ -828,10 +836,11 @@ ones are on by default, `enable_imu` is off. Disabling one **removes** its keys 
 schema rather than zero-filling them, so `observation.state` is 10-D by default
 (9 pose + 1 jaw), 19-D with the IMU on, and a further 9 wider with the head camera on.
 
-Tactile cameras contribute their **recorded** view only (`rectify` by default). The
-`tactile_{left,right}_difference` keys `get_observation()` also returns are display-only:
-they are absent from `observation_features`, so `build_dataset_frame` never sees them and
-nothing is written for them.
+Tactile cameras contribute their **recorded** view only (`rectify` by default). Any
+display-only key `get_observation()` also returns — `tactile_{left,right}_difference`
+when `--robot.tactile_display_output_types` asks for it — is absent from
+`observation_features`, so `build_dataset_frame` never sees it and nothing is written
+for it.
 
 `action_features` is the `tcp.*` + `gripper.pos` subset — images are observation-only.
 

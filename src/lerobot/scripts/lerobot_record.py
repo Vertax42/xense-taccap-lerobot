@@ -329,8 +329,9 @@ def self_driven_record_loop(
 
     ``display_features`` (the robot's viewer-facing schema, if it has one) only
     narrows what reaches Rerun — the dataset always gets the full observation.
-    On the TacCap grippers that is what sends the amplified tactile difference
-    to the screen while the recorded ``rectify`` image goes to disk.
+    On the TacCap grippers that is what would send a display-only tactile view
+    (the amplified ``difference``) to the screen while the recorded ``rectify``
+    image goes to disk; by default both are ``rectify``, so screen and disk agree.
     """
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
@@ -502,8 +503,9 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
         # 3D pose + trajectory overlay (no-op if the device emits no tcp.* poses).
         # The viewer is laid out from display_features when the robot has one —
-        # same schema as observation_features except each tactile sensor shows its
-        # display-only view (difference) in place of the recorded one (rectify).
+        # observation_features, except that a tactile sensor configured with a
+        # display-only view (difference) shows that in place of the recorded one.
+        # Same thing by default, which displays the recorded rectify stream.
         display_features = getattr(robot, "display_features", None)
         traj_viz = None
         if cfg.display_data:

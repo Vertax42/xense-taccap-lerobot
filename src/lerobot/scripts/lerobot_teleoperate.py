@@ -240,9 +240,10 @@ def self_driven_teleop_loop(
     is ever commanded. Mirrors v0.4.4's ``bi_xense_flare_grippers_teleop_loop``.
 
     ``display_features`` (the robot's viewer-facing schema, if it has one) narrows
-    what reaches Rerun: on the TacCap grippers it swaps each tactile sensor's
-    recorded ``rectify`` frame for the amplified ``difference`` one. The terminal
-    table below still prints the full observation.
+    what reaches Rerun: on the TacCap grippers it can swap each tactile sensor's
+    recorded ``rectify`` frame for a display-only one (``difference``), though the
+    default displays the recorded ``rectify`` itself. The terminal table below
+    still prints the full observation.
     """
     display_len = max((len(key) for key in robot.observation_features), default=20)
     start = time.perf_counter()
@@ -347,9 +348,10 @@ def teleoperate(cfg: TeleoperateConfig):
         # Built whenever data is displayed: --show_trajectory=false suppresses the
         # trail, not the blueprint, since dropping the blueprint would leave Rerun
         # auto-laying-out every camera and scalar into equal tiles. Laid out from
-        # display_features when the robot has one — same schema as
-        # observation_features except each tactile sensor shows its display-only
-        # view (difference) in place of the recorded one (rectify).
+        # display_features when the robot has one — observation_features, except
+        # that a tactile sensor configured with a display-only view (difference)
+        # shows that in place of the recorded one. Same thing by default, which
+        # displays the recorded rectify stream.
         display_features = getattr(robot, "display_features", None)
         traj_viz = None
         if cfg.display_data:

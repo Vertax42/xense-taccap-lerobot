@@ -308,5 +308,7 @@ lerobot-record \
 > `tactile_left/right` + `wrist_cam` + `tcp.*` (single), or
 > `left_/right_tactile_left/right` + `{side}_wrist` + `{side}_tcp.*` (bi). Tactile
 > rectify is landscape `(400,700,3)` — width/height auto-derive, don't hard-code.
-> Each tactile key records `rectify`; the matching `*_difference` key is display-only
-> (Rerun shows it instead of the recorded one, and it never enters the dataset).
+> Each tactile key records `rectify`, and Rerun shows that same stream by default. A
+> `--robot.tactile_display_output_types` other than the recorded type (e.g.
+> `'["difference"]'`) adds a display-only `*_<type>` key that Rerun shows instead of the
+> recorded one and that never enters the dataset.
