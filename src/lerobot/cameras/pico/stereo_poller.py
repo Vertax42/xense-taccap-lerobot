@@ -29,8 +29,8 @@ stream lands in the gap between them often enough to matter — measured at 7%
 of frames, left ahead by one or two, never behind. The frames themselves were
 fine; the moment we looked at them was not.
 
-Polling well above the stream rate closes that gap: every sequence number is
-seen as it arrives, so a pair can be held back until both halves are in.
+Polling above the stream rate closes that gap: every sequence number is seen as
+it arrives, so a pair can be held back until both halves are in.
 Nothing is published until then, and what a camera reads is always two views
 of the same instant.
 
@@ -51,11 +51,20 @@ from lerobot.utils.robot_utils import get_logger
 
 _EYE_INDEX = {"left": 0, "right": 1}
 
-# Poll period. The stream measured 29.9 fps (~33 ms), so this samples each
-# frame about four times — enough to see both halves of a pair land without
-# spinning hot. It is not a frame rate: nothing is published unless the
-# sequence number actually moved.
-_POLL_PERIOD_S = 1.0 / 120.0
+# Poll period. The stream measured 29.9 fps (~33 ms), so this samples each frame
+# about twice. It is not a frame rate: nothing is published unless the sequence
+# number actually moved.
+#
+# This was 120 Hz (~4x). What the oversampling buys is margin, not throughput:
+# the SDK holds exactly **one slot per eye** (``PicoCameraFrames[eyeIndex]``,
+# overwritten by its callback), so a frame the poller does not collect before the
+# next one lands is gone. At 60 Hz that window is 16.7 ms against a ~33 ms frame
+# interval — comfortable in the steady state, half the jitter headroom the 120 Hz
+# setting had. A missed frame on one eye costs its counterpart too: the survivor
+# never finds a match and ages out of ``_pending``, which is what
+# ``dropped_unpaired`` counts. That counter is the tell if this turns out too low
+# — :meth:`StereoPoller.stop` reports it.
+_POLL_PERIOD_S = 1.0 / 60.0
 
 # How many un-paired frames to keep per eye while waiting for the other half.
 # One would do for the measured lag (one or two frames); four is slack for a
@@ -107,6 +116,18 @@ class StereoPoller:
         if self._thread is not None:
             self._thread.join(timeout=2.0)
         self._thread = None
+        # Report the two counters that say whether the poll rate is keeping up.
+        # Silent when both are zero, which is the normal case — the point is that
+        # a session where the poller *was* losing frames does not end looking
+        # identical to one where it was not.
+        if self.dropped_unpaired or self.decode_failures:
+            self.logger.warn(
+                f"Pico stereo poller: {self.dropped_unpaired} frame(s) aged out unpaired, "
+                f"{self.decode_failures} decode failure(s). Unpaired frames mean an eye's "
+                f"capture was overwritten before the poller collected it; if this is not near "
+                f"zero, raise the poll rate (_POLL_PERIOD_S, currently "
+                f"{1.0 / _POLL_PERIOD_S:.0f} Hz)."
+            )
 
     @property
     def is_running(self) -> bool:
