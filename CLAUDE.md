@@ -131,7 +131,11 @@ something different) plus `head_camera.*`, the headset pose.
 - **Do not read the SDK frame cache from the record loop.** The eyes arrive as
   separate messages, left first, so sampling at loop rate catches one updated
   and not the other (measured 7% of frames). `cameras/pico/stereo_poller.py`
-  polls at 120 Hz and publishes only pairs whose `frame_sequence` agrees.
+  polls at 60 Hz and publishes only pairs whose `frame_sequence` agrees. The
+  poll rate is margin, not throughput: the SDK holds one slot per eye, so a
+  frame not collected before the next lands is lost, and its counterpart then
+  ages out unpaired. 60 Hz against a ~30 fps stream is 2x — `StereoPoller.stop`
+  reports `dropped_unpaired`, which is the tell if that margin is too thin.
 - **Resolution is a whitelist**, `640x480` / `1024x768` / `1280x960`, all 4:3
   like the sensor and all three offered by the headset app's Resolution setting.
   The default is `640x480` because that is the app's default, so the two line up
