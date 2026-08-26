@@ -360,11 +360,18 @@ left arrow ends the loop _and_ leaves `rerecord_episode` standing for the caller
 which is the whole point of an intent flag.
 
 Checking the intent flags as well is not merely redundant, it is how the bug got
-in. Nothing ever sets `stop_recording` on its own either — ESC sets both, the
-teleop refresh (`control_utils.refresh_events_from_teleop`) writes only
-`go_start`, and the `device_lost` path sets it and breaks on the next line — so a
-`stop_recording` branch here is dead code whose only effect is which line gets
-logged. Do not add one back.
+in. Nothing ever sets `stop_recording` on its own either — ESC sets both, and the
+`device_lost` path sets it and breaks on the next line — so a `stop_recording`
+branch here is dead code whose only effect is which line gets logged. Do not add
+one back.
+
+There used to be a third writer, and it is worth knowing it is gone: the teleop
+refresh (`control_utils.refresh_events_from_teleop`, called per iteration through
+`refresh_listener_events`) polled the Pico4 reset button into a `go_start` flag
+**nothing ever read**. The whole path — flag, refresh, and the Space key that
+also set it — was removed; `poll_buttons` / `get_reset_button` remain on the
+teleoperators, just not wired into any loop. So the event table above is the
+complete list of flags, not a summary of a longer one.
 
 Breaking on `rerecord_episode` instead is what put reset activity _inside_
 episodes. That break left `exit_early` unconsumed; the reset phase is this same
