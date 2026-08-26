@@ -85,7 +85,6 @@ from lerobot.utils.constants import ACTION, OBS_STR
 from lerobot.utils.control_utils import (
     init_keyboard_listener,
     is_headless,
-    refresh_listener_events,
     sanity_check_dataset_name,
     sanity_check_dataset_robot_compatibility,
 )
@@ -347,7 +346,6 @@ def self_driven_record_loop(
     while timestamp < control_time_s:
         loop_iteration += 1
         start_loop_t = time.perf_counter()
-        refresh_listener_events(events)
 
         # `exit_early` is the *only* break condition, as in upstream's
         # `record_loop`, and the loop that breaks on it always consumes it.
