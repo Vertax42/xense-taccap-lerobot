@@ -76,6 +76,18 @@ observation keys, so it is not the same dataset and epochs do not model it.
 A pre-epoch file reads back as one open epoch (`manifest_epochs`), but an open
 single epoch means _"nothing here says the rig changed"_, **not** _"it didn't"_.
 
+**`robot_id` is the exception: a wall, not an epoch boundary.** One dataset is
+one station, so `--resume` with a `--robot.id` the manifest disagrees with
+raises (`check_dataset_station`) — identical `units` do not make it one rig,
+because the label names the seat, not the hardware in it. Checked twice: in
+`lerobot-record` **before `connect()`** (the id comes from the config, so no
+device has to spin up to be turned away) and again inside
+`write_hardware_manifest`, the choke point every writer goes through. Being a
+dataset-level invariant it is written at the top level beside `robot_type` and
+repeated per epoch so readers of older files keep working; `manifest_robot_ids`
+reads both. An unlabelled dataset (recorded before `--robot.id` was required) is
+not a mismatch — same reading as the open epoch above.
+
 Each tactile sensor's **runtime bundle** goes in beside it, at
 `meta/runtimes/<serial>-<local time>.bin` (`RUNTIME_DIR`), with the epoch's
 sensors pointing at their own. Deriving depth / force / difference from the

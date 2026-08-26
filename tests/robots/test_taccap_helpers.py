@@ -40,10 +40,12 @@ from lerobot.robots.taccap_gripper.common import (
     build_hardware_manifest,
     build_head_camera_configs,
     build_tactile_camera_configs,
+    check_dataset_station,
     connect_cameras_parallel,
     epoch_for_episode,
     hardware_manifest_unit,
     manifest_epochs,
+    manifest_robot_ids,
     open_gripper,
     read_head_camera_skew,
     resolve_wrist_undistorter,
@@ -757,6 +759,9 @@ class TestWriteHardwareManifest:
         path = write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
         on_disk = json.loads(path.read_text())
         assert on_disk["robot_type"] == "taccap_gripper"
+        # Dataset-level, beside robot_type: nothing may resume this dataset from
+        # another station, so the label is an invariant and is stated as one.
+        assert on_disk["robot_id"] == "taccap_0"
         (written,) = on_disk["epochs"]
         # Its shape is checked where it is the subject; dropped here so this
         # stays a test about the epoch boundary rather than about the clock.
@@ -808,25 +813,69 @@ class TestWriteHardwareManifest:
         epochs = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())["epochs"]
         assert [(e["from_episode"], e["to_episode"]) for e in epochs] == [(0, 57), (57, 90), (90, None)]
 
-    def test_the_same_devices_on_another_station_are_recorded_not_refused(self, tmp_path):
-        """``robot_id`` labels the station; the devices are the parts you swap in
-        and out of it. Moving a rig to another PC must not block the record —
-        refusing would also drop a device swap that coincided with the move, and
-        the devices are the part downstream cannot guess."""
+    def test_another_station_cannot_resume_the_dataset(self, tmp_path):
+        """One dataset is one station. A task recorded across two rigs mixes
+        their calibration, timing and mounting into episodes nothing downstream
+        can separate — and identical ``units`` do not make it one rig, because
+        the station is the seat, not the hardware in it."""
+        write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
+        before = (tmp_path / HARDWARE_MANIFEST_PATH).read_text()
+        moved = json.loads(json.dumps(self.MANIFEST))
+        moved["robot_id"] = "taccap_9"
+
+        with pytest.raises(ValueError, match="taccap_0.*taccap_9"):
+            write_hardware_manifest(tmp_path, moved, FakeLogger(), episode_index=57)
+
+        # Refused before anything was written: the file still describes only the
+        # episodes that are actually there.
+        assert (tmp_path / HARDWARE_MANIFEST_PATH).read_text() == before
+
+    def test_the_refusal_names_the_way_out(self, tmp_path):
+        """The fix is a new dataset or the original rig, and the message has to
+        say so — whoever hits this is mid-session with the hardware in hand."""
         write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
         moved = json.loads(json.dumps(self.MANIFEST))
         moved["robot_id"] = "taccap_9"
 
-        logger = FakeLogger()
-        write_hardware_manifest(tmp_path, moved, logger, episode_index=57)
+        with pytest.raises(ValueError) as excinfo:
+            write_hardware_manifest(tmp_path, moved, FakeLogger(), episode_index=57)
+        assert "repo_id" in str(excinfo.value)
 
-        epochs = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())["epochs"]
-        assert [(e["from_episode"], e["robot_id"]) for e in epochs] == [
-            (0, "taccap_0"),
-            (57, "taccap_9"),
-        ]
-        # Same hardware either side, so nothing downstream has to change sensor.
-        assert epochs[0]["units"] == epochs[1]["units"]
+    def test_the_station_check_precedes_the_swap_epoch(self, tmp_path):
+        """A device swap that coincides with a move to another PC is still a
+        refusal, not an epoch: the dataset is what is being protected, and it
+        cannot span two stations however much else changed with them."""
+        write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
+        moved_and_swapped = self._swapped()
+        moved_and_swapped["robot_id"] = "taccap_9"
+
+        with pytest.raises(ValueError, match="taccap_9"):
+            write_hardware_manifest(tmp_path, moved_and_swapped, FakeLogger(), episode_index=57)
+
+    def test_the_station_label_survives_a_hardware_swap(self, tmp_path):
+        """The top-level label describes the dataset, so appending an epoch must
+        carry it over — the rewrite replaces the whole file."""
+        write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
+        write_hardware_manifest(tmp_path, self._swapped(), FakeLogger(), episode_index=57)
+
+        on_disk = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())
+        assert on_disk["robot_id"] == "taccap_0"
+        assert [e["robot_id"] for e in on_disk["epochs"]] == ["taccap_0", "taccap_0"]
+
+    def test_an_unlabelled_dataset_can_still_be_resumed(self, tmp_path):
+        """Recorded before ``--robot.id`` was required. The file cannot say the
+        station changed, and refusing on that would strand real datasets — same
+        reading as an open epoch: "nothing here says it changed"."""
+        legacy = json.loads(json.dumps(self.MANIFEST))
+        legacy["robot_id"] = None
+        write_hardware_manifest(tmp_path, legacy, FakeLogger())
+
+        logger = FakeLogger()
+        write_hardware_manifest(tmp_path, self.MANIFEST, logger, episode_index=57)
+
+        on_disk = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())
+        assert on_disk["robot_id"] == "taccap_0"
+        assert [e["robot_id"] for e in on_disk["epochs"]] == [None, "taccap_0"]
         assert logger.warnings == []
 
     def test_swapping_one_arm_carries_the_other_over_untouched(self, tmp_path):
@@ -888,6 +937,95 @@ class TestWriteHardwareManifest:
 
         assert path.read_text() == "{ truncated"
         assert len(logger.warnings) == 1
+
+
+class TestStationCheck:
+    """One dataset, one station. The label is checked off ``--robot.id`` alone,
+    so this can run before a single device is powered up."""
+
+    MANIFEST = build_hardware_manifest(
+        robot_type="taccap_gripper",
+        robot_id="taccap_0",
+        role="leader",
+        units=[],
+    )
+
+    def test_a_dataset_with_no_manifest_is_not_a_mismatch(self, tmp_path):
+        """Recorded before manifests existed, or not recorded yet at all. There
+        is no station on record to disagree with."""
+        check_dataset_station(tmp_path, "taccap_0")
+
+    def test_the_same_station_passes(self, tmp_path):
+        write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
+        check_dataset_station(tmp_path, "taccap_0")
+
+    def test_another_station_raises_before_any_hardware_is_touched(self, tmp_path):
+        write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
+        with pytest.raises(ValueError, match="taccap_1"):
+            check_dataset_station(tmp_path, "taccap_1")
+
+    def test_an_unreadable_manifest_is_left_to_the_writer(self, tmp_path):
+        """It complains about a truncated file already. Raising here too would
+        turn one problem into two errors, and the earlier one would blame the
+        station for a mismatch nobody can read."""
+        path = tmp_path / HARDWARE_MANIFEST_PATH
+        path.parent.mkdir(parents=True)
+        path.write_text("{ truncated")
+
+        check_dataset_station(tmp_path, "taccap_1")
+
+    def test_a_pre_epoch_manifest_is_still_enforced(self, tmp_path):
+        """Old shape, no ``epochs`` — the label sits at the top level, which is
+        where the check has to find it or it silently passes everything."""
+        path = tmp_path / HARDWARE_MANIFEST_PATH
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"robot_type": "taccap_gripper", "robot_id": "taccap_0", "units": []}))
+
+        with pytest.raises(ValueError, match="taccap_0"):
+            check_dataset_station(tmp_path, "taccap_1")
+
+    def test_an_epoch_only_label_is_still_enforced(self, tmp_path):
+        """Written after epochs but before the top-level key. The label is only
+        on the epochs, and a check that read the top level alone would let
+        another rig resume every dataset recorded in that window."""
+        path = tmp_path / HARDWARE_MANIFEST_PATH
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "robot_type": "taccap_gripper",
+                    "epochs": [{"from_episode": 0, "to_episode": None, "robot_id": "taccap_0", "units": []}],
+                }
+            )
+        )
+
+        with pytest.raises(ValueError, match="taccap_0"):
+            check_dataset_station(tmp_path, "taccap_1")
+
+    def test_a_run_with_no_label_of_its_own_cannot_disagree(self, tmp_path):
+        """``--robot.id`` is required of both TacCap robots, so this is another
+        caller. Unknown is not a mismatch, in either direction."""
+        write_hardware_manifest(tmp_path, self.MANIFEST, FakeLogger())
+        check_dataset_station(tmp_path, None)
+
+
+class TestManifestRobotIds:
+    def test_both_places_are_read_and_blanks_dropped(self):
+        """Absent is the absence of an answer, not a station to compare against;
+        reporting it as ``None`` would make an unlabelled epoch look like a
+        second rig."""
+        manifest = {
+            "robot_id": "taccap_0",
+            "epochs": [
+                {"robot_id": None, "units": []},
+                {"robot_id": "taccap_0", "units": []},
+                {"units": []},
+            ],
+        }
+        assert manifest_robot_ids(manifest) == {"taccap_0"}
+
+    def test_a_dataset_that_predates_the_label_names_no_station(self):
+        assert manifest_robot_ids({"robot_type": "taccap_gripper", "units": []}) == set()
 
 
 class TestManifestEpochs:

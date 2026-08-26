@@ -72,7 +72,7 @@ from lerobot.robots import (  # noqa: F401
     make_robot_from_config,
     taccap_gripper,
 )
-from lerobot.robots.taccap_gripper.common import write_hardware_manifest
+from lerobot.robots.taccap_gripper.common import check_dataset_station, write_hardware_manifest
 from lerobot.robots.taccap_gripper.visualization import TaccapTrajectoryViz
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -462,6 +462,13 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     num_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras),
                 )
             sanity_check_dataset_robot_compatibility(dataset, robot, cfg.dataset.fps, dataset_features)
+            # One dataset, one station. Checked here — before connect(), off
+            # ``--robot.id`` alone — so a rig that cannot take this dataset says
+            # so now instead of after every gripper, sensor and tracker has been
+            # brought up. ``write_hardware_manifest`` re-checks below; this is
+            # the early exit, not the enforcement.
+            if hasattr(type(robot), "hardware_manifest"):
+                check_dataset_station(dataset.root, robot.id)
         else:
             # Create empty dataset or load existing saved episodes
             sanity_check_dataset_name(cfg.dataset.repo_id)

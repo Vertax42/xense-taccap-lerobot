@@ -712,7 +712,9 @@ Two different things, and they answer two different questions.
 one id). It names the _seat_, not the hardware in it, so it stays put when a
 gripper is swapped. It reaches the log prefix, the calibration filename,
 `str(robot)` and the manifest below, but **not a dataset column** —
-`LeRobotDataset.create()` is handed `robot_type` and nothing else.
+`LeRobotDataset.create()` is handed `robot_type` and nothing else. It is still
+binding: a dataset records the station it was recorded in and refuses to be
+resumed from another one (below).
 
 **Pass a number.** `--robot.id=0` is stored as `taccap_0` here and as
 `bi_taccap_0` on a bimanual rig: a bare number is expanded against
@@ -740,12 +742,13 @@ defaults it to `taccap_0`.
 ```json
 {
   "robot_type": "bi_taccap_gripper",
+  "robot_id": "bi_taccap_0",
   "epochs": [
     {
       "from_episode": 0,
       "to_episode": null,
       "recorded_at": "2026-08-22T16:03:09+08:00",
-      "robot_id": "taccap_0",
+      "robot_id": "bi_taccap_0",
       "role": "leader",
       "units": [
         {
@@ -777,6 +780,33 @@ defaults it to `taccap_0`.
 open epoch is closed at the current episode count and a new one starts, so every
 episode keeps pointing at the devices that produced it. `to_episode` is exclusive
 and `null` on the epoch still being recorded.
+
+**`robot_id` is not one of those swaps — it is a wall.** One dataset belongs to
+one station, and `lerobot-record --resume` on a rig whose `--robot.id` disagrees
+with the manifest fails:
+
+```text
+ValueError: This dataset was recorded on station taccap_0 but this run is
+--robot.id=taccap_1; refusing to resume it (…/meta/hardware.json). One dataset is
+one station: a task recorded across two rigs mixes their calibration, timing and
+mounting into episodes nothing downstream can separate. Resume on the original
+station, or record this run into a dataset of its own (--dataset.repo_id=…).
+```
+
+Identical `units` on both sides do not make it one rig — the label names the
+_seat_, and the seat is where the mounting, the lighting and the operator are.
+The check runs twice: once in `lerobot-record` right after the resumed dataset is
+loaded, **before `robot.connect()`**, so a wrong rig is turned away before every
+gripper, sensor and tracker spins up; and once inside `write_hardware_manifest`,
+which is the choke point every writer goes through. Because the label is now a
+property of the dataset rather than of an epoch, it is also written at the top
+level beside `robot_type`, and repeated on each epoch so readers of older files
+keep working (`manifest_robot_ids` reads both).
+
+A dataset recorded before `--robot.id` was required carries no label, and that is
+not a mismatch: the file cannot say the station changed, and refusing would
+strand real datasets. Same reading as an open epoch — _"nothing here says it
+changed"_ is not _"it didn't"_.
 
 - `side` is which gripper; `finger` is which sensor on it. Both are called
   left/right and they are **independent** — 单左双右 is applied once to the
