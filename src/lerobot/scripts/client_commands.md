@@ -187,18 +187,31 @@ it. Details: [`robots/taccap_gripper/README.md`](../robots/taccap_gripper/README
 
 ### Recording with the viewer on — `[slow_frame]`
 
-`--display_data=true` costs loop time, and a bimanual rig with the head camera is
-eight images per frame. The defaults below are already the fast ones; reach for
-them only if the log shows `[slow_frame] ... overrun=`.
+**`--display_data=true` no longer costs loop time.** Rerun logging runs on its own
+thread (`RerunLogSink`), so the record loop hands off a frame and returns. Measured
+on a bimanual rig with the head camera — eight images per frame — against a 24.1 ms
+viewer-off baseline: **27.2 ms inline, 24.1 ms off-loop**. Those three milliseconds
+were the difference between hitting the 33.3 ms budget at 30 fps and not, which is
+why the standing advice was to record with the viewer off. That advice is retired.
 
-| Flag                          | Default | What it costs                                                                                                                                                                                                                                                                         |
-| ----------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--display_compressed_images` | `false` | `true` JPEG-encodes every image inline on the record loop — measured at 13.2 ms/frame against a 33.3 ms budget at 30 fps, versus 3.1 ms off. Turn it on only when the viewer is on **another machine** (`--display_ip`), where saving IPC bandwidth is worth more than the loop time. |
-| `--display_image_every_n`     | `1`     | Log camera images every N-th frame. Scalars stay at full rate, so `tcp.*` and `gripper.pos` curves are unaffected — only the camera tiles get sparser. Every 3rd frame brings the image cost to ~1 ms. Last resort: it is the only one of these that changes what you see.            |
+The hand-off queue is one frame deep and latest-wins: when the viewer cannot keep up,
+display frames are dropped, counted, and reported once at the end of the session.
+Dropping what is on screen is always the right trade against overrunning the loop that
+writes the dataset — a report of dropped frames is the sink working, not a fault to
+chase.
 
-The `[slow_frame]` line carries a `top_obs=` suffix naming the slowest cameras of
-that frame, so check it before reaching for either flag — a single slow sensor is
-a different problem from the viewer being expensive.
+If `[slow_frame] ... overrun=` still appears, the viewer is no longer a plausible
+cause: read `top_obs=` and look at the hardware read. The two flags below now buy
+viewer throughput, not loop time.
+
+| Flag                          | Default | What it costs                                                                                                                                                                                                                                                                                                                       |
+| ----------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--display_compressed_images` | `false` | `true` JPEG-encodes every image — ~15 ms/frame versus ~3 ms off. On the sink's thread, so it costs display frames rather than loop time: at 30 fps the encode leaves little headroom and the sink starts dropping. Turn it on when the viewer is on **another machine** (`--display_ip`), where saving IPC bandwidth is worth more. |
+| `--display_image_every_n`     | `1`     | Log camera images every N-th frame. Scalars stay at full rate, so `tcp.*` and `gripper.pos` curves are unaffected — only the camera tiles get sparser. Reach for it when the sink reports dropping a lot and you would rather choose which frames go than let it choose.                                                            |
+
+The `[slow_frame]` line carries a `top_obs=` suffix naming the slowest cameras of that
+frame. With the viewer off the loop, that suffix is the whole diagnosis: a single slow
+sensor is what an overrun now means.
 
 ### Recording on a machine with no GPU
 

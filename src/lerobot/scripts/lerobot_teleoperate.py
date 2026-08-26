@@ -71,6 +71,7 @@ from lerobot.utils.robot_utils import (
 )
 from lerobot.utils.utils import move_cursor_up
 from lerobot.utils.visualization_utils import (
+    RerunLogSink,
     init_rerun,
     log_rerun_data,
     select_display_observation,
@@ -132,7 +133,10 @@ def _safe_disconnect(obj, name: str) -> None:
         logger.error(f"Error disconnecting {name}: {e}\n{traceback.format_exc()}")
 
 
-def _cleanup(robot, teleop, display_data: bool) -> None:
+def _cleanup(robot, teleop, display_data: bool, rerun_sink=None) -> None:
+    # Stop the display worker before tearing the SDK down under it.
+    if rerun_sink is not None:
+        rerun_sink.close()
     if display_data:
         try:
             rr.rerun_shutdown()
@@ -229,7 +233,7 @@ def self_driven_teleop_loop(
     duration: float | None = None,
     display_compressed_images: bool = False,
     debug_timing: bool = False,
-    traj_viz: TaccapTrajectoryViz | None = None,
+    rerun_sink: RerunLogSink | None = None,
     display_features: dict | None = None,
 ):
     """Data-stream + Rerun visualisation loop for self-driven, sensor-only robots
@@ -263,13 +267,16 @@ def self_driven_teleop_loop(
 
             if display_data:
                 display_obs = select_display_observation(obs, display_features)
-                log_rerun_data(
-                    observation=display_obs,
-                    action={},
-                    compress_images=display_compressed_images,
-                )
-                if traj_viz is not None:
-                    traj_viz.log(display_obs)
+                if rerun_sink is not None:
+                    # Off-loop, same as the record path: the viewer must not
+                    # eat into the frame budget. See RerunLogSink.
+                    rerun_sink.submit(display_obs, {}, compress_images=display_compressed_images)
+                else:
+                    log_rerun_data(
+                        observation=display_obs,
+                        action={},
+                        compress_images=display_compressed_images,
+                    )
                 if not debug_timing:
                     scalar_items = [(k, v) for k, v in obs.items() if not isinstance(v, np.ndarray)]
                     print("\n" + "-" * (display_len + 12))
@@ -326,6 +333,7 @@ def teleoperate(cfg: TeleoperateConfig):
 
     robot = None
     teleop = None
+    rerun_sink = None
 
     try:
         if cfg.robot.type not in SELF_DRIVEN_TELEOP_ROBOTS:
@@ -365,6 +373,7 @@ def teleoperate(cfg: TeleoperateConfig):
                 traj_viz.setup()
             else:
                 traj_viz = None
+            rerun_sink = RerunLogSink(traj_viz=traj_viz)
 
         # Ctrl+C is the normal way to end a teleop session: fall through to the
         # finally block below and disconnect cleanly rather than dumping a traceback.
@@ -376,14 +385,14 @@ def teleoperate(cfg: TeleoperateConfig):
                 duration=cfg.teleop_time_s,
                 display_compressed_images=display_compressed_images,
                 debug_timing=cfg.debug_timing,
-                traj_viz=traj_viz,
+                rerun_sink=rerun_sink,
                 display_features=display_features,
             )
 
     except Exception as e:
         logger.error(f"Error in teleoperation: {e}\n{traceback.format_exc()}")
     finally:
-        _cleanup(robot, teleop, cfg.display_data)
+        _cleanup(robot, teleop, cfg.display_data, rerun_sink)
 
 
 def main():
