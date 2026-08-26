@@ -22,7 +22,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from lerobot.utils.constants import OBS_STATE
+from lerobot.utils.constants import OBS_STATE, OBS_STR
 
 
 class TransitionKey(str, Enum):
@@ -309,3 +309,166 @@ def test_log_images_false_still_logs_1d_arrays_as_scalars(mock_rerun):
     )
 
     assert set(_keys(calls)) == {"observation.vec_0", "observation.vec_1"}
+
+
+# ---------------------------------------------------------------- RerunLogSink
+#
+# The sink exists to keep Rerun off the record loop's critical path: logging
+# inline measured 27.2 ms/frame against a 24.1 ms viewer-off baseline on a
+# bimanual eight-image payload, and those few milliseconds are what produced the
+# `[slow_frame] ... overrun=` warnings the data team worked around by recording
+# with the viewer off. So the properties worth pinning are: the caller never
+# waits, and nothing the worker hits can reach the caller.
+
+
+class _RecordingViz:
+    """Stand-in for TaccapTrajectoryViz: records what it was handed."""
+
+    def __init__(self, on_log=None):
+        self.logged = []
+        self.resets = 0
+        self._on_log = on_log
+
+    def log(self, data):
+        if self._on_log is not None:
+            self._on_log(data)
+        self.logged.append(data)
+
+    def reset(self):
+        self.resets += 1
+
+
+def _drain(sink, timeout=2.0):
+    """Wait for the worker to have nothing left, without closing the sink."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with sink._slot_lock:
+            empty = sink._slot is None
+        if empty:
+            time.sleep(0.02)  # let the in-flight frame finish
+            return True
+        time.sleep(0.005)
+    return False
+
+
+def test_sink_logs_frames_and_feeds_the_trajectory_viz(mock_rerun):
+    vu, calls = mock_rerun
+    viz = _RecordingViz()
+    sink = vu.RerunLogSink(traj_viz=viz)
+    try:
+        sink.submit({"gripper.pos": 0.5}, {"gripper.pos": 0.5})
+        assert _drain(sink)
+    finally:
+        sink.close()
+
+    assert f"{OBS_STR}.gripper.pos" in _keys(calls)
+    assert viz.logged == [{"gripper.pos": 0.5}]
+
+
+def test_close_drains_the_pending_frame(mock_rerun):
+    """A frame submitted right before close() still reaches the viewer, so the
+    display ends on the last thing recorded rather than one frame short."""
+    vu, calls = mock_rerun
+    sink = vu.RerunLogSink()
+    sink.submit({"gripper.pos": 1.25}, {})
+    sink.close()
+
+    assert _obj_for(calls, f"{OBS_STR}.gripper.pos").value == pytest.approx(1.25)
+
+
+def test_submit_never_blocks_and_drops_to_the_latest_frame(mock_rerun):
+    """The whole point: a stalled viewer costs the caller nothing, and what it
+    misses is the *stale* frames — the newest one always survives."""
+    import threading
+    import time
+
+    vu, calls = mock_rerun
+    release = threading.Event()
+    first = threading.Event()
+
+    def block_once(_data):
+        if not first.is_set():
+            first.set()
+            release.wait(5.0)
+
+    viz = _RecordingViz(on_log=block_once)
+    sink = vu.RerunLogSink(traj_viz=viz)
+    try:
+        sink.submit({"gripper.pos": 0.0}, {})
+        assert first.wait(2.0), "worker never picked up the first frame"
+
+        # Worker is wedged. Every one of these lands on the caller's thread.
+        t0 = time.perf_counter()
+        for i in range(1, 51):
+            sink.submit({"gripper.pos": float(i)}, {})
+        elapsed_ms = (time.perf_counter() - t0) * 1e3
+
+        assert elapsed_ms < 50, f"submit blocked: 50 frames took {elapsed_ms:.1f}ms"
+        assert sink._dropped == 49, f"expected 49 stale frames dropped, got {sink._dropped}"
+
+        release.set()
+        assert _drain(sink)
+    finally:
+        release.set()
+        sink.close()
+
+    # 49 dropped, so the viewer saw the first frame and the newest one only.
+    assert viz.logged == [{"gripper.pos": 0.0}, {"gripper.pos": 50.0}]
+
+
+def test_reset_trajectory_clears_trails_and_drops_the_queued_frame(mock_rerun):
+    """Between episodes: the frame still in flight belongs to the take that just
+    ended and must not seed the new trail."""
+    import threading
+
+    vu, _calls = mock_rerun
+    release = threading.Event()
+    first = threading.Event()
+
+    def block_once(_data):
+        if not first.is_set():
+            first.set()
+            release.wait(5.0)
+
+    viz = _RecordingViz(on_log=block_once)
+    sink = vu.RerunLogSink(traj_viz=viz)
+    try:
+        sink.submit({"gripper.pos": 0.0}, {})
+        assert first.wait(2.0)
+        sink.submit({"gripper.pos": 1.0}, {})  # queued behind the wedged worker
+
+        sink.reset_trajectory()
+        with sink._slot_lock:
+            assert sink._slot is None, "reset_trajectory left a stale frame queued"
+        assert viz.resets == 1
+
+        release.set()
+        assert _drain(sink)
+    finally:
+        release.set()
+        sink.close()
+
+    assert viz.logged == [{"gripper.pos": 0.0}]
+
+
+def test_a_failing_viewer_never_reaches_the_caller(mock_rerun):
+    """A dead viewer must not take a recording down, and must not spam a warning
+    per frame — that would just trade one flood of log lines for another."""
+    vu, _calls = mock_rerun
+
+    def boom(*_a, **_k):
+        raise RuntimeError("viewer went away")
+
+    vu.rr.log = boom
+    sink = vu.RerunLogSink()
+    try:
+        for i in range(10):
+            sink.submit({"gripper.pos": float(i)}, {})
+            assert _drain(sink)
+    finally:
+        sink.close()
+
+    assert sink._failures > 0
+    assert sink._failure_logged is True  # warned once, then counted

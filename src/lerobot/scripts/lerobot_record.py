@@ -96,6 +96,7 @@ from lerobot.utils.utils import (
     log_say,
 )
 from lerobot.utils.visualization_utils import (
+    RerunLogSink,
     init_rerun,
     log_rerun_data,
     select_display_observation,
@@ -263,17 +264,19 @@ class RecordConfig:
     display_ip: str | None = None
     # Port of the remote Rerun server
     display_port: int | None = None
-    # JPEG-encode images before sending them to Rerun. Off by default: the encode
-    # runs inline on the record loop, and on a bimanual rig with a head camera it
-    # measures ~13 ms per frame against a 33 ms budget at 30 fps (~3 ms without),
-    # which is enough on its own to produce [slow_frame] overruns. Turn it on when
+    # JPEG-encode images before sending them to Rerun. Off by default: on a
+    # bimanual rig with a head camera the encode measures ~15 ms per frame versus
+    # ~3 ms without. Since RerunLogSink moved this onto its own thread it no
+    # longer costs the record loop anything — it costs the *viewer* frames, which
+    # the sink drops when the encode cannot keep up with 30 fps. Turn it on when
     # the viewer is on another machine (--display_ip), where the bandwidth it
-    # saves is worth more than the loop time it costs.
+    # saves is worth more than the display frames it drops.
     display_compressed_images: bool = False
     # Log camera images to Rerun every N-th frame (1 = every frame). Scalars are
     # always logged at full rate, so raising this thins the camera tiles without
-    # making the tcp.* / gripper.pos plots sparse. The last resort if the loop
-    # still overruns after turning compression off.
+    # making the tcp.* / gripper.pos plots sparse. Also off-loop; raise it when
+    # the sink reports dropping a lot of frames and you would rather choose which
+    # ones go than have it choose.
     display_image_every_n: int = 1
     # Overlay the 3D pose + breadcrumb trajectory view in Rerun (when display_data
     # is on and the device emits tcp.* poses). Auto-skips if enable_tracker=false.
@@ -302,7 +305,7 @@ def self_driven_record_loop(
     control_time_s: int | None = None,
     single_task: str | None = None,
     display_data: bool = False,
-    traj_viz: TaccapTrajectoryViz | None = None,
+    rerun_sink: RerunLogSink | None = None,
     display_features: dict | None = None,
     display_compressed_images: bool = False,
     display_image_every_n: int = 1,
@@ -403,16 +406,27 @@ def self_driven_record_loop(
 
         if display_data and observation is not None:
             display_observation = select_display_observation(observation, display_features)
-            log_rerun_data(
-                observation=display_observation,
-                action=action or {},
-                compress_images=display_compressed_images,
-                # Counts loop iterations, not recorded frames, so the viewer keeps
-                # a steady image cadence through the reset phase too.
-                log_images=display_image_every_n <= 1 or loop_iteration % display_image_every_n == 0,
-            )
-            if traj_viz is not None:
-                traj_viz.log(display_observation)
+            # Counts loop iterations, not recorded frames, so the viewer keeps
+            # a steady image cadence through the reset phase too.
+            log_images = display_image_every_n <= 1 or loop_iteration % display_image_every_n == 0
+            if rerun_sink is not None:
+                # Hands the frame to a worker thread and returns. This is what
+                # keeps the viewer out of the frame budget — see RerunLogSink.
+                rerun_sink.submit(
+                    display_observation,
+                    action or {},
+                    compress_images=display_compressed_images,
+                    log_images=log_images,
+                )
+            else:
+                # No sink (a direct caller that built none): log inline, as
+                # before. Costs the loop ~3 ms/frame on a bimanual rig.
+                log_rerun_data(
+                    observation=display_observation,
+                    action=action or {},
+                    compress_images=display_compressed_images,
+                    log_images=log_images,
+                )
 
         _record_loop_sleep(
             start_loop_t=start_loop_t,
@@ -441,6 +455,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
     dataset = None
     listener = None
+    rerun_sink = None
 
     try:
         if cfg.resume:
@@ -533,6 +548,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 traj_viz.setup()
             else:
                 traj_viz = None
+            # Everything the viewer needs now happens on this worker's thread,
+            # not the record loop's. The blueprint above stays on this thread:
+            # it is sent once, before the loop.
+            rerun_sink = RerunLogSink(traj_viz=traj_viz)
 
         listener, events = init_keyboard_listener(teleop=teleop)
 
@@ -605,8 +624,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
                 # Fresh breadcrumb trail per episode so trajectories don't bleed
                 # across takes.
-                if traj_viz is not None:
-                    traj_viz.reset()
+                if rerun_sink is not None:
+                    rerun_sink.reset_trajectory()
 
                 set_capture_recording(True)
                 try:
@@ -618,7 +637,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         control_time_s=cfg.dataset.episode_time_s,
                         single_task=cfg.dataset.single_task,
                         display_data=cfg.display_data,
-                        traj_viz=traj_viz,
+                        rerun_sink=rerun_sink,
                         display_features=display_features,
                         display_compressed_images=cfg.display_compressed_images,
                         display_image_every_n=cfg.display_image_every_n,
@@ -662,7 +681,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         control_time_s=cfg.dataset.reset_time_s,
                         single_task=cfg.dataset.single_task,
                         display_data=cfg.display_data,
-                        traj_viz=traj_viz,
+                        rerun_sink=rerun_sink,
                         display_features=display_features,
                         display_compressed_images=cfg.display_compressed_images,
                         display_image_every_n=cfg.display_image_every_n,
@@ -679,6 +698,11 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 recorded_episodes += 1
     finally:
         log_say("Stop recording", cfg.play_sounds, blocking=True)
+
+        # Before the devices go: the worker still holds the last frames they
+        # produced, and its drop count is only meaningful once it has stopped.
+        if rerun_sink is not None:
+            rerun_sink.close()
 
         if dataset:
             dataset.finalize()

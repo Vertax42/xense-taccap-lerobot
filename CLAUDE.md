@@ -139,6 +139,34 @@ something different) plus `head_camera.*`, the headset pose.
   errors, deliberately — silent rescaling would change the recorded field of
   view without trace. Do not "fix" this with a resize.
 
+## Rerun logging is off the record loop — keep it there
+
+`log_rerun_data` runs on a worker thread owned by `RerunLogSink`
+(`utils/visualization_utils.py`); `lerobot_record` and `lerobot_teleoperate` call
+`submit()` and return. Inline it measured **27.2 ms/frame against a 24.1 ms
+viewer-off baseline** on a bimanual rig with the head camera (eight images), i.e.
+the ~3 ms that turned frames into `[slow_frame] ... overrun=` inside a 33.3 ms
+budget at 30 fps — which is how the data team ended up recording with
+`--display_data=false`. Off-loop it measures 24.1 ms, the baseline exactly.
+
+It works because rerun's Rust bindings **release the GIL** for the heavy part of
+`rr.log`, and on Linux `busy_wait` is `time.sleep`, so the worker runs inside the
+window the loop is idle anyway. Both halves matter: a pure-Python sink, or a
+spinning `busy_wait` (which is what macOS/Windows get), would not buy this.
+
+The hand-off is **one frame deep and latest-wins** — a slow viewer drops display
+frames instead of blocking capture, counted and reported once at `close()`.
+Consequences, both display-only and deliberate: `log_time` lags capture by up to a
+loop period, and the worker holds the images the loop just read (the same arrays
+`dataset.add_frame` owns), so a camera recycling its buffer could tear a
+_displayed_ frame — never a recorded one.
+
+Do not move either call back inline "for ordering", and do not give the sink a
+deeper queue: depth is latency, and a viewer that has fallen a second behind is
+showing the operator the wrong thing more usefully than it is showing it late.
+`traj_viz` belongs to the sink now — `reset_trajectory()` between episodes, not
+`traj_viz.reset()`.
+
 ## `xrt.init()` is a process singleton — go through `xrt_session`
 
 `teleoperators/pico4/xrt_session.py` owns it, with a hold count and an atexit
