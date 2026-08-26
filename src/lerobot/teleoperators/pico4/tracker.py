@@ -105,6 +105,28 @@ STALE_WARN_THRESHOLD_S = 0.5
 # the log readable when the service is up but a tracker is unplugged.
 MISSING_SN_WARN_INTERVAL_S = 5.0
 
+# The Unity-origin notice below is a standing operating instruction, not a report
+# that something happened — so it is worth saying once and no more. It used to fire
+# from every reader's connect(), which on a bimanual rig meant two identical
+# warnings per launch, from two different logger names, before anything had gone
+# wrong. Process-scoped rather than per-reader for that reason.
+_origin_notice_lock = threading.Lock()
+_origin_notice_shown = False
+
+
+def _warn_unity_origin_once(logger: Any) -> None:
+    global _origin_notice_shown
+    with _origin_notice_lock:
+        if _origin_notice_shown:
+            return
+        _origin_notice_shown = True
+    logger.warn(
+        "Pico4 origin is fixed at Unity-app launch time. "
+        "Do NOT restart the Unity client between episodes, or recorded "
+        "episodes will be expressed in mismatched origin frames."
+    )
+
+
 # Fixed Pico→world frame remap, identical to the controller's
 # ``teleop_pico4._transform_pico_to_world_coordinate``:
 #   Pico4:  X right,   Y up, Z toward user
@@ -339,12 +361,9 @@ class Pico4TrackerReader:
         # IMPORTANT: the Pico4 coordinate origin is set by Unity at app
         # launch — not by xrt.init(), and not by re-clicking Connect in
         # Unity. If Unity restarts mid-session, all subsequent poses
-        # will be expressed in a different origin frame. Warn loudly.
-        self.logger.warn(
-            "Pico4 origin is fixed at Unity-app launch time. "
-            "Do NOT restart the Unity client between episodes, or recorded "
-            "episodes will be expressed in mismatched origin frames."
-        )
+        # will be expressed in a different origin frame. Said once per
+        # process — every reader in it shares the one Unity origin.
+        _warn_unity_origin_once(self.logger)
 
         deadline = time.monotonic() + self.device_wait_timeout
         attempt = 0
