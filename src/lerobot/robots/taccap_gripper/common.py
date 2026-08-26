@@ -64,11 +64,13 @@ __all__ = [
     "build_head_camera_configs",
     "build_tactile_camera_configs",
     "build_wrist_camera_config",
+    "check_dataset_station",
     "connect_cameras_parallel",
     "disconnect_cameras_parallel",
     "epoch_for_episode",
     "hardware_manifest_unit",
     "manifest_epochs",
+    "manifest_robot_ids",
     "open_gripper",
     "prewarm_tactile_config_cache",
     "read_gripper_normalized",
@@ -887,9 +889,10 @@ dataset root.
 
 Deliberately a file of its own rather than a key in ``meta/info.json``: that
 file's schema belongs to upstream lerobot, and a fork-local key in it would
-collide on the next v5.x sync. ``robot.id`` does not reach the dataset at all
-(``LeRobotDataset.create`` takes only ``robot_type``), so this manifest is the
-only thing tying recorded episodes to the physical devices that produced them.
+collide on the next v5.x sync. Neither ``robot.id`` nor any serial reaches
+``meta/info.json`` or a dataset column (``LeRobotDataset.create`` takes only
+``robot_type``), so this manifest is the only thing tying recorded episodes to
+the physical devices — and to the station — that produced them.
 
 The same reasoning is why a swap mid-dataset is recorded here as another
 ``epochs`` entry rather than as a per-episode column in
@@ -1031,6 +1034,73 @@ def manifest_epochs(manifest: dict[str, Any]) -> list[dict[str, Any]]:
             "units": manifest.get("units", []),
         }
     ]
+
+
+def manifest_robot_ids(manifest: dict[str, Any]) -> set[str]:
+    """Every station label this manifest names, top level and epochs alike.
+
+    Both places are read because the top-level key is newer than the file: a
+    manifest written before it exists carries the label only on its epochs, and a
+    dataset recorded before *that* carries it only at the top (pre-epoch shape,
+    which ``manifest_epochs`` lifts in). Missing and blank labels are dropped
+    rather than reported as ``None`` — "this file does not say" is the absence of
+    an answer, not a station that anything can be compared against.
+
+    A dataset written by the current code has exactly one label here; see
+    ``check_dataset_station`` for why.
+    """
+    labels = {manifest.get("robot_id")}
+    labels.update(epoch.get("robot_id") for epoch in manifest_epochs(manifest))
+    return {label for label in labels if label}
+
+
+def _check_station_matches(manifest: dict[str, Any], robot_id: str | None, path: Any = None) -> None:
+    """Raise unless ``robot_id`` is the station this manifest was recorded on.
+
+    Silent when either side is unlabelled: a manifest with no ``robot_id``
+    anywhere cannot say the station changed, and refusing on that would block
+    resuming datasets recorded before ``--robot.id`` was required. "Nothing here
+    says it changed" is not "it did not change" — same caveat as an open epoch in
+    ``manifest_epochs`` — but a guess in either direction would be worse than
+    leaving the question where the file leaves it.
+    """
+    if not robot_id:
+        return
+    recorded = manifest_robot_ids(manifest)
+    if not recorded or recorded == {robot_id}:
+        return
+    where = f" ({path})" if path is not None else ""
+    raise ValueError(
+        f"This dataset was recorded on station {'/'.join(sorted(recorded))} but this run is "
+        f"--robot.id={robot_id}; refusing to resume it{where}. One dataset is one station: a task "
+        f"recorded across two rigs mixes their calibration, timing and mounting into episodes "
+        f"nothing downstream can separate. Resume on the original station, or record this run "
+        f"into a dataset of its own (--dataset.repo_id=...)."
+    )
+
+
+def check_dataset_station(root: str | Path, robot_id: str | None) -> None:
+    """Raise if ``root`` holds a dataset recorded on a different station.
+
+    Call it **before** ``robot.connect()``: ``--robot.id`` comes from the config,
+    so this needs no hardware, and the alternative is spinning up every gripper,
+    tactile sensor and tracker only to refuse the run seconds later.
+    ``write_hardware_manifest`` re-checks after connect — that is the choke point
+    every writer goes through, this is only the early exit.
+
+    A missing manifest is not an error: a dataset recorded before manifests
+    existed has no station on record to disagree with. An unreadable one is left
+    for ``write_hardware_manifest`` to warn about, so a truncated file produces
+    one complaint rather than two.
+    """
+    path = Path(root) / HARDWARE_MANIFEST_PATH
+    if not path.exists():
+        return
+    try:
+        existing = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return
+    _check_station_matches(existing, robot_id, path)
 
 
 def epoch_for_episode(manifest: dict[str, Any], episode_index: int) -> dict[str, Any] | None:
@@ -1232,8 +1302,12 @@ def _describe_change(previous: dict[str, Any] | None, current: dict[str, Any]) -
     )
     if swapped:
         return f"Hardware changed on the {' and '.join(swapped)} unit(s)"
+    # Reachable only when one side is unlabelled — a real station change raises
+    # before an epoch is ever appended (``_check_station_matches``). So this
+    # names a dataset recorded before ``--robot.id`` was required, now being
+    # resumed by a run that has one.
     if previous.get("robot_id") != current.get("robot_id"):
-        return f"Station changed ({previous.get('robot_id')} -> {current.get('robot_id')})"
+        return f"Station label recorded ({previous.get('robot_id')} -> {current.get('robot_id')})"
     # Same serials, same station: what differs is the runtime bundle, which the
     # sensor re-captures at every ``Sensor.create()``. Calling that "hardware
     # changed" would send someone hunting for a swap that never happened.
@@ -1264,17 +1338,20 @@ def write_hardware_manifest(
       and append a new one. Both stay named, and every episode keeps pointing at
       the devices that actually produced it.
 
-    "Different" means anything in ``units`` / ``robot_id`` / ``role`` changed.
-    Note that this includes running the *same* devices from another PC: the
-    station label changes while the hardware does not. That is recorded rather
-    than refused, because refusing would also drop a device swap that happened
-    to coincide with the move — and the devices are the part downstream cannot
-    guess. Consumers key on ``units``; an epoch boundary with identical ``units``
-    is simply the rig moving.
+    "Different" means anything in ``units`` / ``role`` changed — the devices, and
+    what they were doing. Consumers key on ``units``.
 
-    Only ``robot_type`` is treated as a hard mismatch: single vs bimanual changes
-    the observation keys, so it is not the same dataset at all, and epochs do not
-    model that.
+    ``robot_id`` is **not** in that list, because it is not an epoch boundary but
+    a wall: a dataset belongs to one station, and resuming it from another raises
+    (``check_dataset_station``). It is written at the top level for that reason,
+    beside ``robot_type``, and repeated on each epoch so readers of older files
+    keep working.
+
+    ``robot_type`` is the other hard mismatch, and the one case still handled by
+    keeping the original file and warning: single vs bimanual changes the
+    observation keys, so it is not the same dataset at all, and epochs do not
+    model that. It reaches here only from a caller that skipped
+    ``sanity_check_dataset_robot_compatibility``, which refuses it first.
 
     The swap case used to keep the original file and warn. The warning went to
     the log and never reached the dataset, so afterwards nothing on disk said the
@@ -1312,6 +1389,10 @@ def write_hardware_manifest(
         path.parent.mkdir(parents=True, exist_ok=True)
         fresh = {
             "robot_type": manifest.get("robot_type"),
+            # Dataset-level, like ``robot_type``, because nothing may resume this
+            # dataset from another station. The epochs repeat it; this is the
+            # invariant stated once, where a reader looks for it.
+            "robot_id": manifest.get("robot_id"),
             "epochs": [
                 {
                     "from_episode": int(episode_index),
@@ -1339,6 +1420,12 @@ def write_hardware_manifest(
         )
         return path
 
+    # After the type check and before anything is written: a station mismatch is
+    # the one difference that is not an epoch. Raising here rather than warning
+    # is the point — a warning goes to the log, and the dataset would keep no
+    # record that half its episodes came off another rig.
+    _check_station_matches(existing, manifest.get("robot_id"), path)
+
     epochs = manifest_epochs(existing)
     last = epochs[-1] if epochs else None
     if last is not None and all(last.get(key) == value for key, value in payload.items()):
@@ -1356,7 +1443,14 @@ def write_hardware_manifest(
         }
     )
 
-    path.write_text(json.dumps({"robot_type": existing.get("robot_type"), "epochs": updated}, indent=2) + "\n")
+    # ``or`` and not ``existing.get`` alone: a file written before the top-level
+    # key existed has none, and the check above has already established there is
+    # only one station to name.
+    header = {
+        "robot_type": existing.get("robot_type"),
+        "robot_id": existing.get("robot_id") or manifest.get("robot_id"),
+    }
+    path.write_text(json.dumps({**header, "epochs": updated}, indent=2) + "\n")
     logger.info(
         f"{_describe_change(last, payload)} at episode {episode_index}; recorded as a new epoch "
         f"in {path}. This dataset now spans {len(updated)} configurations."
