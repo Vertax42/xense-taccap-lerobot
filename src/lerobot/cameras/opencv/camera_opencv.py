@@ -35,6 +35,7 @@ import cv2  # type: ignore  # TODO: add type stubs for OpenCV
 
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 from lerobot.utils.errors import DeviceNotConnectedError
+from lerobot.utils.robot_utils import SlowCallMonitor
 
 from ..camera import Camera
 from ..utils import get_cv2_rotation
@@ -143,6 +144,9 @@ class OpenCVCamera(Camera):
             config: The configuration settings for the camera.
         """
         super().__init__(config)
+        # Per-read timing is reported only when it overruns the frame budget;
+        # see SlowCallMonitor for why the old per-read debug line is gone.
+        self._slow_read = SlowCallMonitor(logger, self)
 
         self.config = config
         self.index_or_path = config.index_or_path
@@ -515,7 +519,7 @@ class OpenCVCamera(Camera):
         frame = self.async_read(timeout_ms=10000)
 
         read_duration_ms = (time.perf_counter() - start_time) * 1e3
-        logger.debug(f"{self} read took: {read_duration_ms:.1f}ms")
+        self._slow_read.observe(read_duration_ms, 1e3 / self.fps if self.fps else None)
 
         return frame
 
