@@ -27,6 +27,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 
+from lerobot.utils.robot_utils import get_logger
+
 REQUIRED_XRT_APIS = (
     "has_pico_camera_frame",
     "get_pico_camera_frame_metadata",
@@ -49,6 +51,7 @@ def load_xensevr_sdk():
 
 
 xrt = load_xensevr_sdk()
+logger = get_logger("PicoDebugViewer")
 
 
 EYES = {
@@ -157,12 +160,12 @@ class CameraViewer:
             self.status_vars[eye_index] = status_var
 
     def start(self):
-        print("Initializing XenseVR PC Service SDK...")
+        logger.info("Initializing XenseVR PC Service SDK...")
         xrt.init()
         self.sdk_initialized = True
-        print("SDK initialized. Close the window or press Ctrl+C to exit.")
+        logger.info("SDK initialized. Close the window or press Ctrl+C to exit.")
         if self.args.once:
-            print("--once enabled: exits after one left frame and one right frame are displayed.")
+            logger.info("--once enabled: exits after one left frame and one right frame are displayed.")
         self.root.after(0, self.update_once)
 
     def update_once(self):
@@ -211,10 +214,10 @@ class CameraViewer:
         self.photo_refs.clear()
         gc.collect()
         if self.sdk_initialized:
-            print("Closing SDK...")
+            logger.info("Closing SDK...")
             xrt.close()
             self.sdk_initialized = False
-            print("SDK closed.")
+            logger.info("SDK closed.")
         self.root.destroy()
 
 
@@ -225,7 +228,7 @@ def run_camera_viewer(args):
         viewer.start()
         root.mainloop()
     except KeyboardInterrupt:
-        print("\nInterrupted by user.")
+        logger.info("Interrupted by user.")
         if viewer.running:
             viewer.stop()
 

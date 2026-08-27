@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import os
 import platform
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -22,12 +24,22 @@ import numpy as np
 import spdlog
 
 SPDLOG_PATTERN = "[%D %T.%e] [%n] [%^%l%$] %v"
+# Aspirational: this spdlog pybind exposes only `set_level` on a Sink, so a
+# pattern can be set on the logger but not per sink. Both sinks therefore render
+# SPDLOG_PATTERN; the file sink simply drops the `%^`/`%$` colour markers, which
+# only the ansicolor console sink emits. Wire this up if the binding ever grows
+# Sink.set_pattern.
 FILE_LOG_PATTERN = "[%Y-%m-%d %H:%M:%S.%e] [%n] [%l] %v"
 
 # Global log directory — set via XENSE_LOG_DIR env var, defaults to ~/xenselogs.
 _LOG_DIR = Path(os.environ.get("XENSE_LOG_DIR", Path.home() / "xenselogs"))
 _LOG_SESSION = datetime.now().strftime("%Y%m%d_%H%M%S")
 _MAX_LOG_FILES = 15
+
+# Default console verbosity for every logger in the process. Overridable per rig
+# without touching code — handy when a station is misbehaving and you want DEBUG
+# for one session only.
+DEFAULT_CONSOLE_LEVEL = os.environ.get("XENSE_LOG_LEVEL", "INFO")
 
 _SPDLOG_LEVEL_MAP = {
     "TRACE": spdlog.LogLevel.TRACE,
@@ -41,8 +53,29 @@ _SPDLOG_LEVEL_MAP = {
     "OFF": spdlog.LogLevel.OFF,
 }
 
-# Shared file sink (one log file per session, all loggers write to it).
+# Third-party loggers that emit per-request/per-frame chatter at INFO or DEBUG.
+# They are pinned to WARNING so the shared session file stays readable; anything
+# actually wrong still gets through.
+_NOISY_STDLIB_LOGGERS = (
+    "asyncio",
+    "botocore",
+    "datasets",
+    "filelock",
+    "fsspec",
+    "huggingface_hub",
+    "matplotlib",
+    "numba",
+    "PIL",
+    "urllib3",
+)
+
+# Shared sinks. One file sink per session and one console sink per level, shared
+# by every logger: a sink owns a lock and a flush, so minting a fresh one per
+# logger multiplies both for no benefit.
 _file_sink: spdlog.Sink | None = None
+_console_sinks: dict[int, spdlog.Sink] = {}
+_loggers: dict[tuple[str, str], spdlog.Logger] = {}
+_LOG_LOCK = threading.RLock()
 
 
 def _get_file_sink() -> spdlog.Sink | None:
@@ -50,18 +83,38 @@ def _get_file_sink() -> spdlog.Sink | None:
     global _file_sink
     if _file_sink is not None:
         return _file_sink
-    try:
-        _LOG_DIR.mkdir(parents=True, exist_ok=True)
-        # Rotate: keep newest _MAX_LOG_FILES - 1, drop the rest.
-        log_files = sorted(_LOG_DIR.glob("*.log"), key=lambda f: f.stat().st_mtime)
-        while len(log_files) >= _MAX_LOG_FILES:
-            log_files.pop(0).unlink(missing_ok=True)
-        log_path = _LOG_DIR / f"session_{_LOG_SESSION}.log"
-        _file_sink = spdlog.basic_file_sink_mt(str(log_path))
-        _file_sink.set_level(spdlog.LogLevel.DEBUG)
-        return _file_sink
-    except Exception:
-        return None
+    with _LOG_LOCK:
+        if _file_sink is not None:
+            return _file_sink
+        try:
+            _LOG_DIR.mkdir(parents=True, exist_ok=True)
+            # Rotate: keep newest _MAX_LOG_FILES - 1, drop the rest.
+            log_files = sorted(_LOG_DIR.glob("*.log"), key=lambda f: f.stat().st_mtime)
+            while len(log_files) >= _MAX_LOG_FILES:
+                log_files.pop(0).unlink(missing_ok=True)
+            log_path = _LOG_DIR / f"session_{_LOG_SESSION}.log"
+            sink = spdlog.basic_file_sink_mt(str(log_path))
+            sink.set_level(spdlog.LogLevel.DEBUG)
+            _file_sink = sink
+            return _file_sink
+        except Exception:
+            return None
+
+
+def _get_console_sink(level: spdlog.LogLevel) -> spdlog.Sink:
+    """Return the process-wide console sink for ``level``, creating it once."""
+    with _LOG_LOCK:
+        sink = _console_sinks.get(int(level))
+        if sink is None:
+            sink = spdlog.stdout_color_sink_mt()
+            sink.set_level(level)
+            _console_sinks[int(level)] = sink
+        return sink
+
+
+def session_log_path() -> Path:
+    """Path of this session's log file (whether or not the sink opened)."""
+    return _LOG_DIR / f"session_{_LOG_SESSION}.log"
 
 
 class _SinkLogger(spdlog.SinkLogger):
@@ -82,39 +135,144 @@ class _SinkLogger(spdlog.SinkLogger):
     exception = spdlog.SinkLogger.error
 
 
-def get_logger(name: str, loglevel: str = "INFO") -> spdlog.Logger:
-    """Create a spdlog logger with console + file output.
+def get_logger(name: str, loglevel: str | None = None) -> spdlog.Logger:
+    """Create (or fetch) a spdlog logger with console + file output.
 
     Console shows ``loglevel`` and above with colors. The file sink captures
     DEBUG+ to ``~/xenselogs/session_<timestamp>.log`` (override the directory
     via the ``XENSE_LOG_DIR`` env var). Old log files in that directory are
     rotated; only the most recent :data:`_MAX_LOG_FILES` are kept.
 
+    Loggers are cached per ``(name, loglevel)``. Calling this twice for the same
+    name — a robot reconnecting, a module imported from two entry points — hands
+    back the same logger instead of stacking another console sink onto stdout,
+    which is how the same line ends up printed twice.
+
     Args:
         name: Logger name.
         loglevel: Console log level: TRACE/DEBUG/INFO/WARN/ERR/CRITICAL/OFF.
+            Defaults to ``$XENSE_LOG_LEVEL`` or INFO.
 
     Returns:
         spdlog logger that fans out to the console and the shared session file.
     """
-    console_level = _SPDLOG_LEVEL_MAP.get(loglevel.upper(), spdlog.LogLevel.INFO)
+    level_name = (loglevel or DEFAULT_CONSOLE_LEVEL).upper()
+    key = (name, level_name)
 
-    console_sink = spdlog.stdout_color_sink_mt()
-    console_sink.set_level(console_level)
+    with _LOG_LOCK:
+        cached = _loggers.get(key)
+        if cached is not None:
+            return cached
 
-    sinks = [console_sink]
+        console_level = _SPDLOG_LEVEL_MAP.get(level_name, spdlog.LogLevel.INFO)
+        sinks = [_get_console_sink(console_level)]
 
-    file_sink = _get_file_sink()
-    if file_sink is not None:
-        sinks.append(file_sink)
+        file_sink = _get_file_sink()
+        if file_sink is not None:
+            sinks.append(file_sink)
 
-    logger = _SinkLogger(name, sinks)
-    logger.set_pattern(SPDLOG_PATTERN)
-    # Logger-level DEBUG so the file sink sees everything; each sink filters
-    # to its own configured level.
-    logger.set_level(spdlog.LogLevel.DEBUG)
+        logger = _SinkLogger(name, sinks)
+        logger.set_pattern(SPDLOG_PATTERN)
+        # Logger-level DEBUG so the file sink sees everything; each sink filters
+        # to its own configured level.
+        logger.set_level(spdlog.LogLevel.DEBUG)
+        logger.flush_on(spdlog.LogLevel.WARN)
+        _loggers[key] = logger
+        return logger
 
-    return logger
+
+class _StdlibToSpdlogHandler(logging.Handler):
+    """Forward stdlib ``logging`` records into spdlog.
+
+    Most of this tree logs through :func:`get_logger`, but upstream lerobot,
+    ``xensesdk`` and libav all log through the stdlib. Without a bridge those
+    lines take a different path to a different stream with a different format —
+    they are the ``INFO 2026-08-27 16:58:52 eo_utils.py:189`` lines, whose
+    location field is the *tail* of the path truncated to 15 characters
+    (``video_utils.py`` reads as ``eo_utils.py``), and they never reach the
+    session file at all. Routing them here gives one format, one stream and one
+    file for the whole process.
+
+    The spdlog logger name is the record's module, not ``root`` — upstream logs
+    via the root logger, so the module is the only part that identifies anything.
+    """
+
+    _LEVEL_METHODS = (
+        (logging.CRITICAL, "critical"),
+        (logging.ERROR, "error"),
+        (logging.WARNING, "warn"),
+        (logging.INFO, "info"),
+        (logging.DEBUG, "debug"),
+    )
+
+    def __init__(self, level: int = logging.INFO):
+        super().__init__(level=level)
+        self._level_name = logging.getLevelName(level)
+
+    @staticmethod
+    def _logger_name(record: logging.LogRecord) -> str:
+        # Root records carry no useful name; named third-party loggers do.
+        if record.name and record.name != "root":
+            return record.name
+        return record.module or "python"
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            message = record.getMessage().rstrip()
+            # Warnings and worse are the ones someone will go read the source
+            # for, so they keep their origin; INFO stays uncluttered. Records
+            # routed by ``logging.captureWarnings`` are the exception: the
+            # formatted warning already opens with "<file>:<line>: UserWarning",
+            # and appending warnings.py's own location on top says nothing.
+            if record.levelno >= logging.WARNING and record.name != "py.warnings":
+                message = f"{message} ({record.filename}:{record.lineno})"
+            if record.exc_info:
+                message = f"{message}\n{logging.Formatter().formatException(record.exc_info)}"
+            logger = get_logger(self._logger_name(record), self._level_name)
+            for levelno, method in self._LEVEL_METHODS:
+                if record.levelno >= levelno:
+                    getattr(logger, method)(message)
+                    return
+            logger.debug(message)
+        except Exception:
+            self.handleError(record)
+
+
+def install_stdlib_bridge(console_level: str | None = None, quiet_third_party: bool = True) -> logging.Handler:
+    """Point the stdlib root logger at spdlog and return the installed handler.
+
+    Idempotent: re-installing replaces the previous bridge rather than stacking a
+    second one. Existing root handlers are dropped, which is what the caller
+    wants — leaving them in place is how every line gets printed twice.
+
+    The handler filters at ``console_level`` *before* spdlog sees the record, so
+    the DEBUG-level session file does not fill up with third-party DEBUG chatter
+    that nothing asked for.
+    """
+    level_name = (console_level or DEFAULT_CONSOLE_LEVEL).upper()
+    level = logging.getLevelName(level_name)
+    if not isinstance(level, int):
+        level = logging.INFO
+
+    root = logging.getLogger()
+    for existing in list(root.handlers):
+        root.removeHandler(existing)
+
+    handler = _StdlibToSpdlogHandler(level=level)
+    root.addHandler(handler)
+    # NOTSET on the root logger means "hand everything to the handlers"; the
+    # handler's own level is the filter.
+    root.setLevel(logging.NOTSET)
+
+    # `warnings.warn` output otherwise goes straight to stderr, unformatted and
+    # absent from the session file.
+    logging.captureWarnings(True)
+
+    if quiet_third_party:
+        for noisy in _NOISY_STDLIB_LOGGERS:
+            logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    return handler
 
 
 def busy_wait(seconds):

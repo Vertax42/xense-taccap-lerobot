@@ -17,7 +17,6 @@
 ########################################################################################
 
 
-import logging
 import traceback
 from functools import cache
 from typing import Any
@@ -27,6 +26,9 @@ from deepdiff import DeepDiff
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import DEFAULT_FEATURES
 from lerobot.robots import Robot
+from lerobot.utils.robot_utils import get_logger
+
+logger = get_logger("control_utils")
 
 
 @cache
@@ -46,14 +48,12 @@ def is_headless():
 
         return False
     except Exception:
-        print(
+        logger.warning(
             "Error trying to import pynput. Switching to headless mode. "
             "As a result, the video stream from the cameras won't be shown, "
             "and you won't be able to change the control flow with keyboards. "
-            "For more info, see traceback below.\n"
+            f"Traceback:\n{traceback.format_exc()}"
         )
-        traceback.print_exc()
-        print()
         return True
 
 
@@ -92,12 +92,12 @@ def init_keyboard_listener(teleop: Any | None = None):
             if hasattr(teleop, "get_reset_button") and teleop.get_reset_button():
                 events["go_start"] = True
         except Exception as e:
-            logging.debug(f"Error refreshing teleop control events: {e}")
+            logger.debug(f"Error refreshing teleop control events: {e}")
 
     events["_refresh_events"] = refresh_events_from_teleop
 
     if is_headless():
-        logging.warning(
+        logger.warning(
             "Headless environment detected. On-screen cameras display and keyboard inputs will not be available."
         )
         listener = None
@@ -107,23 +107,30 @@ def init_keyboard_listener(teleop: Any | None = None):
     from pynput import keyboard
 
     def on_press(key):
+        # pynput hooks the whole X session, not this terminal: a right arrow
+        # pressed in *any* window (the Rerun viewer, a browser, another shell)
+        # ends the episode exactly as if it had been typed here. When an operator
+        # reports "it exited and I never touched the arrow key", this timestamp
+        # is what tells you whether the key really arrived — and when. The bare
+        # print() this replaces was block-buffered on a redirected stdout, so in
+        # a captured log it could surface well after the press it described.
         try:
             if key == keyboard.Key.right:
-                print("Right arrow key pressed. Exiting loop...")
+                logger.info("Right arrow pressed -> ending the current episode/reset early.")
                 events["exit_early"] = True
             elif key == keyboard.Key.left:
-                print("Left arrow key pressed. Exiting loop and rerecord the last episode...")
+                logger.info("Left arrow pressed -> ending early and re-recording the last episode.")
                 events["rerecord_episode"] = True
                 events["exit_early"] = True
             elif key == keyboard.Key.esc:
-                print("Escape key pressed. Stopping data recording...")
+                logger.info("Escape pressed -> stopping data recording.")
                 events["stop_recording"] = True
                 events["exit_early"] = True
             elif key == keyboard.Key.space:
-                print("Space key pressed. Robot will go to start pose while recording continues...")
+                logger.info("Space pressed -> robot goes to start pose, recording continues.")
                 events["go_start"] = True
         except Exception as e:
-            print(f"Error handling key press: {e}")
+            logger.error(f"Error handling key press: {e}")
 
     listener = keyboard.Listener(on_press=on_press)
     listener.start()
