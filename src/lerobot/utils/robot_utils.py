@@ -19,6 +19,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import spdlog
@@ -273,6 +274,112 @@ def install_stdlib_bridge(console_level: str | None = None, quiet_third_party: b
             logging.getLogger(noisy).setLevel(logging.WARNING)
 
     return handler
+
+
+class SlowCallMonitor:
+    """Report calls that overrun a time budget, instead of logging every call.
+
+    Replaces the per-call ``logger.debug(f"{self} read took: {ms:.1f}ms")`` that
+    each camera backend used to emit. On a bimanual rig that is six cameras at
+    30 Hz — 180 records a second, ~1 MiB a minute — none of which reaches the
+    console (the sink filters at INFO) and all of which reaches the DEBUG-level
+    session file, where it buries everything else. The number was also only ever
+    interesting when it was large, and the record loop already prints a
+    per-camera breakdown when a frame overruns (``[slow_frame] ... top_obs=``).
+
+    What is left is the part worth a log line: a call that blew its budget. The
+    first overrun in a window is logged as it happens, so onset keeps a
+    timestamp; the rest of the window is counted and folded into one summary, so
+    a camera that is persistently slow costs one line per window rather than one
+    per frame.
+
+    ``str(owner)`` is resolved only when a warning is actually emitted — building
+    it per call is the cost this class exists to avoid.
+    """
+
+    def __init__(
+        self,
+        logger: Any,
+        owner: Any = None,
+        *,
+        label: str = "read",
+        overrun_factor: float = 2.0,
+        min_overrun_ms: float = 5.0,
+        report_every_s: float = 10.0,
+    ):
+        self._logger = logger
+        self._owner = owner
+        self._label = label
+        self._overrun_factor = overrun_factor
+        self._min_overrun_ms = min_overrun_ms
+        self._report_every_s = report_every_s
+        self._window_start: float | None = None
+        self._total = 0
+        self._slow = 0
+        self._worst_ms = 0.0
+        # Whether the window that just closed had overruns. Gates the onset
+        # line: a camera that is slow window after window should cost one
+        # summary each, not a summary plus a "first overrun" that repeats it.
+        self._was_slow = False
+        # Overruns already reported individually this window (0 or 1). The
+        # summary covers whatever this does not, so a camera dropping exactly
+        # one frame per window keeps being reported instead of going quiet
+        # after its first onset line.
+        self._announced = 0
+
+    def _prefix(self) -> str:
+        return f"{self._owner} " if self._owner is not None else ""
+
+    def _threshold_ms(self, budget_ms: float | None) -> float | None:
+        if not budget_ms or budget_ms <= 0:
+            # No configured rate means no budget to overrun, so nothing to say.
+            return None
+        # Both terms matter: the factor keeps fast cameras from tripping on a
+        # couple of milliseconds, the floor keeps very high frame rates from
+        # warning on jitter that is under a millisecond of real delay.
+        return max(budget_ms * self._overrun_factor, budget_ms + self._min_overrun_ms)
+
+    def _reset(self, now: float) -> None:
+        self._window_start = now
+        self._was_slow = self._slow > 0
+        self._total = 0
+        self._slow = 0
+        self._worst_ms = 0.0
+        self._announced = 0
+
+    def observe(self, duration_ms: float, budget_ms: float | None = None) -> None:
+        """Record one call's duration and warn if the budget is clearly blown."""
+        threshold_ms = self._threshold_ms(budget_ms)
+        if threshold_ms is None:
+            return
+
+        now = time.perf_counter()
+        if self._window_start is None:
+            self._window_start = now
+        self._total += 1
+
+        if duration_ms > threshold_ms:
+            self._slow += 1
+            self._worst_ms = max(self._worst_ms, duration_ms)
+            # Onset only: the first overrun after a clean window, so the moment
+            # things went wrong keeps its own timestamp. While it stays wrong,
+            # the window summary below is the whole report.
+            if self._slow == 1 and not self._was_slow:
+                self._announced = 1
+                self._logger.warning(
+                    f"{self._prefix()}slow {self._label}: {duration_ms:.1f}ms "
+                    f"(budget {budget_ms:.1f}ms, warn over {threshold_ms:.1f}ms); "
+                    f"further overruns are summarised every {self._report_every_s:g}s, not logged one by one"
+                )
+
+        elapsed = now - self._window_start
+        if elapsed >= self._report_every_s:
+            if self._slow > self._announced:
+                self._logger.warning(
+                    f"{self._prefix()}{self._slow}/{self._total} {self._label}s over "
+                    f"{threshold_ms:.1f}ms in the last {elapsed:.1f}s (worst {self._worst_ms:.1f}ms)"
+                )
+            self._reset(now)
 
 
 def busy_wait(seconds):
