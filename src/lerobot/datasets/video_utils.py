@@ -53,6 +53,56 @@ HW_ENCODERS = [
 
 VALID_VIDEO_CODECS = {"h264", "hevc", "libsvtav1", "auto"} | set(HW_ENCODERS)
 
+# libav speaks its own level scale (PANIC=0 … DEBUG=48), Python's logging speaks
+# another (DEBUG=10 … CRITICAL=50). Passing an av constant straight to a stdlib
+# setLevel — which the call sites used to do — pins the stdlib logger to 24, not
+# a stdlib level at all; it only happens to sit between INFO and WARNING.
+_AV_TO_STDLIB_LEVEL = {
+    av.logging.PANIC: logging.CRITICAL,
+    av.logging.FATAL: logging.CRITICAL,
+    av.logging.ERROR: logging.ERROR,
+    av.logging.WARNING: logging.WARNING,
+    av.logging.INFO: logging.INFO,
+    av.logging.VERBOSE: logging.DEBUG,
+    av.logging.DEBUG: logging.DEBUG,
+}
+
+
+def quiet_libav(av_level: int = av.logging.ERROR) -> None:
+    """Stop libav from narrating routine muxing onto the terminal.
+
+    Encoding an episode emits a handful of AV_LOG_INFO lines per video — the
+    ``[mov,mp4,...] Auto-inserting h264_mp4toannexb bitstream filter`` and
+    ``Starting second pass: moving the moov atom`` blocks. With six cameras and
+    one save per episode that is a screen of undated, unattributed text between
+    two useful log lines, and none of it says anything a normal save does not.
+
+    Both levers are needed because there are two paths out of libav:
+
+    * ``set_libav_level`` is ffmpeg's own ``av_log_set_level`` and governs what
+      the **native** callback prints straight to stderr. That is the live path
+      here — the encode helpers below call
+      :func:`av.logging.restore_default_callback`, deliberately, because PyAV's
+      Python callback "sometimes doesn't play nicely with multi-threaded
+      workflows" and the streaming encoder is threaded. Once restored, this is
+      the only lever that has any effect, which is why the pre-existing
+      ``setLevel`` calls did nothing about the noise.
+    * ``set_level`` governs PyAV's Python callback, which feeds
+      ``logging.getLogger("libav")`` and, through the stdlib bridge, spdlog and
+      the session file. ERROR rather than ``None`` on purpose: PyAV drops the
+      message text from raised exceptions when its logging is fully off.
+
+    ERROR, not WARNING: a hardware encoder that is absent logs at ERROR while we
+    are only probing whether it opens, so that path mutes itself separately
+    (see ``_probe_hw_encoders``).
+    """
+    av.logging.set_libav_level(av_level)
+    av.logging.set_level(av_level)
+    logging.getLogger("libav").setLevel(_AV_TO_STDLIB_LEVEL.get(av_level, logging.WARNING))
+
+
+quiet_libav()
+
 
 def _get_codec_options(
     vcodec: str,
@@ -520,10 +570,9 @@ def encode_video_frames(
         else:
             video_options["threads"] = str(encoder_threads)
 
-    # Set logging level
+    # Set logging level (av scale in, both libav and stdlib levels out)
     if log_level is not None:
-        # "While less efficient, it is generally preferable to modify logging with Python's logging"
-        logging.getLogger("libav").setLevel(log_level)
+        quiet_libav(log_level)
 
     # Create and open output file (overwrite by default)
     with av.open(str(video_path), "w") as output:
@@ -722,7 +771,7 @@ class _CameraEncoderThread(threading.Thread):
         frame_count = 0
 
         try:
-            logging.getLogger("libav").setLevel(av.logging.WARNING)
+            quiet_libav(av.logging.WARNING)
 
             # Warmup: open the encoder up front when the frame shape is known, so
             # the codec context is hot before the first frame is fed.
@@ -1093,7 +1142,7 @@ with warnings.catch_warnings():
 
 def get_audio_info(video_path: Path | str) -> dict:
     # Set logging level
-    logging.getLogger("libav").setLevel(av.logging.WARNING)
+    quiet_libav(av.logging.WARNING)
 
     # Getting audio stream information
     audio_info = {}
@@ -1125,7 +1174,7 @@ def get_audio_info(video_path: Path | str) -> dict:
 
 def get_video_info(video_path: Path | str) -> dict:
     # Set logging level
-    logging.getLogger("libav").setLevel(av.logging.WARNING)
+    quiet_libav(av.logging.WARNING)
 
     # Getting video stream information
     video_info = {}
