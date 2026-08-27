@@ -90,7 +90,7 @@ from lerobot.utils.control_utils import (
     sanity_check_dataset_robot_compatibility,
 )
 from lerobot.utils.import_utils import register_third_party_plugins
-from lerobot.utils.robot_utils import busy_wait, get_logger
+from lerobot.utils.robot_utils import busy_wait, get_logger, set_capture_recording
 from lerobot.utils.utils import (
     init_logging,
     log_say,
@@ -520,6 +520,17 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
         listener, events = init_keyboard_listener(teleop=teleop)
 
+        # A camera's background capture can stall without blocking the record
+        # loop — async_read() hands back the cached frame — so the cost shows up
+        # as duplicated frames in the dataset, and only while a dataset is
+        # actually being written. Default the reporting window closed and open it
+        # per episode below: encoder warm-up, the reset phase and the save/encode
+        # gap all stall captures (8-stream nvenc starves the tactile threads for
+        # ~0.3-0.9s) but record nothing, so warning there is noise nobody can act
+        # on. Measured: a session's first stalls fire during
+        # `[streaming_encoder] warming up`, entirely before "Recording episode 0".
+        set_capture_recording(False)
+
         if not cfg.dataset.streaming_encoding:
             logger.info(
                 "Streaming encoding is disabled. If you have capable hardware, consider enabling it for way faster episode saving. --dataset.streaming_encoding=true --dataset.encoder_threads=2 # --dataset.vcodec=auto. More info in the documentation: https://huggingface.co/docs/lerobot/streaming_video_encoding"
@@ -573,19 +584,23 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 if traj_viz is not None:
                     traj_viz.reset()
 
-                self_driven_record_loop(
-                    robot=robot,
-                    events=events,
-                    fps=cfg.dataset.fps,
-                    dataset=dataset,
-                    control_time_s=cfg.dataset.episode_time_s,
-                    single_task=cfg.dataset.single_task,
-                    display_data=cfg.display_data,
-                    traj_viz=traj_viz,
-                    display_features=display_features,
-                    display_compressed_images=cfg.display_compressed_images,
-                    display_image_every_n=cfg.display_image_every_n,
-                )
+                set_capture_recording(True)
+                try:
+                    self_driven_record_loop(
+                        robot=robot,
+                        events=events,
+                        fps=cfg.dataset.fps,
+                        dataset=dataset,
+                        control_time_s=cfg.dataset.episode_time_s,
+                        single_task=cfg.dataset.single_task,
+                        display_data=cfg.display_data,
+                        traj_viz=traj_viz,
+                        display_features=display_features,
+                        display_compressed_images=cfg.display_compressed_images,
+                        display_image_every_n=cfg.display_image_every_n,
+                    )
+                finally:
+                    set_capture_recording(False)
 
                 # Execute a few seconds without recording to give time to manually reset the environment
                 # Skip reset for the last episode to be recorded

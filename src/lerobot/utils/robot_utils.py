@@ -276,6 +276,35 @@ def install_stdlib_bridge(console_level: str | None = None, quiet_third_party: b
     return handler
 
 
+# Whether captured frames are currently being written into a dataset. A stall
+# only costs anything when its stale frames land in an episode: during encoder
+# warm-up, the between-episode reset and the save/encode gap, nothing is
+# recording and a stalled capture damages nothing, so warning about it is noise.
+# The measured run showed exactly that — the first stalls of a session fired
+# during `[streaming_encoder] warming up`, entirely before "Recording episode 0".
+#
+# Process-global on purpose: a camera is a leaf object with no reference back to
+# the recording session, and "is a dataset being written right now" is genuinely
+# a property of the process, not of any one camera. Defaults to active so a
+# consumer that never manages the gate (teleoperate, ad-hoc scripts) still gets
+# the diagnostic; `lerobot-record` brackets its episodes explicitly.
+_RECORDING_ACTIVE = threading.Event()
+_RECORDING_ACTIVE.set()
+
+
+def set_capture_recording(active: bool) -> None:
+    """Open or close the window in which capture stalls are worth reporting."""
+    if active:
+        _RECORDING_ACTIVE.set()
+    else:
+        _RECORDING_ACTIVE.clear()
+
+
+def capture_recording_active() -> bool:
+    """Whether captured frames are currently being recorded."""
+    return _RECORDING_ACTIVE.is_set()
+
+
 class CaptureStallMonitor:
     """Report stalls in a camera's **background** capture loop.
 
@@ -363,9 +392,25 @@ class CaptureStallMonitor:
         self._announced = 0
 
     def observe(self, duration_ms: float, budget_ms: float | None = None) -> None:
-        """Record one capture's duration and warn if the budget is clearly blown."""
+        """Record one capture's duration and warn if the budget is clearly blown.
+
+        A no-op while nothing is being recorded — see :data:`_RECORDING_ACTIVE`.
+        The window is dropped rather than carried across the pause, so the first
+        stall of the next episode is reported as an onset instead of being folded
+        into a summary spanning the gap.
+        """
         threshold_ms = self._threshold_ms(budget_ms)
         if threshold_ms is None:
+            return
+
+        if not _RECORDING_ACTIVE.is_set():
+            self._reset(time.perf_counter())
+            # _reset carries "the window that just closed was bad" forward; across
+            # a recording pause there is nothing to carry, and window_start=None
+            # makes the next active capture start a fresh window rather than one
+            # already stretched across the gap.
+            self._was_slow = False
+            self._window_start = None
             return
 
         now = time.perf_counter()
