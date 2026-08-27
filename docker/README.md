@@ -62,7 +62,7 @@ xhost -si:localuser:root
 的 `.env` 里钉死（`.env` 不会被提交）：
 
 ```dotenv
-LEROBOT_IMAGE_TAG=0.0.6
+LEROBOT_IMAGE_TAG=0.0.7
 ```
 
 改完用 `docker compose config --images` 确认解析结果。
@@ -74,7 +74,7 @@ LEROBOT_IMAGE_TAG=0.0.6
 | 跑一次性命令             | `docker compose run --rm xense-taccap lerobot-info`                     |
 | 升级镜像                 | 改 `.env` 的 tag，再 `docker compose pull`                              |
 | 确认解析到哪个镜像       | `docker compose config --images`                                        |
-| 看远端有什么（不下载）   | `docker manifest inspect ghcr.io/vertax42/xense-taccap-lerobot:0.0.6`   |
+| 看远端有什么（不下载）   | `docker manifest inspect ghcr.io/vertax42/xense-taccap-lerobot:0.0.7`   |
 | 确认本地跑的是哪个       | `docker image inspect --format '{{index .RepoDigests 0}}' <镜像>:<tag>` |
 | 不用 Pico4，关掉随启服务 | `START_XENSEVR_SERVICE=0 docker compose run --rm xense-taccap`          |
 | 查看数据                 | `docker compose run --rm xense-taccap bash -lc 'ls -la /data'`          |
@@ -172,13 +172,35 @@ python -c 'import importlib.metadata as M; print("pico4 ->", M.version("xensevr_
 dpkg-query -W -f='daemon -> ${Version}\n' xensevr-pc-service
 ```
 
-**后两行必须打印同一个版本号**（0.0.6 里是 `0.2.1`）。pico4 绑定链接的 C SDK 就取自那个
+**后两行必须打印同一个版本号**（0.0.7 里是 `0.2.1`）。pico4 绑定链接的 C SDK 就取自那个
 `.deb`，两者不一致说明镜像是半新不旧的构建，不要拿它录数据。
 
 ## 版本
 
-当前 **0.0.6**（`latest` 指向同一镜像）。只列影响使用方式的变化：
+当前 **0.0.7**（`latest` 指向同一镜像）。只列影响使用方式的变化：
 
+- **0.0.7** — **建议所有机器升级**，一条崩溃修复加一轮日志整改：
+  - **录制不再因为一次误按方向键而崩掉。** 两条 episode 之间有大约 2 秒没人读键盘事件
+    （存盘 + 编码器预热）。在这个空档里按下的方向右键会一直挂着，导致下一条 episode
+    一帧未录就退出、reset 照常跑满，最后在存盘时抛
+    `ValueError: You must add one or several frames` 把整个采集会话打死 —— 在按键之后
+    两分多钟，中间还夹着一段看起来完全正常的 reset，现场几乎不可能把两件事联系起来。
+  - **日志安静了，而且全都落盘。** 以前每存一条 episode 都会刷一屏
+    `[mov,mp4,...] Auto-inserting h264_mp4toannexb`（那句本该压掉它的设置是无效的），
+    另有每秒 180 条、约每分钟 1 MiB 的逐帧 `read took` 只进文件不进屏幕。现在两者都没了。
+    同时上游 lerobot / xensesdk / libav 的日志统一成一种格式，并和我们自己的日志一起进
+    `~/xenselogs/session_<时间戳>.log` —— 以前它们从不落盘。控制台等级可用
+    `XENSE_LOG_LEVEL` 调。
+  - **按键操作现在带时间戳**（`Right arrow pressed -> ...`）。注意键盘监听是**全局**的：
+    任何窗口里按方向右键都会结束当前 episode，包括 Rerun 窗口（它的时间轴就用左右键
+    翻帧）。数采员报"我没按它自己就退了"时，先看这行的时间戳。
+  - **新增两个数据质量信号。** 相机后台采集卡顿时会告警，并说明大约多少帧录进去的是
+    重复图像；每条 episode 结束会报一行 `[stale_frames] ...`，给出重复帧数、次数和最长
+    连续段。两者只在真正录制期间统计。
+  - 从爪固件 `tc-gu-01-slave.bin` 更新到 1.1.6（运动安全包络、I2t 降额、可配温度墙）。
+    主爪镜像仍是 1.2.2 —— 机位上如果还跑着 1.2.0，升级是独立于本镜像的运维动作，走
+    `python/examples/ota_update.py`，**刷完必须断电重启**。
+  - xensesdk 2.1.1 → 2.1.2。
 - **0.0.6** — **建议所有机器升级**，三条都是踩过的坑：
   - **录制不再因为语音提示崩溃。** `--play_sounds` 默认开，而镜像里没有 `spd-say`，
     于是第一集刚开始就 `FileNotFoundError`，清理时又抛一次，最后 `Aborted (core dumped)`。
