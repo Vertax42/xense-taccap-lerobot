@@ -212,6 +212,39 @@ two. Captures inside budget say nothing, and a camera with no configured `fps`
 has no budget and is silent by design. `str(owner)` is resolved only when a
 warning is emitted; building it per call is the cost the class exists to avoid.
 
+### Duplicate frames are counted by identity, never by pixels
+
+`CameraReadGuard.stale_frame_report()` reports, per episode, how much of what
+went to disk is a repeat of the previous frame:
+
+```
+[stale_frames] episode 3  [left_tactile_left] 45/1800 frames served stale (2.5%): 25 gap(s), longest 21 frame(s)
+```
+
+The predicate is `frame is prev` — Python object identity, already computed for
+freeze detection. **Do not replace it with a pixel or hash comparison.** A
+resting tactile gel barely changes between frames, so any content test flags the
+normal case; and the recorded stream is lossily encoded, which destroys
+bit-exactness in both directions (noise-level differences quantize to identical
+output). A real capture allocates a new array — `_format_read_result` returns
+`np.ascontiguousarray` of a reversed view — so identity is exact and free.
+
+Run length is what separates the two causes, which is why it is reported
+alongside the percentage:
+
+- **a long run** is a capture stall (`CaptureStallMonitor` reports the same event
+  from the capture side; the two should agree, and if they do not, something else
+  is producing stale frames);
+- **many one-frame runs** are the beat between two unsynchronised 30 Hz loops —
+  the sensor's background capture and the record loop each free-run at the same
+  nominal rate, so the phase drifts and the loop occasionally samples twice
+  before a new frame lands. Tolerated by design, but nothing measured it until
+  now.
+
+Logged at INFO, not WARNING: some duplication is expected, and warning on it
+every episode is the noise this whole change removed. Promote it once a rig's
+baseline is known and there is a defensible threshold.
+
 ### libav noise — `quiet_libav()`, not `setLevel`
 
 `video_utils.py` calls `av.logging.restore_default_callback()` deliberately:
