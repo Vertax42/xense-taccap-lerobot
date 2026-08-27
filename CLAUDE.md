@@ -163,20 +163,44 @@ Console level is `$XENSE_LOG_LEVEL` (default INFO), the session file is
 bridge filters at the console level _before_ spdlog sees a record, so the
 DEBUG-level file does not fill with third-party chatter.
 
-### Per-frame timings are warnings, not debug lines — `SlowCallMonitor`
+### A camera stall is a stale frame, not a slow loop — `CaptureStallMonitor`
 
 Every camera backend used to end `read()` with
 `logger.debug(f"{self} read took: {ms:.1f}ms")`. On a bimanual rig that is six
 cameras at 30 Hz: ~180 records a second, ~1 MiB a minute, none of it on the
-console (the sink filters at INFO) and all of it in the DEBUG-level session
-file. `SlowCallMonitor` (`utils/robot_utils.py`) replaces it — the first overrun
-after a clean window is logged as it happens, the rest of the window is folded
-into one summary, and reads inside budget say nothing at all. A camera with no
-configured `fps` has no budget and is therefore silent by design. `str(owner)`
-is resolved only when a warning is actually emitted; building it per call is the
-cost the class exists to avoid. The record loop's `[slow_frame] ... top_obs=`
-line already attributes a blown frame to individual cameras, so this covers the
-other case: a camera over budget while the loop as a whole still makes it.
+console (the sink filters at INFO) and all of it in the DEBUG-level session file.
+
+`CaptureStallMonitor` (`utils/robot_utils.py`) replaces it, and is wired into
+each backend's **background `_read_loop`**, not `read()`. That placement is the
+whole point:
+
+- The record loop takes frames through `CameraReadGuard.read()` →
+  `cam.async_read()`, which returns the cached `latest_frame` **without
+  blocking**. A slow capture therefore never stalls the record loop — it means
+  the loop is handed the _same_ frame, and roughly `duration / budget` recorded
+  frames are duplicates of one image. Read the warning as "the loop was blocked"
+  and you will go looking in the wrong place; the message says stale frames
+  because that is the actual cost.
+- Only `XenseTactileCamera` has `_read_loop` call `self.read()`. OpenCV,
+  RealSense and ZMQ capture via `_read_from_hardware()` and their `read()` is not
+  in the record path at all — instrumenting `read()` there measured nothing,
+  which is why only `[XenseCam]` warnings ever appeared.
+- Timing the loop rather than `read()` also keeps the connect-time warmup out of
+  it, where "errors are expected" and a slow read means nothing.
+
+Nothing else sees this class of problem. `[slow_frame]` cannot — the loop is not
+blocked. `CameraReadGuard`'s freeze detection cannot either: `CAM_FREEZE_TIMEOUT_S`
+is 2s, deliberately well above any frame interval so a slow sensor never trips
+it, and the stalls that matter are shorter. Measured on the rig: 8-stream nvenc
+warm-up and episode save starve the tactile capture threads for 0.3–0.9s, i.e.
+~10–25 duplicate frames, every episode boundary.
+
+The first stall after a clean window is logged as it happens; the rest of the
+window folds into one summary carrying the worst stall's **wall-clock time** —
+that is what tells you whether it landed inside an episode or in the gap between
+two. Captures inside budget say nothing, and a camera with no configured `fps`
+has no budget and is silent by design. `str(owner)` is resolved only when a
+warning is emitted; building it per call is the cost the class exists to avoid.
 
 ### libav noise — `quiet_libav()`, not `setLevel`
 

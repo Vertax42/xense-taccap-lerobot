@@ -25,7 +25,7 @@ from typing import Any, cast
 import numpy as np
 
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
-from lerobot.utils.robot_utils import SlowCallMonitor, get_logger
+from lerobot.utils.robot_utils import CaptureStallMonitor, get_logger
 
 from ..camera import Camera
 from .configuration_xense import XenseOutputType, XenseTactileCameraConfig
@@ -138,9 +138,10 @@ class XenseTactileCamera(Camera):
             config: The configuration settings for the Xense sensor.
         """
         super().__init__(config)
-        # Per-read timing is reported only when it overruns the frame budget;
-        # see SlowCallMonitor for why the old per-read debug line is gone.
-        self._slow_read = SlowCallMonitor(logger, self)
+        # Background-capture stalls are reported only when they overrun the frame
+        # budget; see CaptureStallMonitor for why the old per-read debug line is
+        # gone and what a stall actually costs downstream.
+        self._capture_stall = CaptureStallMonitor(logger, self)
 
         self.config = config
         self.serial_number = config.serial_number
@@ -449,15 +450,8 @@ class XenseTactileCamera(Camera):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        start_time = time.perf_counter()
-
         data = self._read_sensor_data()
-        formatted = self._format_read_result(data)
-
-        read_duration_ms = (time.perf_counter() - start_time) * 1e3
-        self._slow_read.observe(read_duration_ms, 1e3 / self.fps if self.fps else None)
-
-        return formatted
+        return self._format_read_result(data)
 
     def _read_loop(self):
         """
@@ -478,6 +472,12 @@ class XenseTactileCamera(Camera):
 
             try:
                 data = self.read()
+                # Timed here, not inside read(): this is the capture whose delay
+                # the record loop pays for in stale frames. read() is also called
+                # by the connect-time warmup, where a slow read means nothing.
+                self._capture_stall.observe(
+                    (time.perf_counter() - loop_start) * 1e3, 1e3 / self.fps if self.fps else None
+                )
 
                 with self.frame_lock:
                     self.latest_data = data

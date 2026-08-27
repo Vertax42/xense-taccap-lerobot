@@ -36,7 +36,7 @@ from numpy.typing import NDArray
 
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 from lerobot.utils.errors import DeviceNotConnectedError
-from lerobot.utils.robot_utils import SlowCallMonitor
+from lerobot.utils.robot_utils import CaptureStallMonitor
 
 from ..camera import Camera
 from ..configs import ColorMode
@@ -76,9 +76,10 @@ class ZMQCamera(Camera):
 
     def __init__(self, config: ZMQCameraConfig):
         super().__init__(config)
-        # Per-read timing is reported only when it overruns the frame budget;
-        # see SlowCallMonitor for why the old per-read debug line is gone.
-        self._slow_read = SlowCallMonitor(logger, self)
+        # Background-capture stalls are reported only when they overrun the frame
+        # budget; see CaptureStallMonitor for why the old per-read debug line is
+        # gone and what a stall actually costs downstream.
+        self._capture_stall = CaptureStallMonitor(logger, self)
         import zmq
 
         self.config = config
@@ -226,8 +227,6 @@ class ZMQCamera(Camera):
         Returns:
             np.ndarray: Decoded frame (height, width, 3)
         """
-        start_time = time.perf_counter()
-
         if color_mode is not None:
             logger.warning(f"{self} read() color_mode parameter is deprecated and will be removed in future versions.")
 
@@ -235,12 +234,7 @@ class ZMQCamera(Camera):
             raise RuntimeError(f"{self} read thread is not running.")
 
         self.new_frame_event.clear()
-        frame = self.async_read(timeout_ms=10000)
-
-        read_duration_ms = (time.perf_counter() - start_time) * 1e3
-        self._slow_read.observe(read_duration_ms, 1e3 / self.fps if self.fps else None)
-
-        return frame
+        return self.async_read(timeout_ms=10000)
 
     def _read_loop(self) -> None:
         """
@@ -252,8 +246,12 @@ class ZMQCamera(Camera):
         failure_count = 0
         while not self.stop_event.is_set():
             try:
+                loop_start = time.perf_counter()
                 frame = self._read_from_hardware()
                 capture_time = time.perf_counter()
+                # The background capture is what the record loop pays for in
+                # stale frames; read() below just hands back the cached one.
+                self._capture_stall.observe((capture_time - loop_start) * 1e3, 1e3 / self.fps if self.fps else None)
 
                 with self.frame_lock:
                     self.latest_frame = frame

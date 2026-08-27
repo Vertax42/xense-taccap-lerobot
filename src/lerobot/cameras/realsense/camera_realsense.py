@@ -32,7 +32,7 @@ except Exception as e:
 
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 from lerobot.utils.errors import DeviceNotConnectedError
-from lerobot.utils.robot_utils import SlowCallMonitor
+from lerobot.utils.robot_utils import CaptureStallMonitor
 
 from ..camera import Camera
 from ..configs import ColorMode
@@ -115,9 +115,10 @@ class RealSenseCamera(Camera):
         """
 
         super().__init__(config)
-        # Per-read timing is reported only when it overruns the frame budget;
-        # see SlowCallMonitor for why the old per-read debug line is gone.
-        self._slow_read = SlowCallMonitor(logger, self)
+        # Background-capture stalls are reported only when they overrun the frame
+        # budget; see CaptureStallMonitor for why the old per-read debug line is
+        # gone and what a stall actually costs downstream.
+        self._capture_stall = CaptureStallMonitor(logger, self)
 
         self.config = config
 
@@ -387,8 +388,6 @@ class RealSenseCamera(Camera):
             ValueError: If an invalid `color_mode` is requested.
         """
 
-        start_time = time.perf_counter()
-
         if color_mode is not None:
             logger.warning(f"{self} read() color_mode parameter is deprecated and will be removed in future versions.")
 
@@ -400,12 +399,7 @@ class RealSenseCamera(Camera):
 
         self.new_frame_event.clear()
 
-        frame = self.async_read(timeout_ms=10000)
-
-        read_duration_ms = (time.perf_counter() - start_time) * 1e3
-        self._slow_read.observe(read_duration_ms, 1e3 / self.fps if self.fps else None)
-
-        return frame
+        return self.async_read(timeout_ms=10000)
 
     def _postprocess_image(self, image: NDArray[Any], depth_frame: bool = False) -> NDArray[Any]:
         """
@@ -467,6 +461,7 @@ class RealSenseCamera(Camera):
         failure_count = 0
         while not self.stop_event.is_set():
             try:
+                loop_start = time.perf_counter()
                 frame = self._read_from_hardware()
                 color_frame_raw = frame.get_color_frame()
                 color_frame = np.asanyarray(color_frame_raw.get_data())
@@ -478,6 +473,9 @@ class RealSenseCamera(Camera):
                     processed_depth_frame = self._postprocess_image(depth_frame, depth_frame=True)
 
                 capture_time = time.perf_counter()
+                # The background capture is what the record loop pays for in
+                # stale frames; read() below just hands back the cached one.
+                self._capture_stall.observe((capture_time - loop_start) * 1e3, 1e3 / self.fps if self.fps else None)
 
                 with self.frame_lock:
                     self.latest_color_frame = processed_color_frame
