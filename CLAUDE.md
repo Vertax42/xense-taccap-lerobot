@@ -137,6 +137,98 @@ Discovery deliberately loads without holding (`ensure_loaded`), so one-shot
 enumeration cannot leak a hold. Closing matters: the SDK's joinable
 `std::thread`s call `std::terminate()` if the process exits without it.
 
+## Logging goes through spdlog — including the stdlib
+
+`utils/robot_utils.py:get_logger()` is the logger for this fork. Two things
+about it are load-bearing:
+
+- **`init_logging()` installs a stdlib→spdlog bridge, not a `StreamHandler`.**
+  Upstream lerobot, `xensesdk` and libav all log through `logging`, so without
+  the bridge they took a different path, to a different stream, in a different
+  format, and never reached the session file. Those were the
+  `INFO 2026-08-27 16:58:52 eo_utils.py:189` lines — whose location field is the
+  _tail_ of the path cut to 15 chars, which is why `video_utils.py` reads as
+  `eo_utils.py`. `install_stdlib_bridge()` clears root's handlers on purpose:
+  leaving one in place is how every line gets printed twice. The bridge names
+  each record by its **module**, because upstream logs via the root logger and
+  `root` identifies nothing.
+- **`get_logger()` caches per `(name, level)` and shares its sinks.** Calling it
+  twice for one name used to stack a second stdout sink onto the same terminal.
+  Sinks in this pybind expose only `set_level` — no `Sink.set_pattern` — so the
+  pattern is set on the logger and both sinks render `SPDLOG_PATTERN`;
+  `FILE_LOG_PATTERN` is aspirational until the binding grows one.
+
+Console level is `$XENSE_LOG_LEVEL` (default INFO), the session file is
+`$XENSE_LOG_DIR/session_<ts>.log` (default `~/xenselogs`, 15 files kept). The
+bridge filters at the console level _before_ spdlog sees a record, so the
+DEBUG-level file does not fill with third-party chatter.
+
+### Per-frame timings are warnings, not debug lines — `SlowCallMonitor`
+
+Every camera backend used to end `read()` with
+`logger.debug(f"{self} read took: {ms:.1f}ms")`. On a bimanual rig that is six
+cameras at 30 Hz: ~180 records a second, ~1 MiB a minute, none of it on the
+console (the sink filters at INFO) and all of it in the DEBUG-level session
+file. `SlowCallMonitor` (`utils/robot_utils.py`) replaces it — the first overrun
+after a clean window is logged as it happens, the rest of the window is folded
+into one summary, and reads inside budget say nothing at all. A camera with no
+configured `fps` has no budget and is therefore silent by design. `str(owner)`
+is resolved only when a warning is actually emitted; building it per call is the
+cost the class exists to avoid. The record loop's `[slow_frame] ... top_obs=`
+line already attributes a blown frame to individual cameras, so this covers the
+other case: a camera over budget while the loop as a whole still makes it.
+
+### libav noise — `quiet_libav()`, not `setLevel`
+
+`video_utils.py` calls `av.logging.restore_default_callback()` deliberately:
+PyAV's Python callback "sometimes doesn't play nicely with multi-threaded
+workflows" and the streaming encoder is threaded. But once restored, **only
+ffmpeg's own level matters** — the `logging.getLogger("libav").setLevel(...)`
+calls that sat next to it did nothing, which is why every episode save printed a
+screen of `[mov,mp4,...] Auto-inserting h264_mp4toannexb bitstream filter` and
+`Starting second pass: moving the moov atom`. `quiet_libav()` sets
+`av.logging.set_libav_level` (the native printer) **and** `set_level` (PyAV's
+callback, feeding the bridge), at ERROR — not `None`, because PyAV drops the
+message text from raised exceptions when its logging is fully off. Those two
+constant scales are different (libav `WARNING` is 24, stdlib's is 30); do not
+pass one to the other.
+
+### Keyboard events are a global X hook, not terminal input
+
+`control_utils.init_keyboard_listener()` uses `pynput`, which hooks the whole X
+session through XRecord. A right arrow pressed in **any** window — the Rerun
+viewer (whose timeline steps on arrow keys), a browser, another shell, and in a
+container the whole _host_ desktop — ends the episode exactly as if it had been
+typed at the recording terminal. When an operator reports "it exited and I never
+touched the arrow key", that is the mechanism; the handler logs through spdlog
+so the press carries a timestamp. It used to be a bare `print()`, which is
+block-buffered on a redirected stdout and could therefore surface in a captured
+log well after the press it described.
+
+`exit_early` is cleared at the top of each episode in `lerobot_record.py`, and
+that line is load-bearing. The listener runs for the whole session but only the
+record/reset loops consume the flag, and between the reset loop ending and the
+next episode starting there is a gap — `save_episode()` plus the encoder warm-up
+— with no consumer (~2s with streaming encoding, much longer without).
+
+A right arrow pressed there is still set when the next episode's first iteration
+checks it. That episode ends after zero frames, the reset then runs its **full**
+duration, and `save_episode()` reaches `validate_episode_buffer`, which raises on
+an empty buffer — `You must add one or several frames with add_frame`. The
+session dies mid-collection, minutes after the press that caused it, which is
+what makes it hard to connect back to a key someone pressed.
+
+`rerecord_episode` has a related hole (the record loop breaks on it without
+clearing it) but that one is **self-correcting**: it short-circuits the reset
+too, so the empty buffer reaches `clear_episode_buffer()` rather than
+`save_episode()` and the episode is just retried. It is cleared alongside anyway,
+to avoid announcing "Re-record episode" for an episode that never started.
+`stop_recording` is deliberately _not_ cleared: that one should survive the gap.
+
+Upstream lerobot and the sister repo `lerobot-xense` both carry this hole — the
+event-flag lifecycle there is byte-identical to ours — so the clear is a
+deliberate divergence, not a fork-local quirk being papered over.
+
 ## Recorded files land 0600 if they come from a temp file
 
 Python's temp-file APIs create restrictively **on purpose**, and `shutil.move` /
