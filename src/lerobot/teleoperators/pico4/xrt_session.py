@@ -40,9 +40,12 @@ tears the SDK down cleanly.
 from __future__ import annotations
 
 import atexit
-import contextlib
 import threading
 from types import ModuleType
+
+from lerobot.utils.robot_utils import get_logger
+
+logger = get_logger("xrt_session")
 
 _lock = threading.Lock()
 _xrt: ModuleType | None = None
@@ -132,11 +135,17 @@ def release() -> bool:
             _holders -= 1
         if _holders > 0 or _xrt is None:
             return False
-        # Suppressed on purpose: a failing close() must not mask whatever the
-        # caller was actually doing (usually its own teardown). The caller
-        # logs the outcome; state is reset either way.
-        with contextlib.suppress(Exception):  # pragma: no cover
+        # Swallowed on purpose: a failing close() must not mask whatever the
+        # caller was actually doing (usually its own teardown). The caller logs
+        # the lifecycle ("last reader; SDK closed"); state is reset either way.
+        # But it is logged rather than dropped — a close() that did not take is
+        # exactly what leaves the SDK's joinable threads to std::terminate() the
+        # process on the way out, and silently discarding the reason turns that
+        # into an unexplained crash at exit.
+        try:
             _xrt.close()
+        except Exception as e:  # pragma: no cover — teardown-only path
+            logger.warning(f"xrt.close() failed on release ({type(e).__name__}: {e}); SDK state reset anyway")
         _xrt = None
         return True
 
@@ -146,8 +155,16 @@ def shutdown() -> None:
     global _xrt, _holders
     with _lock:
         if _xrt is not None:
-            with contextlib.suppress(Exception):  # pragma: no cover
+            if _holders:
+                # Reached atexit with holders still registered: someone skipped
+                # its release(). Harmless here (we close anyway) but it means a
+                # disconnect path did not run, so say so while there is still a
+                # log to say it in.
+                logger.debug(f"atexit shutdown with {_holders} hold(s) outstanding; closing SDK anyway")
+            try:
                 _xrt.close()
+            except Exception as e:  # pragma: no cover — exit-only path
+                logger.warning(f"xrt.close() failed at shutdown ({type(e).__name__}: {e})")
         _xrt = None
         _holders = 0
 

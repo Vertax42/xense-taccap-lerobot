@@ -45,6 +45,9 @@ import numpy as np
 
 from lerobot.robots.taccap_gripper.ee_transform import tracker_to_tcp
 from lerobot.teleoperators.pico4.tracker import Pico4TrackerReader
+from lerobot.utils.robot_utils import get_logger
+
+logger = get_logger("check_tracker")
 
 
 def main() -> None:
@@ -61,16 +64,16 @@ def main() -> None:
 
     if args.side is None:
         ee_pos, ee_quat = np.zeros(3), np.array([1.0, 0.0, 0.0, 0.0])
-        print("[check] no --side: transform is identity, 'ee' will track 'raw'.")
+        logger.info("no --side: transform is identity, 'ee' will track 'raw'.")
     else:
         ee_pos, ee_quat = tracker_to_tcp(args.side)
         offset_mm = float(np.linalg.norm(ee_pos)) * 1e3
-        print(f"[check] side={args.side} tracker→TCP pos={ee_pos.tolist()} quat={ee_quat.tolist()}")
-        print(f"[check] TCP sits {offset_mm:.2f} mm from the tracker origin.")
+        logger.info(f"side={args.side} tracker→TCP pos={ee_pos.tolist()} quat={ee_quat.tolist()}")
+        logger.info(f"TCP sits {offset_mm:.2f} mm from the tracker origin.")
 
     reader = Pico4TrackerReader(tracker_sn=args.tracker_sn, tracker_to_ee_pos=ee_pos, tracker_to_ee_quat=ee_quat)
     reader.connect()
-    print("[check] tracker connected. Press Ctrl+C to stop.")
+    logger.info("Tracker connected. Press Ctrl+C to stop.")
 
     t_start = time.monotonic()
     try:
@@ -90,8 +93,8 @@ def main() -> None:
                     flush=True,
                 )
             if args.duration > 0 and t >= args.duration:
-                print()
-                print(f"[check] reached duration={args.duration}s")
+                print()  # close the in-place status line before logging
+                logger.info(f"Reached duration={args.duration}s")
                 break
             time.sleep(0.1)
     except KeyboardInterrupt:

@@ -49,6 +49,9 @@ import pprint
 import time
 
 from lerobot.robots.taccap_gripper import TaccapGripper, TaccapGripperConfig
+from lerobot.utils.robot_utils import get_logger
+
+logger = get_logger("taccap_example")
 
 
 def main() -> None:
@@ -91,10 +94,10 @@ def main() -> None:
 
     robot = TaccapGripper(cfg)
 
-    print("[example] observation features:")
-    pprint.pprint(robot.observation_features)
-    print("[example] action features:")
-    pprint.pprint(robot.action_features)
+    # pformat, not pprint: keeps the schema dump inside the log record so it
+    # reaches the session file along with everything else.
+    logger.info(f"observation features:\n{pprint.pformat(robot.observation_features)}")
+    logger.info(f"action features:\n{pprint.pformat(robot.action_features)}")
 
     robot.connect()
     try:

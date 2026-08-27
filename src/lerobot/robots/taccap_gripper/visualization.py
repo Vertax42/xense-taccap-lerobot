@@ -32,7 +32,6 @@ rotation matrix (``rotation_6d_to_quaternion``). When no ``tcp.*`` keys are pres
 
 from __future__ import annotations
 
-import logging
 from collections import deque
 from typing import Any
 
@@ -40,9 +39,9 @@ import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
 
-from lerobot.utils.robot_utils import rotation_6d_to_quaternion
+from lerobot.utils.robot_utils import get_logger, rotation_6d_to_quaternion
 
-logger = logging.getLogger(__name__)
+logger = get_logger("taccap_viz")
 
 # Per-side marker / trail colour. Empty key = the single unprefixed unit.
 _SIDE_COLOR = {

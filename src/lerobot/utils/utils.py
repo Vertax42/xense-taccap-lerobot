@@ -182,10 +182,19 @@ def init_logging(
 
     # Console logging (main process only)
     if is_main_process:
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(formatter)
-        console_handler.setLevel(console_level.upper())
-        logger.addHandler(console_handler)
+        # Xense fork: stdlib records go through spdlog so the whole process —
+        # upstream lerobot, xensesdk, libav and our own get_logger() callers —
+        # shares one console format, one stream and one session file. The
+        # StreamHandler below is the fallback for an environment without spdlog.
+        try:
+            from lerobot.utils.robot_utils import install_stdlib_bridge
+
+            install_stdlib_bridge(console_level=console_level)
+        except Exception:
+            console_handler = logging.StreamHandler()
+            console_handler.setFormatter(formatter)
+            console_handler.setLevel(console_level.upper())
+            logger.addHandler(console_handler)
     else:
         # Suppress console output for non-main processes
         logger.addHandler(logging.NullHandler())
