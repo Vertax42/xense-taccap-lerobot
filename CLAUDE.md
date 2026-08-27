@@ -195,6 +195,16 @@ it, and the stalls that matter are shorter. Measured on the rig: 8-stream nvenc
 warm-up and episode save starve the tactile capture threads for 0.3–0.9s, i.e.
 ~10–25 duplicate frames, every episode boundary.
 
+Reporting is gated on a dataset actually being written (`set_capture_recording`,
+bracketed per episode in `lerobot_record.py`). Encoder warm-up, the reset phase
+and the save/encode gap all stall captures but record nothing, so a stall there
+damages nothing and warning about it is noise nobody can act on — in the measured
+run, all eight onset warnings of the session fired outside an episode. The gate
+is process-global on purpose: a camera is a leaf with no reference back to the
+session, and "is a dataset being written right now" is a property of the process.
+It defaults **open**, so a consumer that never manages it (teleoperate, ad-hoc
+scripts) still gets the diagnostic.
+
 The first stall after a clean window is logged as it happens; the rest of the
 window folds into one summary carrying the worst stall's **wall-clock time** —
 that is what tells you whether it landed inside an episode or in the gap between
