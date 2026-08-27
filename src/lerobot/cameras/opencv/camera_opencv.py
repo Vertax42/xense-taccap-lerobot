@@ -35,7 +35,7 @@ import cv2  # type: ignore  # TODO: add type stubs for OpenCV
 
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 from lerobot.utils.errors import DeviceNotConnectedError
-from lerobot.utils.robot_utils import SlowCallMonitor
+from lerobot.utils.robot_utils import CaptureStallMonitor
 
 from ..camera import Camera
 from ..utils import get_cv2_rotation
@@ -144,9 +144,10 @@ class OpenCVCamera(Camera):
             config: The configuration settings for the camera.
         """
         super().__init__(config)
-        # Per-read timing is reported only when it overruns the frame budget;
-        # see SlowCallMonitor for why the old per-read debug line is gone.
-        self._slow_read = SlowCallMonitor(logger, self)
+        # Background-capture stalls are reported only when they overrun the frame
+        # budget; see CaptureStallMonitor for why the old per-read debug line is
+        # gone and what a stall actually costs downstream.
+        self._capture_stall = CaptureStallMonitor(logger, self)
 
         self.config = config
         self.index_or_path = config.index_or_path
@@ -507,8 +508,6 @@ class OpenCVCamera(Camera):
             ValueError: If an invalid `color_mode` is requested.
         """
 
-        start_time = time.perf_counter()
-
         if color_mode is not None:
             logger.warning(f"{self} read() color_mode parameter is deprecated and will be removed in future versions.")
 
@@ -516,12 +515,7 @@ class OpenCVCamera(Camera):
             raise RuntimeError(f"{self} read thread is not running.")
 
         self.new_frame_event.clear()
-        frame = self.async_read(timeout_ms=10000)
-
-        read_duration_ms = (time.perf_counter() - start_time) * 1e3
-        self._slow_read.observe(read_duration_ms, 1e3 / self.fps if self.fps else None)
-
-        return frame
+        return self.async_read(timeout_ms=10000)
 
     def _postprocess_image(self, image: NDArray[Any]) -> NDArray[Any]:
         """
@@ -578,9 +572,13 @@ class OpenCVCamera(Camera):
         failure_count = 0
         while not self.stop_event.is_set():
             try:
+                loop_start = time.perf_counter()
                 raw_frame = self._read_from_hardware()
                 processed_frame = self._postprocess_image(raw_frame)
                 capture_time = time.perf_counter()
+                # The background capture is what the record loop pays for in
+                # stale frames; read() below just hands back the cached one.
+                self._capture_stall.observe((capture_time - loop_start) * 1e3, 1e3 / self.fps if self.fps else None)
 
                 with self.frame_lock:
                     self.latest_frame = processed_frame

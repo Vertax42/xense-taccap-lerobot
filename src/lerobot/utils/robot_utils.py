@@ -276,22 +276,34 @@ def install_stdlib_bridge(console_level: str | None = None, quiet_third_party: b
     return handler
 
 
-class SlowCallMonitor:
-    """Report calls that overrun a time budget, instead of logging every call.
+class CaptureStallMonitor:
+    """Report stalls in a camera's **background** capture loop.
 
     Replaces the per-call ``logger.debug(f"{self} read took: {ms:.1f}ms")`` that
-    each camera backend used to emit. On a bimanual rig that is six cameras at
-    30 Hz — 180 records a second, ~1 MiB a minute — none of which reaches the
-    console (the sink filters at INFO) and all of which reaches the DEBUG-level
-    session file, where it buries everything else. The number was also only ever
-    interesting when it was large, and the record loop already prints a
-    per-camera breakdown when a frame overruns (``[slow_frame] ... top_obs=``).
+    each backend used to emit. On a bimanual rig that is six cameras at 30 Hz —
+    180 records a second, ~1 MiB a minute — none of which reaches the console
+    (the sink filters at INFO) and all of which reaches the DEBUG-level session
+    file, where it buries everything else. The number was only ever interesting
+    when it was large.
 
-    What is left is the part worth a log line: a call that blew its budget. The
-    first overrun in a window is logged as it happens, so onset keeps a
-    timestamp; the rest of the window is counted and folded into one summary, so
-    a camera that is persistently slow costs one line per window rather than one
-    per frame.
+    **What a stall here means.** Every backend runs a background thread that
+    captures into ``latest_frame``; the record loop takes frames with
+    ``async_read()``, which returns that cached frame **without blocking**. So a
+    slow capture never stalls the record loop — it means the loop keeps being
+    handed the *same* frame, and roughly ``duration / budget`` recorded frames
+    are duplicates of one image. That is a data-quality problem, not a timing
+    one, and the messages below say so: reading them as "the loop was blocked"
+    sends you looking in the wrong place.
+
+    Nothing else sees this. ``[slow_frame]`` in the record loop cannot — the loop
+    is not blocked. ``CameraReadGuard``'s freeze detection cannot either: its
+    ``CAM_FREEZE_TIMEOUT_S`` is 2s, deliberately well above any frame interval so
+    a slow sensor never trips it, and the stalls that matter here are shorter.
+
+    The first stall in a window is logged as it happens, so onset keeps a
+    timestamp; the rest of the window is counted and folded into one summary,
+    which carries the worst stall's own wall-clock time — that is what tells you
+    whether it landed inside an episode or in the encode/save gap between two.
 
     ``str(owner)`` is resolved only when a warning is actually emitted — building
     it per call is the cost this class exists to avoid.
@@ -302,7 +314,7 @@ class SlowCallMonitor:
         logger: Any,
         owner: Any = None,
         *,
-        label: str = "read",
+        label: str = "capture",
         overrun_factor: float = 2.0,
         min_overrun_ms: float = 5.0,
         report_every_s: float = 10.0,
@@ -317,14 +329,15 @@ class SlowCallMonitor:
         self._total = 0
         self._slow = 0
         self._worst_ms = 0.0
-        # Whether the window that just closed had overruns. Gates the onset
-        # line: a camera that is slow window after window should cost one
-        # summary each, not a summary plus a "first overrun" that repeats it.
+        self._worst_at = ""
+        self._worst_stale = 0
+        # Whether the window that just closed had stalls. Gates the onset line: a
+        # camera stalling window after window should cost one summary each, not a
+        # summary plus a "first stall" that repeats it.
         self._was_slow = False
-        # Overruns already reported individually this window (0 or 1). The
-        # summary covers whatever this does not, so a camera dropping exactly
-        # one frame per window keeps being reported instead of going quiet
-        # after its first onset line.
+        # Stalls already reported individually this window (0 or 1). The summary
+        # covers whatever this does not, so a camera stalling exactly once per
+        # window keeps being reported instead of going quiet after its onset line.
         self._announced = 0
 
     def _prefix(self) -> str:
@@ -345,10 +358,12 @@ class SlowCallMonitor:
         self._total = 0
         self._slow = 0
         self._worst_ms = 0.0
+        self._worst_at = ""
+        self._worst_stale = 0
         self._announced = 0
 
     def observe(self, duration_ms: float, budget_ms: float | None = None) -> None:
-        """Record one call's duration and warn if the budget is clearly blown."""
+        """Record one capture's duration and warn if the budget is clearly blown."""
         threshold_ms = self._threshold_ms(budget_ms)
         if threshold_ms is None:
             return
@@ -360,16 +375,22 @@ class SlowCallMonitor:
 
         if duration_ms > threshold_ms:
             self._slow += 1
-            self._worst_ms = max(self._worst_ms, duration_ms)
-            # Onset only: the first overrun after a clean window, so the moment
+            # Frames a non-blocking consumer was handed the stale image for.
+            stale = max(1, int(duration_ms / budget_ms))
+            if duration_ms > self._worst_ms:
+                self._worst_ms = duration_ms
+                self._worst_stale = stale
+                self._worst_at = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            # Onset only: the first stall after a clean window, so the moment
             # things went wrong keeps its own timestamp. While it stays wrong,
             # the window summary below is the whole report.
             if self._slow == 1 and not self._was_slow:
                 self._announced = 1
                 self._logger.warning(
-                    f"{self._prefix()}slow {self._label}: {duration_ms:.1f}ms "
-                    f"(budget {budget_ms:.1f}ms, warn over {threshold_ms:.1f}ms); "
-                    f"further overruns are summarised every {self._report_every_s:g}s, not logged one by one"
+                    f"{self._prefix()}background {self._label} stalled {duration_ms:.1f}ms "
+                    f"({stale}x the {budget_ms:.1f}ms budget) — async_read() served the same frame "
+                    f"throughout, so ~{stale} recorded frames repeat one image. "
+                    f"Further stalls are summarised every {self._report_every_s:g}s, not logged one by one"
                 )
 
         elapsed = now - self._window_start
@@ -377,7 +398,8 @@ class SlowCallMonitor:
             if self._slow > self._announced:
                 self._logger.warning(
                     f"{self._prefix()}{self._slow}/{self._total} {self._label}s over "
-                    f"{threshold_ms:.1f}ms in the last {elapsed:.1f}s (worst {self._worst_ms:.1f}ms)"
+                    f"{threshold_ms:.1f}ms in the last {elapsed:.1f}s "
+                    f"(worst {self._worst_ms:.1f}ms at {self._worst_at}, ~{self._worst_stale} frames stale)"
                 )
             self._reset(now)
 
