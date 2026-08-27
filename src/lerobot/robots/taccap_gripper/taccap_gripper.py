@@ -344,6 +344,15 @@ class TaccapGripper(Robot):
 
         return features
 
+    def stale_frame_report(self) -> list[str]:
+        """Per-camera stale-frame lines for the episode just recorded, then reset.
+
+        Delegates to :class:`CameraReadGuard`, which already computes the
+        freshness predicate for its freeze detection. See its docstring for why
+        this is object identity and not a pixel comparison.
+        """
+        return self._cam_guard.stale_frame_report()
+
     @cached_property
     def display_features(self) -> dict[str, type | tuple]:
         """Rerun-facing schema: ``observation_features`` with each tactile camera's

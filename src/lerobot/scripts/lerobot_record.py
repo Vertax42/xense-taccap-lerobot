@@ -602,6 +602,22 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 finally:
                     set_capture_recording(False)
 
+                # How much of what just went to disk is duplicated frames. The
+                # guard counts this by frame-object identity while reading (see
+                # CameraReadGuard.stale_frame_report), so it is exact and costs
+                # nothing: a long run is a capture stall, many one-frame runs are
+                # the beat between the sensor's capture loop and this one, both
+                # free-running at the same nominal rate.
+                # INFO, not WARNING, on purpose: some duplication is expected
+                # (the beat between two unsynchronised 30 Hz loops) and warning
+                # on it every episode is the noise this whole change removed.
+                # Promote to a warning once a rig's baseline is known and there
+                # is a defensible threshold — there is not one yet.
+                stale_report = getattr(robot, "stale_frame_report", None)
+                if callable(stale_report):
+                    for line in stale_report():
+                        logger.info(f"[stale_frames] episode {dataset.num_episodes}{line}")
+
                 # Execute a few seconds without recording to give time to manually reset the environment
                 # Skip reset for the last episode to be recorded
                 if not events["stop_recording"] and (
