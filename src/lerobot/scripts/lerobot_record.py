@@ -346,12 +346,21 @@ def self_driven_record_loop(
         start_loop_t = time.perf_counter()
         refresh_listener_events(events)
 
-        if events["stop_recording"]:
-            logger.info("Stop recording requested, exiting record loop early")
-            break
-        if events["rerecord_episode"]:
-            logger.info("Re-record episode requested, exiting record loop early")
-            break
+        # `exit_early` is the *only* break condition, as in upstream's
+        # `record_loop`, and the loop that breaks on it always consumes it.
+        # `stop_recording` and `rerecord_episode` are intent flags owned by the
+        # caller; this loop neither breaks on them nor clears them.
+        #
+        # Every keypress that should end this loop sets `exit_early` too
+        # (`control_utils.on_press`: left also sets `rerecord_episode`, ESC also
+        # sets `stop_recording`), so one condition is enough — and checking the
+        # intent flags instead is actively wrong. Breaking on `rerecord_episode`
+        # left `exit_early` unconsumed, and the reset phase is this same loop with
+        # `dataset=None`, so it broke in its own first iteration: the retake got
+        # 0s of reset while "Reset the environment" was still playing, and the
+        # operator put the scene back *into* the next take. Measured 2.35s from
+        # that announcement to "Recording episode 56". See CLAUDE.md →
+        # "The event contract".
         if events["exit_early"]:
             events["exit_early"] = False
             logger.info("Exit early requested, exiting record loop early")
@@ -577,6 +586,14 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 events["exit_early"] = False
                 events["rerecord_episode"] = False
 
+                # Non-blocking, matching `lerobot-xense`: the phrase plays over
+                # the take's first second rather than in front of it. Waiting for
+                # it (`blocking=True`) opens a ~1s window in which nothing is
+                # recorded but the operator, hearing the announcement end, has
+                # already started moving — it loses the beginning of the
+                # demonstration, and puts speech-dispatcher's latency inside the
+                # record loop. A second of lead-in at the head of an episode costs
+                # nothing.
                 log_say(f"Recording episode {dataset.num_episodes}", cfg.play_sounds)
 
                 # Fresh breadcrumb trail per episode so trajectories don't bleed
@@ -620,6 +637,11 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
 
                 # Execute a few seconds without recording to give time to manually reset the environment
                 # Skip reset for the last episode to be recorded
+                #
+                # `or events["rerecord_episode"]` — a retake of the *last* episode
+                # still gets reset time — only became reachable once the loop
+                # stopped breaking on that flag. It used to enter the reset and
+                # leave again in the same millisecond.
                 if not events["stop_recording"] and (
                     (recorded_episodes < cfg.dataset.num_episodes - 1) or events["rerecord_episode"]
                 ):
