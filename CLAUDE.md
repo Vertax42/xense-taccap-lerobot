@@ -285,16 +285,71 @@ an empty buffer — `You must add one or several frames with add_frame`. The
 session dies mid-collection, minutes after the press that caused it, which is
 what makes it hard to connect back to a key someone pressed.
 
-`rerecord_episode` has a related hole (the record loop breaks on it without
-clearing it) but that one is **self-correcting**: it short-circuits the reset
-too, so the empty buffer reaches `clear_episode_buffer()` rather than
-`save_episode()` and the episode is just retried. It is cleared alongside anyway,
-to avoid announcing "Re-record episode" for an episode that never started.
-`stop_recording` is deliberately _not_ cleared: that one should survive the gap.
+`rerecord_episode` is cleared on the same line for a milder version of the same
+problem. A **left** arrow in that gap is self-correcting as far as the buffer
+goes — it sets `exit_early` too, so the next episode ends at zero frames, but the
+empty buffer then reaches `clear_episode_buffer()` rather than `save_episode()`
+and the take is simply retried. What it does without the clear is announce
+"Re-record episode" for an episode that never started, after sitting through a
+full `reset_time_s` for a scene nobody disturbed. `stop_recording` is deliberately
+_not_ cleared: that one should survive the gap.
 
-Upstream lerobot and the sister repo `lerobot-xense` both carry this hole — the
-event-flag lifecycle there is byte-identical to ours — so the clear is a
-deliberate divergence, not a fork-local quirk being papered over.
+Upstream lerobot and the sister repo `lerobot-xense` both carry the `exit_early`
+hole, so the clear is a deliberate divergence, not a fork-local quirk being
+papered over. Our loop's break conditions have since diverged further — see "The
+event contract" below.
+
+### The event contract — one break signal, two intent flags
+
+A record loop sees three flags and must treat them differently:
+
+| flag               | meaning                    | consumed by                                 |
+| ------------------ | -------------------------- | ------------------------------------------- |
+| `exit_early`       | leave **this** loop now    | the loop that breaks on it — always         |
+| `rerecord_episode` | discard the take, retry it | `record()`, after the reset                 |
+| `stop_recording`   | end the session            | `record()`'s outer `while` — never the loop |
+
+So `self_driven_record_loop` breaks on `exit_early` and on **nothing else**,
+which is upstream's `record_loop` exactly. Every keypress that should end it sets
+`exit_early` too (`control_utils.on_press`), so one condition covers all three —
+left arrow ends the loop _and_ leaves `rerecord_episode` standing for the caller,
+which is the whole point of an intent flag.
+
+Checking the intent flags as well is not merely redundant, it is how the bug got
+in. Nothing ever sets `stop_recording` on its own either — ESC sets both, the
+teleop refresh (`control_utils.refresh_events_from_teleop`) writes only
+`go_start`, and the `device_lost` path sets it and breaks on the next line — so a
+`stop_recording` branch here is dead code whose only effect is which line gets
+logged. Do not add one back.
+
+Breaking on `rerecord_episode` instead is what put reset activity _inside_
+episodes. That break left `exit_early` unconsumed; the reset phase is this same
+loop with `dataset=None`, so it broke in its own first iteration and the retake
+got **0 seconds** of reset while `log_say("Reset the environment")` was still
+playing (`spd-say` is non-blocking — "Reset the environment" / "Re-record
+episode" / "Recording episode N" simply queue up). Measured 2.35s from that
+announcement to "Recording episode 56", twice in one session. Nothing from the
+reset phase is ever written to the dataset; the contamination is entirely the
+operator putting the scene back while the retake records them doing it.
+
+The `or events["rerecord_episode"]` in the skip-reset condition — there so a
+retake of the _last_ episode still gets reset time — was dead for the same
+reason, and needed no change of its own to come back to life.
+
+`"Recording episode N"` stays **non-blocking**, as in `lerobot-xense`. Making it
+`blocking=True` looks like part of the same fix and is the wrong direction: it
+opens a ~1s window in which nothing is recorded while the operator, hearing the
+announcement finish, has already started moving — it drops the beginning of the
+demonstration and puts speech-dispatcher's latency inside the record loop. The
+phrase playing over the take's first second is correct; a second of lead-in at
+the head of an episode costs nothing.
+
+`lerobot-xense` has the same defect, but only on its **RT** path:
+`run_rt_record_loop` checks `rerecord_episode` before `exit_early` and breaks
+without consuming it, so the reset (the generic `record_loop`, whose first check
+is `exit_early`) exits at once. Its non-RT robots run `record_loop` for both
+phases and that one ignores `rerecord_episode` entirely, so they get a real reset
+by accident. Unfixed there as of `2b737e45`.
 
 ## Recorded files land 0600 if they come from a temp file
 
