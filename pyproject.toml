@@ -210,6 +210,14 @@ ignore = [
     "T201", # Print statement found
     "T203", # Pprint statement found
     "B008", # Perform function call in argument defaults
+    # UP042 wants `class X(str, Enum)` rewritten as `StrEnum`. That is not a
+    # rename: `str(ColorMode.RGB)` is "ColorMode.RGB" today and would become
+    # "rgb", and the same goes for f-strings. These enums are config values that
+    # get written out, so the rewrite can silently change what lands on disk.
+    # ruff marks the fix unsafe for exactly this reason. Converting them is a
+    # deliberate change with its own verification, not a side effect of a
+    # linter bump.
+    "UP042", # str+Enum -> StrEnum changes str()/format() output
 ]
 
 [tool.ruff.lint.per-file-ignores]
