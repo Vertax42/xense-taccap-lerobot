@@ -600,3 +600,47 @@ def test_aggregate_already_merged_dataset(tmp_path, lerobot_dataset_factory):
 
     # This would raise FileNotFoundError before the fix
     assert_dataset_iteration_works(ds_abc)
+
+
+def test_video_files_rotate_at_the_size_limit(tmp_path, lerobot_dataset_factory):
+    """Every merged video file must stay under `video_files_size_in_mb`.
+
+    The existing low-threshold test only asserts that *more than one* video file
+    exists, which a fixture with several camera keys satisfies without rotating at
+    all: disabling rotation outright still passed it. So it did not cover the
+    branch, and a rewrite of that branch could not be trusted against it.
+
+    Rotation is what keeps a merged dataset partially downloadable -- a single
+    unbounded file per camera would force `allow_patterns` users to fetch
+    everything.
+    """
+    # The fixture writes ~0.043 MB per source video, so this limit sits above one
+    # source and below two: rotation must happen exactly once per camera key.
+    # (The existing low-threshold test uses 0.1, which two sources never reach --
+    # part of why it never exercised this branch.)
+    limit_mb = 0.06
+    sources = [
+        lerobot_dataset_factory(
+            root=tmp_path / f"rot_{i}", repo_id=f"{DUMMY_REPO_ID}_rot_{i}", total_episodes=6, total_frames=120
+        )
+        for i in range(2)
+    ]
+
+    aggregate_datasets(
+        repo_ids=[ds.repo_id for ds in sources],
+        aggr_repo_id=f"{DUMMY_REPO_ID}_rot_aggr",
+        roots=[ds.root for ds in sources],
+        aggr_root=tmp_path / "rot_aggr",
+        video_files_size_in_mb=limit_mb,
+    )
+
+    per_key = {}
+    for path in (tmp_path / "rot_aggr" / "videos").rglob("*.mp4"):
+        per_key.setdefault(path.parent.parent.name, []).append(path)
+
+    assert per_key, "the fixture produced no videos, so this test proves nothing"
+    for key, files in per_key.items():
+        assert len(files) > 1, f"{key} never rotated at a {limit_mb} MB limit"
+        for path in files[:-1]:
+            size_mb = path.stat().st_size / 1e6
+            assert size_mb < limit_mb * 2, f"{path.name} is {size_mb:.3f} MB, limit is {limit_mb}"
