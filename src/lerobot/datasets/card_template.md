@@ -7,11 +7,18 @@
 
 This dataset was created using [LeRobot](https://github.com/huggingface/lerobot).
 
+<img src="assets/footer.png" width="100%" alt="Xense Robotics"/>
+
+<p align="center"><em>Xense Robotics dataset overview: representative frames from
+TacVerse's bimanual visuo-tactile demonstrations.</em></p>
+
+<img src="assets/teaser.png" width="100%" alt="TacVerse collection and processing pipeline"/>
+
+<p align="center"><em>TacVerse is collected with XTac-UMI-G1 handheld grippers,
+processed by TacFlow-Engine, and released as standard LeRobot datasets.</em></p>
+
 {% if repo_id is defined and repo_id %}
-<a class="flex" href="https://huggingface.co/spaces/lerobot/visualize_dataset?path={{ repo_id }}">
-<img class="block dark:hidden" src="https://huggingface.co/datasets/huggingface/badges/resolve/main/visualize-this-dataset-xl.svg"/>
-<img class="hidden dark:block" src="https://huggingface.co/datasets/huggingface/badges/resolve/main/visualize-this-dataset-xl-dark.svg"/>
-</a>
+Explore this dataset with the [LeRobot Dataset Viewer](https://huggingface.co/spaces/lerobot/visualize_dataset?path={{ repo_id }}).
 {% endif %}
 
 ## Dataset Description
@@ -25,6 +32,15 @@ This dataset was created using [LeRobot](https://github.com/huggingface/lerobot)
 ## Dataset Structure
 
 {{ dataset_structure | default("[More Information Needed]", true)}}
+
+## Sensor key map
+
+<p align="center">
+<img src="assets/sensor_key_map.png" width="760" alt="Sensor key map — each image stream keyed to its physical mount"/>
+</p>
+
+<p align="center"><em>Tactile keys map to fingertip sensors; wrist keys to gripper cameras;
+head keys to the headset's stereo eyes.</em></p>
 
 ## Citation
 

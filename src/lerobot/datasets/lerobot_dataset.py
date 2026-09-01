@@ -58,6 +58,7 @@ from lerobot.datasets.utils import (
     get_safe_version,
     hf_transform_to_torch,
     is_valid_version,
+    install_dataset_card_assets,
     load_episodes,
     load_info,
     load_nested_dataset,
@@ -902,6 +903,10 @@ class LeRobotDataset(torch.utils.data.Dataset):
             ignore_patterns.append("videos/")
 
         hub_api = HfApi()
+        # Keep generated cards self-contained: the template references these
+        # figures with relative paths, so they must be present before the
+        # dataset folder is uploaded.
+        install_dataset_card_assets(self.root)
         hub_api.create_repo(
             repo_id=self.repo_id,
             private=private,

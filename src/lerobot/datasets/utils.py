@@ -17,6 +17,7 @@ import contextlib
 import importlib.resources
 import json
 import logging
+import shutil
 from collections import deque
 from collections.abc import Iterable, Iterator
 from pathlib import Path
@@ -53,6 +54,32 @@ DEFAULT_VIDEO_FILE_SIZE_IN_MB = 200  # Max size per file
 
 INFO_PATH = "meta/info.json"
 STATS_PATH = "meta/stats.json"
+
+CARD_ASSETS = ("footer.png", "teaser.png", "sensor_key_map.png")
+
+
+def install_dataset_card_assets(dataset_root: str | Path) -> list[str]:
+    """Install TacVerse card figures into a dataset before Hub upload.
+
+    Keeping the source assets in the Python package makes generated cards
+    self-contained: their relative ``assets/...`` links work on HF and in local
+    snapshots, without requiring a separate checkout of TacFlow.
+    """
+    root = Path(dataset_root)
+    target = root / "assets"
+    target.mkdir(parents=True, exist_ok=True)
+    source_root = importlib.resources.files("lerobot.datasets").joinpath("card_assets")
+    copied: list[str] = []
+    for name in CARD_ASSETS:
+        resource = source_root.joinpath(name)
+        with importlib.resources.as_file(resource) as src:
+            if not src.is_file():
+                raise FileNotFoundError(f"Missing dataset card asset: {src}")
+            dst = target / name
+            if not dst.is_file() or dst.stat().st_size != src.stat().st_size:
+                shutil.copy2(src, dst)
+                copied.append(name)
+    return copied
 
 EPISODES_DIR = "meta/episodes"
 DATA_DIR = "data"
