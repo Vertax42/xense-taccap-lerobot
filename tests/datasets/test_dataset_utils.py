@@ -20,7 +20,12 @@ from datasets import Dataset
 from huggingface_hub import DatasetCard
 
 from lerobot.datasets.push_dataset_to_hub.utils import calculate_episode_data_index
-from lerobot.datasets.utils import combine_feature_dicts, create_lerobot_dataset_card, hf_transform_to_torch
+from lerobot.datasets.utils import (
+    combine_feature_dicts,
+    create_lerobot_dataset_card,
+    hf_transform_to_torch,
+    install_dataset_card_assets,
+)
 from lerobot.utils.constants import ACTION, OBS_IMAGES
 
 
@@ -41,6 +46,15 @@ def test_with_tags():
     tags = ["tag1", "tag2"]
     card = create_lerobot_dataset_card(tags=tags)
     assert card.data.tags == ["LeRobot", "tag1", "tag2"]
+
+
+def test_tacverse_card_uses_compact_viewer_link_and_figures(tmp_path):
+    card = create_lerobot_dataset_card(repo_id="TacVerse/demo", license="cc-by-sa-4.0")
+    assert "assets/footer.png" in card.text
+    assert "assets/teaser.png" in card.text
+    assert "assets/sensor_key_map.png" in card.text
+    assert "visualize-this-dataset-xl" not in card.text
+    assert install_dataset_card_assets(tmp_path) == ["footer.png", "teaser.png", "sensor_key_map.png"]
 
 
 def test_calculate_episode_data_index():

@@ -198,6 +198,9 @@ lerobot-annotate-reward = "lerobot.scripts.lerobot_annotate_reward:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"lerobot.datasets" = ["card_template.md", "card_assets/*.png"]
+
 [tool.ruff]
 target-version = "py312"
 line-length = 120
