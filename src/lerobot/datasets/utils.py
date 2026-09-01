@@ -81,6 +81,7 @@ def install_dataset_card_assets(dataset_root: str | Path) -> list[str]:
                 copied.append(name)
     return copied
 
+
 EPISODES_DIR = "meta/episodes"
 DATA_DIR = "data"
 VIDEO_DIR = "videos"
