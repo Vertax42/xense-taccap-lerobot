@@ -736,6 +736,11 @@ class _CameraEncoderThread(threading.Thread):
         self.frame_shape = tuple(frame_shape) if frame_shape is not None else None
         self.ready_event = ready_event if ready_event is not None else threading.Event()
         self.init_error: Exception | None = None
+        # Per-frame cost on this thread, reported by StreamingVideoEncoder as
+        # one [encoder_summary] line per stream at episode end. A log from a
+        # machine nobody can reach has to say whether the encoders kept up.
+        self.encode_ms: list[float] = []
+        self.stats_ms: list[float] = []
 
     def _open_container(self, height: int, width: int):
         """Open the MP4 output container + codec context and signal readiness."""
@@ -813,22 +818,34 @@ class _CameraEncoderThread(threading.Thread):
                     height, width = frame_data.shape[:2]
                     container, output_stream = self._open_container(height, width)
 
-                # Encode frame with explicit timestamps
-                pil_img = Image.fromarray(frame_data)
-                video_frame = av.VideoFrame.from_image(pil_img)
+                # Encode frame with explicit timestamps.
+                # Straight from the numpy buffer: the old Image.fromarray() ->
+                # VideoFrame.from_image() round-trip measured 0.21 ms/frame against
+                # 0.04 ms here, which across 8 streams at 30 fps is ~50 ms/s of CPU
+                # spent only to hand the same pixels to PyAV. from_ndarray needs a
+                # C-contiguous buffer, which the CHW->HWC branch above does not
+                # produce, so normalise first — a no-op for the usual path, where
+                # the camera backends already return contiguous arrays.
+                if not frame_data.flags["C_CONTIGUOUS"]:
+                    frame_data = np.ascontiguousarray(frame_data)
+                t_encode = time.perf_counter()
+                video_frame = av.VideoFrame.from_ndarray(frame_data, format="rgb24")
                 video_frame.pts = frame_count
                 video_frame.time_base = Fraction(1, self.fps)
                 packet = output_stream.encode(video_frame)
                 if packet:
                     container.mux(packet)
+                self.encode_ms.append((time.perf_counter() - t_encode) * 1e3)
 
                 # Update stats with downsampled frame (per-channel stats like compute_episode_stats)
+                t_stats = time.perf_counter()
                 img_chw = frame_data.transpose(2, 0, 1)  # HWC -> CHW
                 img_downsampled = auto_downsample_height_width(img_chw)
                 # Reshape CHW to (H*W, C) for per-channel stats
                 channels = img_downsampled.shape[0]
                 img_for_stats = img_downsampled.transpose(1, 2, 0).reshape(-1, channels)
                 stats_tracker.update(img_for_stats)
+                self.stats_ms.append((time.perf_counter() - t_stats) * 1e3)
 
                 frame_count += 1
 
@@ -838,6 +855,19 @@ class _CameraEncoderThread(threading.Thread):
                 if packet:
                     container.mux(packet)
 
+            # Release everything that references the stream before closing the
+            # container, so the codec context deinits its encoder while the
+            # format context is still valid (a Packet keeps its Stream alive,
+            # and `packet` is the last such reference). Measured on the main
+            # thread with libsvtav1: +547 MB for six encoders when the stream
+            # outlived the container, +21 MB when it did not. Hygiene, not the
+            # fix — inside this worker thread the ordering alone changed
+            # nothing, because the growth that matters is the allocator's, not
+            # PyAV's: see StreamingVideoEncoder._return_freed_memory.
+            packet = None
+            video_frame = None
+            frame_data = None
+            output_stream = None
             if container is not None:
                 container.close()
 
@@ -852,6 +882,7 @@ class _CameraEncoderThread(threading.Thread):
 
         except Exception as e:
             logging.error(f"Encoder thread error: {e}")
+            output_stream = None  # same ordering as the normal path, same leak otherwise
             if container is not None:
                 with contextlib.suppress(Exception):
                     container.close()
@@ -880,9 +911,15 @@ class StreamingVideoEncoder:
         preset: int | None = None,
         queue_maxsize: int = 30,
         encoder_threads: int | None = None,
+        copy_frames: bool = True,
     ):
         self.fps = fps
         self.vcodec = resolve_vcodec(vcodec)
+        # feed_frame() snapshots each image before queueing it, in case the
+        # camera driver recycles its buffer. A caller whose backends allocate a
+        # fresh array per capture can turn that off: on an 8-stream rig the
+        # copies are ~7 MB per frame, measured 1.7 ms on the record thread.
+        self.copy_frames = copy_frames
         self.pix_fmt = pix_fmt
         self.g = g
         self.crf = crf
@@ -897,6 +934,13 @@ class StreamingVideoEncoder:
         self._ready_events: dict[str, threading.Event] = {}
         self._video_paths: dict[str, Path] = {}
         self._dropped_frames: dict[str, int] = {}
+        # How close each queue came to full, and how long feed_frame() stood
+        # blocked on it: put() waits up to 100 ms on a full queue before
+        # dropping, and that wait lands on the record thread. The loop's own
+        # summary sees it only as a fat `add` phase; this names the stream.
+        self._queue_hwm: dict[str, int] = {}
+        self._put_blocked_ms: dict[str, float] = {}
+        self._put_blocked_n: dict[str, int] = {}
         self._episode_active = False
 
     def start_episode(
@@ -932,6 +976,9 @@ class StreamingVideoEncoder:
                 raise ValueError("frame_shapes is missing entries for: " + ", ".join(sorted(missing)))
 
         self._dropped_frames.clear()
+        self._queue_hwm.clear()
+        self._put_blocked_ms.clear()
+        self._put_blocked_n.clear()
 
         for video_key in video_keys:
             frame_queue: queue.Queue = queue.Queue(maxsize=self.queue_maxsize)
@@ -1010,7 +1057,17 @@ class StreamingVideoEncoder:
             raise RuntimeError(f"Encoder thread for {video_key} is not alive")
 
         try:
-            self._frame_queues[video_key].put(image.copy(), timeout=0.1)
+            payload = image.copy() if self.copy_frames else image
+            frame_queue = self._frame_queues[video_key]
+            depth = frame_queue.qsize()
+            if depth > self._queue_hwm.get(video_key, 0):
+                self._queue_hwm[video_key] = depth
+            t_put = time.perf_counter()
+            frame_queue.put(payload, timeout=0.1)
+            blocked_ms = (time.perf_counter() - t_put) * 1e3
+            if blocked_ms >= 1.0:
+                self._put_blocked_ms[video_key] = self._put_blocked_ms.get(video_key, 0.0) + blocked_ms
+                self._put_blocked_n[video_key] = self._put_blocked_n.get(video_key, 0) + 1
         except queue.Full:
             self._dropped_frames[video_key] = self._dropped_frames.get(video_key, 0) + 1
             count = self._dropped_frames[video_key]
@@ -1063,10 +1120,63 @@ class StreamingVideoEncoder:
                 except queue.Empty:
                     logging.error(f"No result from encoder thread for {video_key}")
                     results[video_key] = (self._video_paths[video_key], None)
+            self._log_episode_summary()
             return results
         finally:
             self._cleanup()
             self._episode_active = False
+            self._return_freed_memory()
+
+    @staticmethod
+    def _return_freed_memory() -> None:
+        """Hand the memory the encoder threads just freed back to the OS.
+
+        Every episode starts fresh encoder threads, and glibc gives a new
+        thread a new malloc arena (up to 8 x cores of them). libsvtav1
+        allocates a few hundred MB per encoder; when the thread ends that
+        memory is *freed* — into that thread's arena, where it sits, because
+        the next episode's threads land in other arenas and nothing ever
+        reuses it. gc.collect() cannot help: nothing is reachable. Measured,
+        six 400x700 SVT streams: RSS 2.4 -> 6.6 GB over six 5-second episodes
+        (~1.3 GB per episode, linear); nvenc and libx264 flat. On a 16 GB
+        machine without a GPU a normal session reaches swap inside an hour and,
+        from the record loop, that reads as overruns.
+
+        ``malloc_trim(0)`` walks every arena and returns its free pages: the
+        same six episodes then hold at ~0.9 GB, at ~55 ms per call — paid here,
+        in the gap between episodes, never inside the loop. Capping arenas
+        (``MALLOC_ARENA_MAX``) only slows the growth (plateau ~3.9 GB) and is
+        process-global; ``encoder_threads=1`` shrinks the working set but
+        still creeps. Linux/glibc only; elsewhere this is a no-op.
+        """
+        try:
+            import ctypes
+
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except (OSError, AttributeError):
+            pass
+
+    def _log_episode_summary(self) -> None:
+        """One [encoder_summary] line per stream: did this encoder keep up?
+
+        Read together with the record loop's [loop_summary]: encode p99 near or
+        above the frame period, a queue high-water mark near its maximum, or any
+        blocked/dropped puts mean the encoder side is what the loop is paying
+        for. All flat while the loop still overruns means look elsewhere.
+        """
+        for video_key, thread in self._threads.items():
+            enc = thread.encode_ms
+            if not enc:
+                continue
+            stats = thread.stats_ms
+            logging.info(
+                f"[encoder_summary] {video_key}: {len(enc)} frames, encode ms "
+                f"p50={np.percentile(enc, 50):.1f} p99={np.percentile(enc, 99):.1f} max={max(enc):.1f}, "
+                f"stats ms p99={np.percentile(stats, 99) if stats else 0:.2f}, "
+                f"queue high-water {self._queue_hwm.get(video_key, 0)}/{self.queue_maxsize}, "
+                f"put blocked {self._put_blocked_n.get(video_key, 0)}x/{self._put_blocked_ms.get(video_key, 0.0):.0f}ms, "
+                f"dropped {self._dropped_frames.get(video_key, 0)}"
+            )
 
     def cancel_episode(self) -> None:
         """Cancel the current episode, stopping encoder threads and cleaning up."""
@@ -1088,6 +1198,7 @@ class StreamingVideoEncoder:
 
         self._cleanup()
         self._episode_active = False
+        self._return_freed_memory()
 
     def close(self) -> None:
         """Close the encoder, canceling any in-progress episode."""

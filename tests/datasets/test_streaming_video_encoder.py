@@ -18,6 +18,7 @@
 
 import queue
 import threading
+from pathlib import Path
 from unittest.mock import patch
 
 import av
@@ -745,3 +746,70 @@ class TestStreamingEncoderIntegration:
         assert dataset.meta.total_frames == num_frames
 
         dataset.finalize()
+
+
+class TestEncoderEpisodeSummary:
+    """Each stream reports whether its encoder kept up, so a session log from
+    a machine nobody can reach still says which side of the queue was slow."""
+
+    def test_finish_episode_logs_one_summary_per_stream(self, tmp_path, caplog):
+        import logging
+
+        encoder = StreamingVideoEncoder(fps=30, vcodec="libsvtav1", queue_maxsize=8, encoder_threads=1)
+        keys = [f"{OBS_IMAGES}.a", f"{OBS_IMAGES}.b"]
+        encoder.start_episode(video_keys=keys, temp_dir=tmp_path, frame_shapes=dict.fromkeys(keys, (64, 96, 3)))
+        for _ in range(12):
+            for key in keys:
+                encoder.feed_frame(key, np.random.randint(0, 255, (64, 96, 3), dtype=np.uint8))
+        with caplog.at_level(logging.INFO):
+            encoder.finish_episode()
+
+        summaries = [r.getMessage() for r in caplog.records if r.getMessage().startswith("[encoder_summary]")]
+        assert len(summaries) == 2
+        for key, line in zip(keys, summaries, strict=True):
+            assert line.startswith(f"[encoder_summary] {key}: 12 frames, encode ms p50=")
+            assert "queue high-water " in line and "/8," in line
+            assert "put blocked 0x/0ms" in line and "dropped 0" in line
+
+
+@pytest.mark.skipif(not Path("/proc/self/status").exists(), reason="RSS read from /proc; Linux only")
+class TestStreamingEncoderReturnsMemoryBetweenEpisodes:
+    """Each episode's fresh encoder threads free libsvtav1's buffers into their
+    own glibc arenas, where the memory stays: ~1.3 GB per episode on a
+    six-stream rig, linear, unreachable to gc.collect(). finish_episode() must
+    hand it back (malloc_trim). Measured rather than trusted: this growth is
+    what stands between a session on a 16 GB box and swap."""
+
+    @staticmethod
+    def _rss_mb() -> int:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmRSS"):
+                return int(line.split()[1]) // 1024
+        raise RuntimeError("no VmRSS")
+
+    @staticmethod
+    def _episode(encoder, tmp_path, keys, n_frames=20):
+        encoder.start_episode(video_keys=keys, temp_dir=tmp_path, frame_shapes=dict.fromkeys(keys, (400, 700, 3)))
+        frame = np.random.randint(0, 255, (400, 700, 3), dtype=np.uint8)
+        for _ in range(n_frames):
+            for key in keys:
+                encoder.feed_frame(key, frame)
+        results = encoder.finish_episode()
+        assert all(stats is not None for _, stats in results.values())
+
+    def test_rss_does_not_grow_per_episode(self, tmp_path):
+        import gc
+
+        encoder = StreamingVideoEncoder(fps=30, vcodec="libsvtav1", queue_maxsize=64)
+        keys = [f"{OBS_IMAGES}.cam{k}" for k in range(4)]
+        self._episode(encoder, tmp_path, keys)  # one-off allocations (SVT tables, arenas)
+        gc.collect()
+        before = self._rss_mb()
+        for _ in range(3):
+            self._episode(encoder, tmp_path, keys)
+        gc.collect()
+        grown = self._rss_mb() - before
+        # Untrimmed: ~160 MB per encoder per episode -> ~1.9 GB for these 12. Trimmed: arena noise.
+        assert grown < 300, (
+            f"RSS grew {grown} MB over 3 episodes of 4 SVT encoders — freed memory is not being returned"
+        )
