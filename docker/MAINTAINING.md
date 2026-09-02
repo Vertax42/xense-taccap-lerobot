@@ -47,11 +47,11 @@ LEROBOT_IMAGE_TAG=0.0.5 docker compose build
 
 ```bash
 # 1. 改 pyproject.toml 的 version，并更新 README 的版本号与变更说明
-#    例如 version = "0.5.1+xtac.0.0.7"
+#    例如 version = "0.5.1+xtac.0.0.8"
 # 2. 合并到 main
 # 3. 打 tag
-git tag -a v0.0.7 -m 'release 0.0.7'
-git push origin v0.0.7
+git tag -a v0.0.8 -m 'release 0.0.8'
+git push origin v0.0.8
 ```
 
 tag 名去掉前导 `v` 就是镜像 tag。workflow 同时推 `latest` 和 `sha-<commit>`。
@@ -64,7 +64,7 @@ tag 留空则取 `pyproject.toml` 里 `+xtac.` 之后的版本号，`push_latest
 
 ```bash
 R=ghcr.io/vertax42/xense-taccap-lerobot
-docker manifest inspect $R:0.0.7 | grep -m1 digest   # 新 tag 存在
+docker manifest inspect $R:0.0.8 | grep -m1 digest   # 新 tag 存在
 docker manifest inspect $R:latest | grep -m1 digest  # 与上面一致
 ```
 

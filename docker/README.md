@@ -62,7 +62,7 @@ xhost -si:localuser:root
 的 `.env` 里钉死（`.env` 不会被提交）：
 
 ```dotenv
-LEROBOT_IMAGE_TAG=0.0.7
+LEROBOT_IMAGE_TAG=0.0.8
 ```
 
 改完用 `docker compose config --images` 确认解析结果。
@@ -74,7 +74,7 @@ LEROBOT_IMAGE_TAG=0.0.7
 | 跑一次性命令             | `docker compose run --rm xense-taccap lerobot-info`                     |
 | 升级镜像                 | 改 `.env` 的 tag，再 `docker compose pull`                              |
 | 确认解析到哪个镜像       | `docker compose config --images`                                        |
-| 看远端有什么（不下载）   | `docker manifest inspect ghcr.io/vertax42/xense-taccap-lerobot:0.0.7`   |
+| 看远端有什么（不下载）   | `docker manifest inspect ghcr.io/vertax42/xense-taccap-lerobot:0.0.8`   |
 | 确认本地跑的是哪个       | `docker image inspect --format '{{index .RepoDigests 0}}' <镜像>:<tag>` |
 | 不用 Pico4，关掉随启服务 | `START_XENSEVR_SERVICE=0 docker compose run --rm xense-taccap`          |
 | 查看数据                 | `docker compose run --rm xense-taccap bash -lc 'ls -la /data'`          |
@@ -172,13 +172,41 @@ python -c 'import importlib.metadata as M; print("pico4 ->", M.version("xensevr_
 dpkg-query -W -f='daemon -> ${Version}\n' xensevr-pc-service
 ```
 
-**后两行必须打印同一个版本号**（0.0.7 里是 `0.2.1`）。pico4 绑定链接的 C SDK 就取自那个
+**后两行必须打印同一个版本号**（0.0.8 里是 `0.2.1`，与 0.0.7 相同）。pico4 绑定链接的 C SDK 就取自那个
 `.deb`，两者不一致说明镜像是半新不旧的构建，不要拿它录数据。
 
 ## 版本
 
-当前 **0.0.7**（`latest` 指向同一镜像）。只列影响使用方式的变化：
+当前 **0.0.8**（`latest` 指向同一镜像）。只列影响使用方式的变化：
 
+- **0.0.8** — **建议所有机器升级，没有 N 卡的机器必须升级**：
+  - **软件编码（`libsvtav1`）的录制会话不再每条 episode 多占约 1.3 GB 内存。** 没有
+    NVIDIA 显卡时 `--dataset.vcodec=auto` 落到 `libsvtav1`，此前每条 episode 结束后编码
+    线程释放的内存留在 glibc 的线程 arena 里不还给系统，实测六条 5 秒的 episode 从
+    2.5 GB 涨到 8.8 GB，16 GB 的机器一小时内进 swap —— 从录制循环看就是一直报
+    `[slow_frame] ... overrun=`。现在每条 episode 存盘后归还（同样六条稳定在 2.6 GB）。
+  - **数据修正：所有图像/视频特征的 `std` 此前恒为 0.0**（uint8 平方溢出，streaming 与
+    非 streaming 两条路径都受影响；mean/min/max/分位数正确）。**已有数据集若下游按
+    `std` 归一化，需要重算 stats。**
+  - **出问题直接把 `~/xenselogs/session_<时间戳>.log` 发回来即可定位。** 日志新增
+    `[session]`（机器、核数、GPU、编码器、相机配置）、`[slow_frame]` 的分相耗时
+    （obs / build / add / display，加各设备分解）、每条 episode 一行 `[loop_summary]`
+    （实际帧率对标称、超时次数、各阶段 p99、进程 CPU/内存/线程数）和每路
+    `[encoder_summary]`（编码耗时、队列高水位、丢帧）。每个 episode 只在屏幕上打前 5 条
+    `[slow_frame]`，其余落文件，每 5 秒汇总一条，不会再刷屏。
+  - **夹爪编码器改为固件 100 Hz 推流**（IMU 开启时一同推流），录制循环不再每帧等一次
+    串口往返。`--robot.gripper_stream_hz=0` 回到旧的逐帧读取。仅 leader 生效。
+  - **`--display_data=true` 不再造成 overrun。** Rerun 日志搬到独立线程，viewer 跟不上时
+    丢显示帧而不阻塞采集，丢帧数在退出时汇报一次。
+  - **重录（左箭头）时 reset 阶段不再被跳过。** 以前重录只拿到 0 秒 reset，数采员听到
+    "复位环境"去摆放物品的动作整段录进了下一条。
+  - **`--robot.id` 必填，且一个数据集只属于一个工位**：`--resume` 时若与
+    `meta/hardware.json` 里记录的不符直接报错。硬件清单改为按 episode 区间分段
+    （epochs），中途换设备会开新段而不是静默错标。
+  - 4 核以下的机器上实际帧率可能略低于标称（`sleep` 在高负载下晚醒，不算超时），
+    `[loop_summary]` 会把实际 fps 打出来；数据集时间戳仍按标称帧率写。
+  - Pico 头显立体轮询 120 → 60 Hz，退出时汇报丢帧数（非零才打印）。
+  - 编码线程每帧少做约 2 ms 无用统计与一次 PIL 往返，8 路合计约省 0.6 核。
 - **0.0.7** — **建议所有机器升级**，一条崩溃修复加一轮日志整改：
   - **录制不再因为一次误按方向键而崩掉。** 两条 episode 之间有大约 2 秒没人读键盘事件
     （存盘 + 编码器预热）。在这个空档里按下的方向右键会一直挂着，导致下一条 episode
