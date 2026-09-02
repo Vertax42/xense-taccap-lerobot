@@ -47,6 +47,7 @@ different type there and each one appears as a sibling key, e.g.
 
 from __future__ import annotations
 
+import time
 from functools import cached_property
 from typing import Any
 
@@ -474,6 +475,19 @@ class BiTaccapGripper(Robot):
                 )
                 self.logger.info(f"  [{side}] ✅ {gripper_cls.__name__} attached (MCU-only, read-only)")
 
+                # Firmware push instead of a per-frame round-trip — two of them
+                # on this rig. See GripperReadGuard.subscribe and
+                # config.gripper_stream_hz. Leaders only: follower firmware does
+                # not stream the encoder.
+                if self.config.gripper_stream_hz > 0 and self._role == "leader":
+                    self._enc_guard.subscribe(
+                        side,
+                        self._gripper[side],
+                        encoder_hz=self.config.gripper_stream_hz,
+                        imu=getattr(self.config, f"{side}_enable_imu"),
+                        label=f"[{side}] ",
+                    )
+
             if self.config.wrist_undistort and f"{side}_wrist" in self._camera_configs:
                 # Per arm: each gripper is asked for its own intrinsics, so one
                 # side falling back to the SDK reference does not drag the other
@@ -541,6 +555,10 @@ class BiTaccapGripper(Robot):
         """
         disconnect_cameras_parallel(self.cameras, self.logger)
 
+        # Before either gripper goes, so the SDK's transport threads are not
+        # left delivering samples into a guard for devices being torn down.
+        self._enc_guard.unsubscribe_all()
+
         for side in _SIDES:
             tracker = self._tracker[side]
             if tracker is not None:
@@ -578,23 +596,39 @@ class BiTaccapGripper(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected")
 
+        # Per-subsystem timing, published for the `[slow_frame]` breakdown that
+        # `_format_slow_frame_obs_suffix` renders in lerobot_record and
+        # lerobot_teleoperate. Both formatters have always read
+        # `_last_obs_timing` and nothing ever wrote it, so the warning could say
+        # the loop overran but never which device made it overrun — on a rig
+        # sitting at 24 ms against a 33 ms budget that is the one number worth
+        # having. The key names are the ones those formatters parse:
+        # `<label>_arm_ms` (the pose source — a tracker here, not an arm),
+        # `<label>_grip_ms`, `cam[<name>]_ms`, `cameras_ms`, `total_ms`.
+        # perf_counter() costs ~40 ns a call against the milliseconds measured.
+        obs_start = time.perf_counter()
+        timing: dict[str, float] = {}
         obs: dict[str, Any] = {}
 
         for side in _SIDES:
             if side in self._tracker_sn_by_side and self._tracker[side] is not None:
+                t0 = time.perf_counter()
                 for k, v in self._tracker[side].get_action().items():
                     obs[f"{side}_{k}"] = v
                 # Display-only (see display_features).
                 obs.update(self._tracker[side].get_tracker_display(prefix=f"{side}_"))
+                timing[f"{side}_arm_ms"] = (time.perf_counter() - t0) * 1e3
 
             if getattr(self.config, f"{side}_enable_gripper") and self._gripper[side] is not None:
+                t0 = time.perf_counter()
                 obs[f"{side}_gripper.pos"] = self._enc_guard.read(
                     side, self._gripper[side], getattr(self.config, f"{side}_gripper_open_rad"), f"[{side}] "
                 )
+                timing[f"{side}_grip_ms"] = (time.perf_counter() - t0) * 1e3
 
             if getattr(self.config, f"{side}_enable_imu") and self._gripper[side] is not None:
                 try:
-                    imu = self._gripper[side].imu.read_once()
+                    imu = self._enc_guard.read_imu(side, self._gripper[side])
                     accel, gyro, mag = imu.accel_mps2, imu.gyro_radps, imu.mag_uT
                     for i, axis in enumerate(("x", "y", "z")):
                         obs[f"{side}_imu.accel.{axis}"] = float(accel[i])
@@ -604,14 +638,18 @@ class BiTaccapGripper(Robot):
                     self.logger.warn(f"  [{side}] IMU read failed: {e}")
 
         if self.config.enable_head_camera:
+            t0 = time.perf_counter()
             head, self._head_pose_warned = read_head_pose(self.logger, self._head_pose_warned)
             obs.update(head)
             self._head_skew.check(self.cameras)
+            timing["head_pose_ms"] = (time.perf_counter() - t0) * 1e3
 
         # The head cameras need no special case here — they are ordinary
         # cameras, and the pose comes from the SDK above, not from a frame.
         # Insight bundled the two, which is why this used to be read apart.
+        cameras_start = time.perf_counter()
         for cam_name, cam in self.cameras.items():
+            cam_start = time.perf_counter()
             frame = self._cam_guard.read(cam_name, cam)
             # After the guard, not before — see the single-arm robot for why
             # (the guard spots a frozen stream by frame identity, and apply()
@@ -626,7 +664,11 @@ class BiTaccapGripper(Robot):
                     self._tactile_display_keys.get(cam_name),
                 )
             )
+            timing[f"cam[{cam_name}]_ms"] = (time.perf_counter() - cam_start) * 1e3
+        timing["cameras_ms"] = (time.perf_counter() - cameras_start) * 1e3
 
+        timing["total_ms"] = (time.perf_counter() - obs_start) * 1e3
+        self._last_obs_timing = timing
         return obs
 
     def send_action(self, action: dict[str, Any] | None = None) -> dict[str, Any]:

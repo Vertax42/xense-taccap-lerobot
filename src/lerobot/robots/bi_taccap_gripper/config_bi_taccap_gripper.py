@@ -155,6 +155,26 @@ class BiTaccapGripperConfig(RobotConfig):
     tracker_wait_timeout: float = 10.0
     """Seconds to wait for the first valid tracker pose at connect time (both sides)."""
 
+    gripper_stream_hz: int = 100
+    """Rate at which the gripper firmware pushes encoder samples (and, with that
+    side's ``enable_imu``, IMU samples) over the MCU link. ``get_observation`` then
+    reads a cache that the SDK's transport thread keeps current, and the record
+    loop never waits on the bus for the jaw.
+
+    ``0`` restores per-frame polling: ``Encoder::read_once``, a synchronous
+    ``GetEncoder`` command and ACK wait on the record loop, once per gripper per
+    frame — two round-trips on a bimanual rig —, across a USB bus six cameras are saturating. Sub-millisecond on a
+    quiet bus by the SDK's own measurement; its tail is unbounded, which is the
+    problem for a loop with single-digit milliseconds of headroom.
+
+    The firmware divides a 1 kHz tick, so only divisors of 1000 arrive exactly
+    (the SDK warns when it rounds). 100 is its default and gives a jaw reading
+    at most 10 ms old — the same order of staleness every camera frame already
+    has through ``async_read``. Leaders only: follower firmware streams motor
+    status and nothing else, so a follower keeps polling whatever this says. If
+    the stream cannot be brought up the guard logs and polls; it does not
+    refuse to record."""
+
     tactile_fps: int = 30
     tactile_output_types: list[str] = field(default_factory=lambda: ["rectify"])
     """The **recorded** tactile stream, applied to every discovered sensor. Exactly

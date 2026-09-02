@@ -30,10 +30,12 @@ from __future__ import annotations
 import glob
 import json
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -752,6 +754,114 @@ class GripperReadGuard:
         self._last_good: dict[str, float] = {}
         self._failing_since: dict[str, float] = {}
         self._lost: set[str] = set()
+        # Grippers whose samples arrive by firmware push (see subscribe()).
+        # A key absent here is polled with read_once() on every read().
+        self._streams: dict[str, _GripperStream] = {}
+
+    def subscribe(
+        self,
+        key: str,
+        gripper: Any,
+        *,
+        encoder_hz: int,
+        imu: bool = False,
+        label: str = "",
+        first_sample_timeout_s: float = 1.0,
+    ) -> bool:
+        """Take ``key``'s reads off the bus: the firmware pushes, ``read`` reads a cache.
+
+        Polling puts a synchronous command round-trip — ``Encoder::read_once``
+        is ``send_cmd(GetEncoder)`` and a wait for the ACK — on the record loop
+        once per gripper per frame, on a USB bus that six cameras are already
+        saturating with isochronous traffic. The mean is sub-millisecond on a
+        quiet bus (the SDK measured ~0.5–0.9 ms); the tail is what a record loop
+        with 9 ms of headroom cannot afford, and nothing about a poll bounds it.
+        ``Cmd::StartStream`` has the firmware emit ``EncoderData`` frames at
+        ``encoder_hz`` instead, the SDK's transport thread hands each to
+        :class:`_GripperStream`, and :meth:`read` returns the latest one without
+        touching the bus at all. The jaw value is then at most one stream period
+        old — 10 ms at 100 Hz, the same order of staleness ``async_read`` already
+        gives every camera frame.
+
+        With ``imu`` the IMU is streamed at the same rate and :meth:`read_imu`
+        serves it the same way. That is not just for symmetry: once a stream is
+        running, a *command* on the same link is exposed to a firmware UART
+        defect that corrupts the odd ACK (tc-gu-01 issue #1; the SDK retries,
+        ~31 ms each). Streaming both is what leaves no per-frame command on the
+        bus for that to bite.
+
+        Leaders only, by the caller's choice: follower firmware streams motor
+        status and nothing else, and silently ignores the encoder/IMU rates.
+
+        Falls back to polling — logged, not raised — if the stream cannot be
+        brought up or delivers nothing within ``first_sample_timeout_s``: a rig
+        that records with the old round-trip beats one that refuses to start.
+
+        Returns:
+            True if ``key`` now streams; False if it stays polled.
+        """
+        stream = _GripperStream(gripper)
+        what = "encoder + IMU" if imu else "encoder"
+        try:
+            # Subscribe first: the SDK accumulates frames from the moment data
+            # flows, so a subscriber installed after StartStream would miss the
+            # first ones and the readiness wait below would take longer.
+            stream.enc_sub = gripper.encoder.on_data(stream.on_encoder)
+            if imu:
+                stream.imu_sub = gripper.imu.on_data(stream.on_imu)
+            gripper.start_streaming(imu_hz=encoder_hz if imu else 0, encoder_hz=encoder_hz)
+
+            # The polled path treats a first read failing as immediate loss,
+            # because there is nothing sensible to record. Same bar here: no
+            # first sample, no stream.
+            deadline = time.monotonic() + first_sample_timeout_s
+            while stream.latest_encoder()[0] is None or (imu and stream.latest_imu()[0] is None):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"no {what} sample within {first_sample_timeout_s:.1f}s of StartStream")
+                time.sleep(0.01)
+        except Exception as e:
+            self._logger.warn(f"  {label}{what} stream unavailable ({e}); polling the bus once per frame instead.")
+            self._teardown_stream(stream, label)
+            return False
+
+        self._streams[key] = stream
+        self._logger.info(f"  {label}{what} streamed by the firmware at {encoder_hz} Hz; no per-frame bus round-trip.")
+        return True
+
+    def unsubscribe_all(self) -> None:
+        """Stop every stream. Call before the grippers are released, so the
+        SDK is not left calling into a guard for a device that is going away."""
+        for key, stream in list(self._streams.items()):
+            self._teardown_stream(stream, f"[{key}] ")
+        self._streams.clear()
+
+    def _teardown_stream(self, stream: _GripperStream, label: str) -> None:
+        gripper = stream.gripper
+        for attr, component in (("enc_sub", "encoder"), ("imu_sub", "imu")):
+            sub_id = getattr(stream, attr)
+            if sub_id is None:
+                continue
+            try:
+                getattr(gripper, component).off(sub_id)
+            except Exception as e:  # pragma: no cover - vendor SDK teardown
+                self._logger.warn(f"  {label}{component}.off raised: {e}")
+            setattr(stream, attr, None)
+        try:
+            if getattr(gripper, "is_streaming", False):
+                gripper.stop_streaming()
+        except Exception as e:  # pragma: no cover - vendor SDK teardown
+            self._logger.warn(f"  {label}stop_streaming raised: {e}")
+
+    def read_imu(self, key: str, gripper: Any) -> Any:
+        """The latest IMU sample — from the stream when ``key`` streams the IMU,
+        otherwise one ``read_once`` round-trip. Either way the result exposes
+        ``accel_mps2`` / ``gyro_radps`` / ``mag_uT``."""
+        stream = self._streams.get(key)
+        if stream is not None and stream.imu_sub is not None:
+            sample, _ = stream.latest_imu()
+            if sample is not None:
+                return sample
+        return gripper.imu.read_once()
 
     @property
     def lost(self) -> bool:
@@ -781,7 +891,25 @@ class GripperReadGuard:
 
         The first read failing is different: there is no last good value to hold
         and nothing sensible to record, so that trips loss immediately.
+
+        A streamed gripper (see :meth:`subscribe`) never touches the bus here.
+        Its failure mode is silence: a stream that has delivered nothing for
+        ``timeout_s`` is the streamed form of "every read is failing", and it
+        trips loss at once — the silence already spans the timeout, so the
+        failure clock starts at the last sample, not at this call.
         """
+        stream = self._streams.get(key)
+        if stream is not None:
+            reading, at = stream.latest_encoder()
+            age = time.monotonic() - at
+            if reading is not None and age <= self._timeout_s:
+                value = normalize_encoder_sample(reading, open_rad)
+                self._last_good[key] = value
+                self._failing_since.pop(key, None)
+                return value
+            self._failing_since.setdefault(key, at)
+            return self._degrade(key, label, TimeoutError(f"no encoder sample for {age:.1f}s"))
+
         try:
             value = read_gripper_normalized(gripper, open_rad)
         except Exception as e:
@@ -825,8 +953,16 @@ def read_gripper_normalized(gripper: Any, open_rad: float) -> float:
     show for it afterwards. Deciding what a failed read means is
     :class:`GripperReadGuard`'s job; this function only converts.
     """
-    sample = gripper.encoder.read_once()
+    return normalize_encoder_sample(gripper.encoder.read_once(), open_rad)
 
+
+def normalize_encoder_sample(sample: Any, open_rad: float) -> float:
+    """The [0, 1] jaw opening of one encoder sample — see :func:`read_gripper_normalized`.
+
+    ``sample`` is anything with the SDK's ``EncoderSample`` shape: ``position``
+    (nan without a firmware converter) and ``position_rad``. The streamed path
+    hands in a copy taken on the transport thread rather than the SDK object.
+    """
     normalised = float(getattr(sample, "position", float("nan")))
     if np.isfinite(normalised):
         return float(np.clip(normalised, 0.0, 1.0))
@@ -834,6 +970,53 @@ def read_gripper_normalized(gripper: Any, open_rad: float) -> float:
     if open_rad <= 0.0:  # guarded in config.__post_init__ but be defensive
         return 0.0
     return float(np.clip(float(sample.position_rad) / open_rad, 0.0, 1.0))
+
+
+class _GripperStream:
+    """The latest sample(s) one gripper's firmware has pushed.
+
+    Both callbacks run on the SDK's transport thread, between bus frames. They
+    copy a handful of floats out of the sample and return: anything heavier
+    there delays the next frame off the wire, and the whole point of the
+    stream is that nothing on the record loop ever waits for the bus. The
+    pybind layer hands the callback a copy of the sample, but the floats are
+    lifted out anyway so no SDK object is held across threads.
+    """
+
+    def __init__(self, gripper: Any) -> None:
+        self.gripper = gripper
+        self.enc_sub: Any = None
+        self.imu_sub: Any = None
+        self._lock = threading.Lock()
+        self._enc: SimpleNamespace | None = None
+        self._enc_at = 0.0
+        self._imu: SimpleNamespace | None = None
+        self._imu_at = 0.0
+
+    def on_encoder(self, sample: Any) -> None:
+        reading = SimpleNamespace(
+            position=float(getattr(sample, "position", float("nan"))),
+            position_rad=float(getattr(sample, "position_rad", float("nan"))),
+        )
+        now = time.monotonic()
+        with self._lock:
+            self._enc, self._enc_at = reading, now
+
+    def on_imu(self, sample: Any) -> None:
+        # The binding builds a fresh numpy array per property access, so
+        # these are ours to keep.
+        imu = SimpleNamespace(accel_mps2=sample.accel_mps2, gyro_radps=sample.gyro_radps, mag_uT=sample.mag_uT)
+        now = time.monotonic()
+        with self._lock:
+            self._imu, self._imu_at = imu, now
+
+    def latest_encoder(self) -> tuple[SimpleNamespace | None, float]:
+        with self._lock:
+            return self._enc, self._enc_at
+
+    def latest_imu(self) -> tuple[SimpleNamespace | None, float]:
+        with self._lock:
+            return self._imu, self._imu_at
 
 
 # -------------------------------------------------------------------- robot id

@@ -48,6 +48,7 @@ for a different type there and each one appears as a sibling key, e.g.
 
 from __future__ import annotations
 
+import time
 from functools import cached_property
 from typing import Any
 
@@ -480,6 +481,19 @@ class TaccapGripper(Robot):
             )
             self.logger.info(f"  ✅ {gripper_cls.__name__} attached (MCU-only, read-only — motor stays disabled)")
 
+            # Take the per-frame encoder round-trip off the record loop: the
+            # firmware pushes samples and get_observation reads a cache. See
+            # GripperReadGuard.subscribe for why, and config.gripper_stream_hz
+            # for the knob. Leaders only — follower firmware does not stream
+            # the encoder, so a follower keeps polling.
+            if self.config.gripper_stream_hz > 0 and self._role == "leader":
+                self._enc_guard.subscribe(
+                    "gripper",
+                    self._gripper,
+                    encoder_hz=self.config.gripper_stream_hz,
+                    imu=self.config.enable_imu,
+                )
+
         # 1b. Wrist fisheye undistortion, if asked for. Built here — after the
         #     gripper, whose MCU holds the intrinsics, and before the cameras open
         #     — so a unit that cannot supply a calibration warns during connect
@@ -552,6 +566,10 @@ class TaccapGripper(Robot):
                 self.logger.error(f"  Pico4 tracker disconnect error: {e}")
             self._tracker = None
 
+        # Before the gripper goes, so the SDK's transport thread is not left
+        # delivering samples into a guard for a device being torn down.
+        self._enc_guard.unsubscribe_all()
+
         if self._gripper is not None:
             try:
                 if getattr(self._gripper, "is_streaming", False):
@@ -581,20 +599,36 @@ class TaccapGripper(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected")
 
+        # Per-subsystem timing, published for the `[slow_frame]` breakdown that
+        # `_format_slow_frame_obs_suffix` renders in lerobot_record and
+        # lerobot_teleoperate. Both formatters have always read
+        # `_last_obs_timing` and nothing ever wrote it, so the warning could say
+        # the loop overran but never which device made it overrun — on a rig
+        # sitting at 24 ms against a 33 ms budget that is the one number worth
+        # having. The key names are the ones those formatters parse:
+        # `<label>_arm_ms` (the pose source — a tracker here, not an arm),
+        # `<label>_grip_ms`, `cam[<name>]_ms`, `cameras_ms`, `total_ms`.
+        # perf_counter() costs ~40 ns a call against the milliseconds measured.
+        obs_start = time.perf_counter()
+        timing: dict[str, float] = {}
         obs: dict[str, Any] = {}
 
         if self._tracker is not None:
+            t0 = time.perf_counter()
             obs.update(self._tracker.get_action())
             # Display-only (see display_features): dropped by
             # select_display_observation's counterpart on the recording path.
             obs.update(self._tracker.get_tracker_display())
+            timing[f"{self._side}_arm_ms"] = (time.perf_counter() - t0) * 1e3
 
         if self.config.enable_gripper and self._gripper is not None:
+            t0 = time.perf_counter()
             obs["gripper.pos"] = self._enc_guard.read("gripper", self._gripper, self.config.gripper_open_rad)
+            timing[f"{self._side}_grip_ms"] = (time.perf_counter() - t0) * 1e3
 
         if self.config.enable_imu and self._gripper is not None:
             try:
-                imu = self._gripper.imu.read_once()
+                imu = self._enc_guard.read_imu("gripper", self._gripper)
                 accel = imu.accel_mps2
                 gyro = imu.gyro_radps
                 mag = imu.mag_uT
@@ -611,13 +645,17 @@ class TaccapGripper(Robot):
                 self.logger.warn(f"IMU read failed: {e}")
 
         if self.config.enable_head_camera:
+            t0 = time.perf_counter()
             head, self._head_pose_warned = read_head_pose(self.logger, self._head_pose_warned)
             obs.update(head)
             self._head_skew.check(self.cameras)
+            timing["head_pose_ms"] = (time.perf_counter() - t0) * 1e3
 
         # The head cameras need no special case here — they are ordinary
         # cameras, and the pose comes from the SDK above, not from a frame.
+        cameras_start = time.perf_counter()
         for cam_name, cam in self.cameras.items():
+            cam_start = time.perf_counter()
             frame = self._cam_guard.read(cam_name, cam)
             # Rectify *after* the guard, deliberately. The guard detects a frozen
             # stream by frame object identity (camera_health.CameraReadGuard.read),
@@ -635,7 +673,11 @@ class TaccapGripper(Robot):
                     self._tactile_display_keys.get(cam_name),
                 )
             )
+            timing[f"cam[{cam_name}]_ms"] = (time.perf_counter() - cam_start) * 1e3
+        timing["cameras_ms"] = (time.perf_counter() - cameras_start) * 1e3
 
+        timing["total_ms"] = (time.perf_counter() - obs_start) * 1e3
+        self._last_obs_timing = timing
         return obs
 
     def send_action(self, action: dict[str, Any] | None = None) -> dict[str, Any]:

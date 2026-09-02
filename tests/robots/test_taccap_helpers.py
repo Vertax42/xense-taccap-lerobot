@@ -1648,3 +1648,178 @@ class TestWristUndistortOpensItsOwnEpoch:
         write_hardware_manifest(tmp_path, same, FakeLogger())
         path = write_hardware_manifest(tmp_path, same, FakeLogger(), episode_index=9)
         assert len(json.loads(path.read_text())["epochs"]) == 1
+
+
+class FakeStreamSample:
+    def __init__(self, position: float, position_rad: float = float("nan")):
+        self.position = position
+        self.position_rad = position_rad
+
+
+class FakeImuSample:
+    def __init__(self, seq: int):
+        import numpy as np
+
+        self.accel_mps2 = np.array([seq, 0.0, 9.8], dtype=np.float32)
+        self.gyro_radps = np.zeros(3, dtype=np.float32)
+        self.mag_uT = np.zeros(3, dtype=np.float32)
+
+
+class FakeStreamingGripper:
+    """A leader whose firmware can push encoder (and IMU) samples.
+
+    ``start_streaming`` delivers one sample of each source synchronously, the
+    way a real stream produces its first frame within a few milliseconds; the
+    test then pushes more by hand. ``read_once`` counts calls so a test can
+    prove the bus was not touched.
+    """
+
+    def __init__(self, position: float = 0.5, fail_start: bool = False, silent: bool = False):
+        self.position = position
+        self.fail_start = fail_start
+        self.silent = silent
+        self.is_streaming = False
+        self.stopped = 0
+        self.read_once_calls = 0
+        self.imu_read_once_calls = 0
+        self.encoder = self._Encoder(self)
+        self.imu = self._Imu(self)
+        self.rates: tuple[int, int] | None = None
+
+    class _Component:
+        def __init__(self, outer):
+            self.outer = outer
+            self.callbacks: dict[int, object] = {}
+            self._next = 1
+
+        def on_data(self, cb):
+            sub_id = self._next
+            self._next += 1
+            self.callbacks[sub_id] = cb
+            return sub_id
+
+        def off(self, sub_id):
+            self.callbacks.pop(sub_id)
+
+    class _Encoder(_Component):
+        def read_once(self):
+            self.outer.read_once_calls += 1
+            return FakeStreamSample(self.outer.position)
+
+        def push(self, position: float):
+            for cb in self.callbacks.values():
+                cb(FakeStreamSample(position))
+
+    class _Imu(_Component):
+        def read_once(self):
+            self.outer.imu_read_once_calls += 1
+            return FakeImuSample(-1)
+
+        def push(self, seq: int):
+            for cb in self.callbacks.values():
+                cb(FakeImuSample(seq))
+
+    def start_streaming(self, imu_hz: int, encoder_hz: int):
+        if self.fail_start:
+            raise OSError("StartStream NACK")
+        self.rates = (imu_hz, encoder_hz)
+        self.is_streaming = True
+        if not self.silent:
+            self.encoder.push(self.position)
+            if imu_hz > 0:
+                self.imu.push(0)
+
+    def stop_streaming(self):
+        self.is_streaming = False
+        self.stopped += 1
+
+
+class TestGripperReadGuardStream:
+    """A streamed gripper must keep the record loop off the bus — and keep the
+    polled path's loss semantics, translated to "the stream went silent"."""
+
+    def test_reads_come_from_the_stream_not_the_bus(self):
+        guard = GripperReadGuard(FakeLogger())
+        gripper = FakeStreamingGripper(0.25)
+
+        assert guard.subscribe("left", gripper, encoder_hz=100) is True
+        assert gripper.rates == (0, 100), "IMU source must be OFF when not asked for"
+
+        assert guard.read("left", gripper, 1.0) == pytest.approx(0.25)
+        gripper.encoder.push(0.75)
+        assert guard.read("left", gripper, 1.0) == pytest.approx(0.75)
+        assert gripper.read_once_calls == 0, "a streamed gripper must never be polled"
+        assert not guard.lost
+
+    def test_position_rad_backstop_applies_to_streamed_samples(self):
+        guard = GripperReadGuard(FakeLogger())
+        gripper = FakeStreamingGripper()
+        guard.subscribe("left", gripper, encoder_hz=100)
+
+        for cb in gripper.encoder.callbacks.values():
+            cb(FakeStreamSample(float("nan"), position_rad=0.85))
+        assert guard.read("left", gripper, 1.7) == pytest.approx(0.5)
+
+    def test_a_silent_stream_holds_then_trips_loss(self):
+        import time
+
+        logger = FakeLogger()
+        guard = GripperReadGuard(logger, timeout_s=0.05)
+        gripper = FakeStreamingGripper(0.6)
+        guard.subscribe("left", gripper, encoder_hz=100)
+        assert guard.read("left", gripper, 1.0) == pytest.approx(0.6)
+
+        time.sleep(0.08)  # longer than timeout_s with nothing pushed
+        held = guard.read("left", gripper, 1.0)
+
+        assert held == pytest.approx(0.6), "silence degrades to the last good value, never to 0.0"
+        assert guard.lost, "silence spanning timeout_s is loss, immediately — the clock started at the last sample"
+        assert "left" in guard.lost_grippers
+
+    def test_stream_failure_falls_back_to_polling(self):
+        logger = FakeLogger()
+        guard = GripperReadGuard(logger)
+        gripper = FakeStreamingGripper(0.4, fail_start=True)
+
+        assert guard.subscribe("left", gripper, encoder_hz=100, imu=True) is False
+        assert gripper.encoder.callbacks == {} and gripper.imu.callbacks == {}, "subscriptions must be torn down"
+        assert any("polling the bus once per frame" in m for m in logger.warnings)
+
+        assert guard.read("left", gripper, 1.0) == pytest.approx(0.4)
+        assert gripper.read_once_calls == 1
+        assert guard.read_imu("left", gripper).accel_mps2[0] == -1
+        assert gripper.imu_read_once_calls == 1
+
+    def test_no_first_sample_falls_back_to_polling(self):
+        guard = GripperReadGuard(FakeLogger())
+        gripper = FakeStreamingGripper(0.4, silent=True)
+
+        assert guard.subscribe("left", gripper, encoder_hz=100, first_sample_timeout_s=0.03) is False
+        assert gripper.stopped == 1, "a stream that delivers nothing is stopped, not left running"
+        assert guard.read("left", gripper, 1.0) == pytest.approx(0.4)
+        assert gripper.read_once_calls == 1
+
+    def test_imu_is_streamed_alongside_when_asked(self):
+        guard = GripperReadGuard(FakeLogger())
+        gripper = FakeStreamingGripper()
+        assert guard.subscribe("left", gripper, encoder_hz=100, imu=True) is True
+        assert gripper.rates == (100, 100)
+
+        assert guard.read_imu("left", gripper).accel_mps2[0] == 0
+        gripper.imu.push(7)
+        assert guard.read_imu("left", gripper).accel_mps2[0] == 7
+        assert gripper.imu_read_once_calls == 0
+
+    def test_unsubscribe_all_stops_the_stream_and_restores_polling(self):
+        guard = GripperReadGuard(FakeLogger())
+        left, right = FakeStreamingGripper(0.1), FakeStreamingGripper(0.9)
+        guard.subscribe("left", left, encoder_hz=100)
+        guard.subscribe("right", right, encoder_hz=100, imu=True)
+
+        guard.unsubscribe_all()
+
+        for g in (left, right):
+            assert g.encoder.callbacks == {} and g.imu.callbacks == {}
+            assert g.is_streaming is False and g.stopped == 1
+        assert guard.read("left", left, 1.0) == pytest.approx(0.1)
+        assert left.read_once_calls == 1, "after unsubscribe the guard polls again"
