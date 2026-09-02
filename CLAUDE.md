@@ -289,6 +289,21 @@ Logged at INFO, not WARNING: some duplication is expected, and warning on it
 every episode is the noise this whole change removed. Promote it once a rig's
 baseline is known and there is a defensible threshold.
 
+The tally is **drained** per take and the line is **printed after the reset**.
+Both halves are load-bearing. `stale_frame_report()` clears `_freshness`, so it
+has to be called once per take or two takes add together — which is why a
+discarded take cannot simply skip it. But a retake keeps the same index
+(`clear_episode_buffer()` leaves `dataset.num_episodes` alone), so printing at
+collection time gave three identical `[stale_frames] episode 143` headers for one
+saved episode, two of them describing frames that were thrown away; a rig
+reported it as "the same episode keeps coming up in the terminal". Disposition is
+only known after the reset — the left arrow arrives either during the take or
+during the reset that follows, and the second is the common flow (end with right,
+decide it was bad while resetting) — so the flag is read there and a dropped take
+is labelled `(discarded take)`. Nothing accumulates in between (the
+`set_capture_recording` gate is closed in the record loop's `finally`), so the
+wait costs only the log lines' position.
+
 ### libav noise — `quiet_libav()`, not `setLevel`
 
 `video_utils.py` calls `av.logging.restore_default_callback()` deliberately:
@@ -401,6 +416,298 @@ without consuming it, so the reset (the generic `record_loop`, whose first check
 is `exit_early`) exits at once. Its non-RT robots run `record_loop` for both
 phases and that one ignores `rerecord_episode` entirely, so they get a real reset
 by accident. Unfixed there as of `2b737e45`.
+
+## The streaming encoder spent more time on stats than on encoding
+
+`_CameraEncoderThread.run` does three things per frame: hand the array to PyAV,
+encode it, and fold it into `RunningQuantileStats`. Measured per frame per
+camera on a Core Ultra 9 275HX, before the fix:
+
+| step                             | tactile 400x700 | wrist/head 480x640 |
+| -------------------------------- | --------------- | ------------------ |
+| `stats_tracker.update()`         | **2.22 ms**     | **2.41 ms**        |
+| ├ `_update_histograms`           | 1.37 ms         |                    |
+| ├ mean + mean-of-squares         | 0.46 ms         |                    |
+| └ min/max                        | 0.35 ms         |                    |
+| encode (libsvtav1 preset 12)     | 1.16 ms         | 1.00 ms            |
+| `Image.fromarray` → `from_image` | 0.21 ms         | 0.24 ms            |
+
+A bimanual rig with the head camera is 8 streams at 30 fps, so the statistics
+alone were ~0.53 cores — **twice what the actual video encoding cost**. That is
+the budget that decides whether the rig runs on a smaller PC, and none of it was
+buying anything: the histogram was a 5000-bin approximation of data that has
+only 256 possible values.
+
+- **uint8 goes through `RunningQuantileStats._update_uint8`**, which derives
+  every statistic from one `np.bincount` per column. A 256-bin histogram of
+  uint8 is a _complete_ description of the batch — mean, mean-of-squares, min
+  and max are dot products or searches over it — so the separate mean / square /
+  min / max / `np.histogram` passes all collapse into it. **2.22 ms → 0.11 ms**,
+  and the quantiles come out _exact_ (verified against `np.quantile`) where the
+  5000-bin version interpolated. Bin `i` spans `[i-0.5, i+0.5]`, covering the
+  whole domain from the first batch, which is why this path never calls
+  `_adjust_histograms`: a later batch can widen min/max but can never fall
+  outside the binning. The mode is fixed by the first batch and a later dtype
+  change is refused — mixing would mean two binnings feeding one histogram.
+- **`av.VideoFrame.from_ndarray` instead of the PIL round-trip**, 0.21 → 0.04 ms.
+  It needs a C-contiguous buffer, which the CHW→HWC branch just above it does
+  _not_ produce, hence the `flags["C_CONTIGUOUS"]` check — a no-op on the normal
+  path, where the camera backends already return contiguous arrays.
+
+Together: ~20.3 ms → ~1.3 ms of per-frame CPU across 8 streams, i.e. **~0.6
+cores handed back**.
+
+### …and `std` was exactly 0 for every image and video feature
+
+Same code, a separate bug, found while measuring the above. `update()` computed
+`np.mean(batch**2)`, and `batch**2` on a **uint8** batch squares _in uint8_ and
+wraps: mean-of-squares came out ~106 instead of ~21442, so
+`variance = mean_of_squares - mean**2` went negative, `np.maximum(0, variance)`
+in `get_statistics()` clamped it, and `std` landed at exactly 0.0.
+
+This was **not** streaming-only. `compute_episode_stats` feeds `sample_images()`
+output — also uint8 — through `get_feature_stats` into the same class, so the
+non-streaming path had it too. Every image/video feature in every dataset this
+fork has written has `std == 0`, whatever `--dataset.streaming_encoding` said.
+The fix is `np.square(batch, dtype=np.float64)` on the general path (uint8 now
+bypasses it entirely); `mean`, `min`, `max` and the quantiles were always fine,
+because the `/255.0` normalisation happens downstream in `save_episode`.
+
+**Datasets recorded before this fix need their stats recomputed** if anything
+downstream normalises by `std`.
+
+## `_last_obs_timing` — the `[slow_frame]` breakdown that never printed
+
+`_format_slow_frame_obs_suffix` (in both `lerobot_record.py` and
+`lerobot_teleoperate.py`) renders `obs= arms= grips= cams= top_obs=` off a
+`_last_obs_timing` dict on the robot. **Nothing ever wrote that dict**, so the
+suffix was always `''`: the warning could say the loop overran but never which
+device made it overrun. On a rig sitting at 24.1 ms against a 33.3 ms budget
+that is the one number worth having, and its absence is why the load question
+kept getting answered by guesswork.
+
+Both TacCap robots now populate it in `get_observation()`. The key names are
+what the formatters parse and are not free-form: `<label>_arm_ms` (the pose
+source — a _tracker_ on a handheld, not an arm), `<label>_grip_ms`,
+`cam[<name>]_ms`, plus `cameras_ms` and `total_ms`. `perf_counter()` is ~40 ns a
+call against milliseconds being measured.
+
+`lerobot_record.py`'s formatter also gained an "everything else" bucket so a key
+outside those three categories (`head_pose_ms`) appears in `top_obs` instead of
+widening an unexplained gap between `obs=` and the parts. When reconstructing
+the key for that bucket, note `arm_items`/`grip_items` strip only `_ms` — their
+names still carry `_arm`/`_grip`, so the key is `name + "_ms"`; appending the
+category again matches nothing and lists every arm and grip twice.
+
+## The jaw encoder is streamed, not polled — `gripper_stream_hz`
+
+`Encoder::read_once` is `send_cmd(GetEncoder)` and a wait for the ACK: a
+synchronous command round-trip over the CH343, on the record loop, once per
+gripper per frame, on a USB bus that six cameras are saturating with
+isochronous traffic. The SDK's own numbers put the _mean_ at 0.5–0.9 ms on a
+quiet bus; nothing bounds the tail, and the loop sits at ~24 ms against 33 ms.
+It was the last synchronous hardware wait left on the loop — the trackers, the
+head pose and every camera are already cached reads.
+
+`Cmd::StartStream` has the firmware push `EncoderData` at `gripper_stream_hz`
+(default 100, the firmware default; only divisors of 1000 are exact).
+`GripperReadGuard.subscribe` registers `encoder.on_data` — the SDK's transport
+thread copies three floats into `_GripperStream` — and `read()` serves the
+cache. `0` restores polling. Leaders only: follower firmware streams motor
+status and nothing else, and ignores the encoder/IMU rates (measured, per the
+SDK's `control_loop.hpp`).
+
+Things that are not obvious from the code:
+
+- **`enable_imu` streams the IMU too, and that is not for symmetry.** Once a
+  stream runs on the link, any _command_ on it is exposed to a firmware UART
+  defect that corrupts the occasional ACK (tc-gu-01 issue #1). Commands retry,
+  ~31 ms each, surfacing as latency. Streaming both sources is what leaves no
+  per-frame command on the bus for that to hit; a polled IMU next to a streamed
+  encoder would be the worst of both.
+- **Silence is the failure mode.** A polled gripper fails by raising; a
+  streamed one fails by going quiet. The guard treats "no sample for
+  `timeout_s`" as loss and trips it _immediately_ — the clock starts at the
+  last sample, not at the read that noticed — because the silence already
+  spans the timeout. Same `ENCODER_LOSS_TIMEOUT_S`, same degrade-to-last-good.
+- **Bring-up failure falls back to polling, logged, not raised.** A rig that
+  records with the old round-trip beats one that refuses to start. The log line
+  to look for is `encoder streamed by the firmware at 100 Hz`; its absence with
+  a `stream unavailable` warning means you are polling.
+- **`unsubscribe_all()` runs first in `_release`**, before `stop_streaming`,
+  so the transport thread is not delivering into a guard for a device being
+  torn down.
+
+**Measured on the rig, 2026-09-02** (two leaders, fw 1.2.2, `TCGU01A28Z0115m`
+/ `0116m`): the stream comes up in 11–21 ms, the firmware delivers exactly 100
+Hz (200 distinct samples in 2 s), `read()` is p99 **0.04 ms** with a sample at
+most 9.9 ms old, IMU streams alongside, and after `unsubscribe_all()` the bus
+answers `read_once` as before. For scale, `read_once` itself was p50 0.27 ms
+on a quiet bus and 0.32 ms / max 0.43 ms with six cameras open — so the
+round-trip was never the 10 ms; what the stream buys is that no synchronous
+bus wait is left on the loop at all. `--robot.gripper_stream_hz=0` is the
+fallback, and a full recording on it still runs clean.
+
+### The frame copy in `feed_frame` is off for TacCap
+
+`StreamingVideoEncoder.feed_frame` snapshots each image before queueing it, in
+case the camera driver recycles its buffer. The TacCap backends never do: Xense
+returns `np.ascontiguousarray` of a reversed view, OpenCV `cv2.cvtColor`, Pico
+`cv2.imdecode` — a fresh array each, and nothing downstream mutates one. So
+`lerobot_record` sets `copy_frames = False` on the encoder for the self-driven
+robots: eight ~0.9 MB copies per frame, **1.7 ms** measured on the record
+thread. Left on for every other robot — RealSense hands out views of the
+driver's buffer.
+
+### What the main loop does and does not spend time on (measured)
+
+Per frame, bimanual + head camera, on the record thread: `build_dataset_frame`
+×2 **0.004 ms**, `validate_frame` **0.004 ms**, `feed_frame` ×8 without the
+copy **~0.3 ms**. GC: a simulated 60 s episode triggered **zero** collections —
+per-frame garbage is refcount-freed and the episode buffer holds numpy arrays,
+which are untracked — so `gc.freeze()`/`gc.disable()` are not a lever here.
+The loop's time is in `get_observation`; `_last_obs_timing` (above) says where.
+
+**How to read it.** `cam[...]` reads are `async_read` — a lock and a dict
+lookup, microseconds. If they show milliseconds, the record thread is waiting
+for the **GIL**, not for a camera: `xensesdk` is Cython
+(`__compile__.cpython-312-*.so`), and Cython holds the GIL unless the code
+says `nogil`. Four tactile capture threads each calling `selectSensorInfo` at
+30 Hz is the candidate. Measured cost of that pattern on this host: 4 threads
+holding the GIL in 8 ms bursts put the main thread's re-acquire at **p99 13.6
+ms**; 12 threads in 1 ms bursts, p99 4.4 ms. **`sys.setswitchinterval` lower is
+not a fix** — 1 ms made the 8 ms-burst case _worse_ (p99 29.6 ms), because it
+round-robins the GIL among every runnable thread and the main thread queues
+behind all of them. If the probe confirms it, the fix is process isolation
+(tactile capture in a subprocess over shared memory), not a knob.
+
+**What a real recording measures without Pico/tracker** (2026-09-02, this
+host, 4 tactile + 2 wrist, `episode_time_s=12`): **zero `[slow_frame]`** in
+every configuration tried — nvenc on all 24 cores, `libsvtav1` pinned to 4
+cores with default threads, with `encoder_threads=1`, with `--display_data`,
+and with the polled encoder. The 8-stream overrun the data team hit is
+therefore not reproducible from these six streams alone; the untested
+difference is the Pico head camera + trackers, and a different host.
+
+Two things the 4-core runs did show, neither of them an overrun:
+
+- **The loop drifts slow under load without ever overrunning.** 349–355 frames
+  per 12 s episode on 4 cores (359 unconstrained), 343–345 with Rerun on: the
+  body stays inside the budget so nothing is logged, but `time.sleep` wakes late
+  when the cores are busy. `add_frame` stamps `frame_index / fps`, so the
+  dataset claims 30 fps while capture ran at 28.7–29.5 — a 2–4% time
+  compression that nothing on disk records. `precise_sleep` (spin for the last
+  10 ms) would hold cadence at the cost of a core; writing the real timestamp
+  would be honest but changes the file format. Neither is done; know it exists.
+- **Six SVT-AV1 streams on 4 cores cost ~1.8 cores** (`ps`, process-wide,
+  incl. the tactile SDK): 182% mean / 211% peak, identical with 522 threads
+  (`encoder_threads` unset) and 150 (`=1`). The thread count is not the CPU.
+
+**Encoder threads on a small CPU.** `--dataset.encoder_threads` unset lets
+each SVT-AV1 instance size its own pool: 8 streams open **628–632 OS threads**
+on a 4–8 core box (measured, `/proc/self/status`). `encoder_threads=1` makes
+that 132. In isolation the main loop barely noticed either on 4 cores (p99
+18.6 vs 20.7 ms with an 18 ms body) — SVT's threads are native and yield — but
+on a machine the tactile SDK is also competing for, fewer is the safe default.
+`h264` with `preset=ultrafast, threads=1` was flat (p99 18.0, 4 threads total)
+at similar size; the record CLI does not expose a preset for `h264`, and
+libx264's default `medium` is _slower_ than AV1 preset 12, so do not switch
+codecs without adding one.
+
+## libsvtav1 sessions grew ~1.3 GB per episode — glibc arenas, not a leak
+
+Found by the `[loop_summary]` `rss` field on its first outing (2026-09-02):
+six 400x700 SVT streams, 5-second episodes, RSS **2.5 → 8.8 GB over six
+episodes**, linear. nvenc flat. Nothing reachable: `gc.collect()` freed 955
+objects and returned nothing.
+
+Each episode starts fresh encoder threads. glibc gives a new thread a new
+malloc arena (up to 8 × cores of them), libsvtav1 allocates a few hundred MB
+per encoder, and when the thread ends that memory is freed **into that
+arena** — where it stays, because the next episode's threads land in other
+arenas and nothing reuses it. A 16 GB box without a GPU reaches swap inside
+an hour of normal recording, and from the record loop swap reads as overruns.
+This is the strongest candidate for the field report that started all this.
+
+`StreamingVideoEncoder._return_freed_memory` calls `malloc_trim(0)` after
+every `finish_episode` / `cancel_episode`: it walks every arena and returns
+its free pages. Same six episodes: **2.55 → 2.67 GB**, ~55 ms per call, paid
+in the gap between episodes. Things that were tried and are not the fix:
+
+- releasing the stream before `container.close()` — matters on the main
+  thread (+547 vs +21 MB for six encoders) and is kept as hygiene, but inside
+  the worker thread it changed nothing;
+- `MALLOC_ARENA_MAX=1/2` — slows the growth to a ~3.9 GB plateau, process-
+  global, still not flat;
+- `encoder_threads=1` — smaller working set (~1.1–1.8 GB) but still creeps.
+
+`TestStreamingEncoderReturnsMemoryBetweenEpisodes` measures RSS across three
+episodes rather than trusting the call is still there; with the trim
+monkeypatched out it grows ~1 GB and fails.
+
+## Reading a session log — diagnosing an overrun without the machine
+
+`~/xenselogs/session_<ts>.log` (`$XENSE_LOG_DIR`) is written at DEBUG and is
+what a rig in the field should send. Since 2026-09-02 it carries enough to
+diagnose a `[slow_frame]` without ssh. The tags, in the order they appear,
+and what each one settles (`lerobot/utils/loop_diagnostics.py` owns the
+formats; `lerobot_record.py` and `video_utils.py` emit them):
+
+**`[session] host …` / `[session] recording …` / `[session] robot …`** —
+once, after `connect()`. Read these before the first symptom:
+`usable` < `cores` means `taskset` or a container; `governor=powersave` on a
+laptop is late `sleep` wake-ups waiting to happen; `gpu=none` +
+`vcodec=libsvtav1` is software AV1; `encoder_threads=None` is one SVT pool per
+stream (~520 threads for 6–8 streams); `git=` says which code ran;
+`gripper_stream_hz=0` means the jaw is polled. `copy_frames=False` is
+expected on TacCap.
+
+**`[slow_frame] … loop= budget= overrun= | phases obs= build= add= display= |
+obs= arms= grips= cams= top_obs=`** — one frame that overran. The first five
+per take are WARN (console and file); the rest go to DEBUG (file only) and a
+`[slow_frame_summary]` WARN names the window's worst every 5 s, so a loop that
+overruns every frame still leaves a readable log. Which phase is fat says
+where to look:
+
+| fat phase | meaning                                                                                                | cross-check                                                    |
+| --------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| `add`     | `feed_frame` blocked — a queue is full, `put()` waits up to 100 ms before dropping                     | `[encoder_summary]` queue high-water near max, put blocked >0  |
+| `obs`     | with `cams=` at milliseconds: GIL / CPU starvation, not a camera — `async_read` is a lock and a lookup | `[loop_summary]` cpu vs usable cores; encoder p99 inflated too |
+| `obs`     | with `grips=` at milliseconds: the jaw is polled (`gripper_stream_hz=0`) or the stream fell back       | `[session] robot`, a `stream unavailable` warning at connect   |
+| `obs`     | with `arms=` or `head_pose` fat: tracker / headset SDK                                                 | Pico-side logs                                                 |
+| `display` | should be microseconds (`RerunLogSink.submit` is a slot swap)                                          | —                                                              |
+
+**`[loop_summary] episode N[ (discarded take)]: F frames in Ts = X fps
+(nominal 30…) | body ms … (budget) | overruns … | sleep-late ms … | phases
+p99/max ms: … | cpu …% rss …MB threads-peak … load … | gc gen0/1/2 …`** —
+one per take, printed with the `[stale_frames]` lines after the reset. What a
+per-frame line cannot show:
+
+- **effective fps below nominal with `overruns 0`** is late `sleep` wake-up
+  under load (`sleep-late` p99 says so). The body was in budget, nothing
+  warned, and `add_frame` stamps `frame_index / fps` — the dataset claims 30
+  fps and the recording ran at 29. Measured on a 4-core pin: 29.0 fps,
+  sleep-late p99 5.9 ms, zero overruns.
+- **`cpu`** is the process over the take; compare with `usable × 100`.
+  253% on 4 usable cores is a starved machine even though nothing overran.
+- **`rss`** across episodes is the memory trend — it is what exposed the
+  arena growth above; a rising series with `vcodec=libsvtav1` on a build
+  without the trim is that bug. **`threads-peak`** 520+ is the SVT default
+  pools; **`gc`** counts collections (gen0 is cheap; gen2 here is worth
+  matching against overrun times).
+
+**`[encoder_summary] <key>: F frames, encode ms p50/p99/max, stats ms p99,
+queue high-water h/max, put blocked n×/ms, dropped d`** — one per stream per
+saved episode, from the encoder thread itself. Reference points from this
+host: unloaded, encode ~1 ms and stats ~0.1 ms; pinned to 4 cores with six
+SVT streams, encode p99 13–15 ms and stats p99 7 ms — same code, starved
+threads. Encode p99 near the frame period or a high-water mark near the
+maximum is the encoder side about to back-pressure the loop.
+
+`[stale_frames]`, the `background capture stalled` warnings and the
+`Rerun display: N/M frames dropped` line at exit are the older layers and are
+documented above; the stall warnings at connect (before "Recording episode
+0") are warm-up and expected.
 
 ## Recorded files land 0600 if they come from a temp file
 

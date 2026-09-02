@@ -89,6 +89,7 @@ from lerobot.utils.control_utils import (
     sanity_check_dataset_robot_compatibility,
 )
 from lerobot.utils.import_utils import register_third_party_plugins
+from lerobot.utils.loop_diagnostics import EpisodeLoopStats, format_kv, host_summary
 from lerobot.utils.robot_utils import busy_wait, get_logger, set_capture_recording
 from lerobot.utils.utils import (
     init_logging,
@@ -144,7 +145,25 @@ def _format_slow_frame_obs_suffix(robot: Robot | None) -> str:
     ]
     cam_items.sort(key=lambda item: item[1], reverse=True)
 
-    obs_part_items = arm_items + grip_items + cam_items
+    # Anything the buckets above do not name (e.g. head_pose_ms) still belongs in
+    # the breakdown — otherwise it shows up only as an unexplained gap between
+    # `obs=` and the parts that follow it.
+    # arm_items/grip_items already strip only the "_ms" suffix (their names keep
+    # the "_arm"/"_grip" part), so the key is `name + "_ms"` — appending the
+    # category again would fail to match and list every arm and grip twice.
+    accounted = (
+        {f"{name}_ms" for name, _ in arm_items}
+        | {f"{name}_ms" for name, _ in grip_items}
+        | {f"cam[{name}]_ms" for name, _ in cam_items}
+        | {"total_ms", "cameras_ms"}
+    )
+    other_items = [
+        (key[:-3], float(value))
+        for key, value in timing.items()
+        if key.endswith("_ms") and key not in accounted and isinstance(value, (int, float))
+    ]
+
+    obs_part_items = arm_items + grip_items + cam_items + other_items
     obs_part_items.sort(key=lambda item: item[1], reverse=True)
     if obs_part_items:
         visible_obs_items = [item for item in obs_part_items if item[1] >= 0.1]
@@ -161,27 +180,96 @@ def _record_loop_sleep(
     fps: int,
     start_episode_t: float,
     robot: Robot | None = None,
+    phases: dict[str, float] | None = None,
+    loop_stats: EpisodeLoopStats | None = None,
+    recorded: bool = False,
 ) -> None:
+    """Sleep out the frame budget, or report the overrun.
+
+    ``phases`` is the iteration's own split (obs / build / add / display) and
+    goes both into the ``[slow_frame]`` line and into ``loop_stats``, which
+    also decides how loudly each overrun is logged — see
+    ``EpisodeLoopStats.note_overrun``: a loop overrunning every frame must not
+    turn the log into 30 identical lines a second.
+    """
     if fps <= 0:
         return
 
     budget_s = 1.0 / fps
     dt_s = time.perf_counter() - start_loop_t
     remaining_s = budget_s - dt_s
+    if loop_stats is not None:
+        loop_stats.record_iteration(dt_s * 1e3, phases or {}, recorded)
     if remaining_s > 0:
+        t_sleep = time.perf_counter()
         busy_wait(remaining_s)
+        if loop_stats is not None:
+            # On Linux this is time.sleep, which wakes late under load. That
+            # lateness never overruns — the body was in budget — but it is
+            # exactly what makes a 4-core box record 28.7 fps and call it 30.
+            loop_stats.record_sleep(remaining_s * 1e3, (time.perf_counter() - t_sleep) * 1e3)
         return
 
     episode_t_s = time.perf_counter() - start_episode_t
     robot_name = (
         getattr(robot, "name", None) or getattr(type(robot), "__name__", "record") if robot is not None else "record"
     )
-    logger.warn(
+    phase_part = " | phases " + " ".join(f"{k}={v:.1f}ms" for k, v in phases.items()) if phases else ""
+    line = (
         f"[slow_frame] robot={robot_name} t={episode_t_s:.3f}s "
         f"loop={dt_s * 1e3:.1f}ms budget={budget_s * 1e3:.1f}ms "
         f"overrun={(-remaining_s) * 1e3:.1f}ms"
-        f"{_format_slow_frame_obs_suffix(robot)}"
+        f"{phase_part}{_format_slow_frame_obs_suffix(robot)}"
     )
+    if loop_stats is None:
+        logger.warn(line)
+        return
+    level, window_summary = loop_stats.note_overrun(episode_t_s, (-remaining_s) * 1e3, line)
+    # After the first few, the per-frame line goes to the DEBUG session file
+    # only; the console gets one summary per window instead.
+    (logger.warn if level == "warn" else logger.debug)(line)
+    if window_summary:
+        logger.warn(window_summary)
+
+
+def _session_lines(cfg: "RecordConfig", robot: Robot, dataset: LeRobotDataset) -> list[str]:
+    """The ``[session]`` header: what ran, on what, with what.
+
+    Everything a reader of the session file needs before the first
+    ``[slow_frame]`` means anything — a 4-core laptop on ``powersave`` doing
+    eight streams of software AV1 is a different problem from a 24-core
+    workstation with nvenc, and the config dump above does not say which.
+    """
+    encoder = getattr(dataset, "_streaming_encoder", None)
+    recording = {
+        "fps": cfg.dataset.fps,
+        "vcodec": getattr(encoder, "vcodec", None) or getattr(dataset, "vcodec", "?"),
+        "streaming": encoder is not None,
+        "encoder_threads": cfg.dataset.encoder_threads,
+        "queue": cfg.dataset.encoder_queue_maxsize,
+        "copy_frames": getattr(encoder, "copy_frames", None),
+        "video_keys": len(dataset.meta.video_keys),
+        "display": cfg.display_data,
+        "image_every_n": cfg.display_image_every_n,
+        "compressed_display": cfg.display_compressed_images,
+        "episode_s": cfg.dataset.episode_time_s,
+        "reset_s": cfg.dataset.reset_time_s,
+    }
+    cameras = ", ".join(
+        f"{name}={type(cam).__name__} "
+        f"{getattr(cam, 'width', '?')}x{getattr(cam, 'height', '?')}@{getattr(cam, 'fps', '?')}"
+        for name, cam in getattr(robot, "cameras", {}).items()
+    )
+    robot_kv = {
+        "robot": robot.name,
+        "id": getattr(robot, "id", None),
+        "gripper_stream_hz": getattr(cfg.robot, "gripper_stream_hz", None),
+    }
+    return [
+        f"[session] host {format_kv(host_summary())}",
+        f"[session] recording {format_kv(recording)}",
+        f"[session] {format_kv(robot_kv)} cameras: {cameras or 'none'}",
+    ]
 
 
 # Robots that are their own teleoperator: ``get_observation()`` yields the
@@ -308,6 +396,7 @@ def self_driven_record_loop(
     display_features: dict | None = None,
     display_compressed_images: bool = False,
     display_image_every_n: int = 1,
+    loop_stats: EpisodeLoopStats | None = None,
 ):
     """Record loop for self-driven handheld devices (e.g. TacCap-Gripper).
 
@@ -369,9 +458,16 @@ def self_driven_record_loop(
 
         # Reset phase (dataset=None) is a passive wait: skip hardware reads
         # unless we need them for the Rerun display.
+        #
+        # Each phase is timed on its own so an overrun names its phase, and so
+        # the episode summary can show a fat `add` next to a flat `obs` — the
+        # encoder queue back-pressuring — rather than one opaque loop time.
+        phases: dict[str, float] = {}
+        recorded = False
         observation = None
         action = None
         if dataset is not None or display_data:
+            t_phase = time.perf_counter()
             observation = robot.get_observation()
 
             # Graceful degradation on mid-episode hardware loss (e.g. a wrist
@@ -386,8 +482,10 @@ def self_driven_record_loop(
             # subset of this same observation sample (images excluded — we
             # iterate action_features, not the full obs). Single hardware read.
             action = {k: observation[k] for k in robot.action_features if k in observation}
+            phases["obs"] = (time.perf_counter() - t_phase) * 1e3
 
         if dataset is not None:
+            t_phase = time.perf_counter()
             current_observation_frame = build_dataset_frame(dataset.features, observation, prefix=OBS_STR)
             # Shifted-frame (错帧): the current pose (action[t]) is paired with
             # the PREVIOUS observation so the action leads obs by one step.
@@ -399,10 +497,17 @@ def self_driven_record_loop(
                     **action_frame,
                     "task": single_task,
                 }
+                phases["build"] = (time.perf_counter() - t_phase) * 1e3
+                t_phase = time.perf_counter()
                 dataset.add_frame(frame)
+                phases["add"] = (time.perf_counter() - t_phase) * 1e3
+                recorded = True
+            else:
+                phases["build"] = (time.perf_counter() - t_phase) * 1e3
             prev_observation_frame = current_observation_frame
 
         if display_data and observation is not None:
+            t_phase = time.perf_counter()
             display_observation = select_display_observation(observation, display_features)
             # Counts loop iterations, not recorded frames, so the viewer keeps
             # a steady image cadence through the reset phase too.
@@ -425,12 +530,16 @@ def self_driven_record_loop(
                     compress_images=display_compressed_images,
                     log_images=log_images,
                 )
+            phases["display"] = (time.perf_counter() - t_phase) * 1e3
 
         _record_loop_sleep(
             start_loop_t=start_loop_t,
             fps=fps,
             start_episode_t=start_episode_t,
             robot=robot,
+            phases=phases,
+            loop_stats=loop_stats,
+            recorded=recorded,
         )
 
         timestamp = time.perf_counter() - start_episode_t
@@ -501,6 +610,18 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 encoder_threads=cfg.dataset.encoder_threads,
             )
 
+        # The TacCap camera backends — Xense (``np.ascontiguousarray`` of the
+        # BGR->RGB view), OpenCV (``cv2.cvtColor``) and Pico (``cv2.imdecode``)
+        # — each hand out a freshly allocated array per capture, and nothing
+        # downstream mutates one: the encoder reads it, Rerun reads it, the
+        # freeze guard keeps it as a fallback. So the defensive copy the
+        # streaming encoder takes in ``feed_frame`` protects nothing on this
+        # rig, and it is not free: eight ~0.9 MB copies per frame, 1.7 ms on
+        # the record thread against a 33 ms budget. Kept on for every other
+        # robot — RealSense hands back views of the driver's frame buffer.
+        if robot.name in SELF_DRIVEN_RECORD_ROBOTS and dataset._streaming_encoder is not None:
+            dataset._streaming_encoder.copy_frames = False
+
         # Self-driven robots (TacCap-Gripper) have no teleoperator; connect the
         # optional one only for symmetric teardown.
         robot.connect()
@@ -529,6 +650,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 # derived channels can be rebuilt from this dataset alone later.
                 runtimes=getattr(robot, "tactile_runtimes", None) or None,
             )
+
+        # The one block a session file can be read from without the machine:
+        # what ran, on what, with what. Before the first [slow_frame], so the
+        # reader meets the host before the symptom.
+        for line in _session_lines(cfg, robot, dataset):
+            logger.info(line)
 
         # 3D pose + trajectory overlay (no-op if the device emits no tcp.* poses).
         # The viewer is laid out from display_features when the robot has one —
@@ -625,6 +752,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 if rerun_sink is not None:
                     rerun_sink.reset_trajectory()
 
+                # One tally per take; printed with the stale-frame lines below
+                # once the take's disposition is known. finish() in the finally
+                # freezes its clock at the end of the take, before the reset.
+                loop_stats = EpisodeLoopStats(cfg.dataset.fps)
                 set_capture_recording(True)
                 try:
                     self_driven_record_loop(
@@ -639,25 +770,29 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         display_features=display_features,
                         display_compressed_images=cfg.display_compressed_images,
                         display_image_every_n=cfg.display_image_every_n,
+                        loop_stats=loop_stats,
                     )
                 finally:
                     set_capture_recording(False)
+                    loop_stats.finish()
 
-                # How much of what just went to disk is duplicated frames. The
+                # How much of the take that just ended is duplicated frames. The
                 # guard counts this by frame-object identity while reading (see
                 # CameraReadGuard.stale_frame_report), so it is exact and costs
                 # nothing: a long run is a capture stall, many one-frame runs are
                 # the beat between the sensor's capture loop and this one, both
                 # free-running at the same nominal rate.
-                # INFO, not WARNING, on purpose: some duplication is expected
-                # (the beat between two unsynchronised 30 Hz loops) and warning
-                # on it every episode is the noise this whole change removed.
-                # Promote to a warning once a rig's baseline is known and there
-                # is a defensible threshold — there is not one yet.
+                #
+                # Collected here, printed after the reset — see below. Collection
+                # cannot wait: `stale_frame_report()` drains the tally, so it has
+                # to run once per take or two takes get added together, and taking
+                # it now (rather than after the reset) keeps it independent of the
+                # `set_capture_recording` gate, which is process-global and
+                # defaults open.
+                stale_lines = []
                 stale_report = getattr(robot, "stale_frame_report", None)
                 if callable(stale_report):
-                    for line in stale_report():
-                        logger.info(f"[stale_frames] episode {dataset.num_episodes}{line}")
+                    stale_lines = stale_report()
 
                 # Execute a few seconds without recording to give time to manually reset the environment
                 # Skip reset for the last episode to be recorded
@@ -684,6 +819,37 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                         display_compressed_images=cfg.display_compressed_images,
                         display_image_every_n=cfg.display_image_every_n,
                     )
+
+                # Now — not before the reset — because only here is the take's
+                # disposition known, and an unqualified `episode N` line is a
+                # claim about what reached disk. A retake keeps the same index
+                # (`clear_episode_buffer()` below leaves `dataset.num_episodes`
+                # alone), so a session with two left-arrow retakes printed three
+                # identical `[stale_frames] episode 143` headers, two of them
+                # describing frames that were thrown away — reported from a rig as
+                # "the same episode keeps coming up in the terminal".
+                #
+                # The left arrow can arrive either during the take or during the
+                # reset that follows it, and the second is the common flow (end
+                # with right, decide it was bad while resetting). Reading the flag
+                # before the reset would therefore mislabel exactly the case an
+                # operator hits most. Nothing is measured in between — the gate is
+                # closed in the `finally` above and the tally is already drained —
+                # so the only cost of waiting is that the lines appear a reset
+                # later, next to the disposition they now describe.
+                #
+                # INFO, not WARNING, on purpose: some duplication is expected
+                # (the beat between two unsynchronised 30 Hz loops) and warning
+                # on it every episode is the noise this whole change removed.
+                # Promote to a warning once a rig's baseline is known and there
+                # is a defensible threshold — there is not one yet.
+                take = " (discarded take)" if events["rerecord_episode"] else ""
+                # Effective fps, overruns, sleep overshoot, per-phase p99/max,
+                # CPU/RSS/threads/load, GC — the take in one line. Its shape
+                # and what each field diagnoses: EpisodeLoopStats.
+                logger.info(f"[loop_summary] episode {dataset.num_episodes}{take}: {loop_stats.summary_line()}")
+                for line in stale_lines:
+                    logger.info(f"[stale_frames] episode {dataset.num_episodes}{take}{line}")
 
                 if events["rerecord_episode"]:
                     log_say("Re-record episode", cfg.play_sounds)
