@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest.mock import MagicMock, patch
+
 import draccus
 import pytest
 
@@ -28,6 +30,8 @@ from lerobot.scripts.lerobot_edit_dataset import (
     RemoveFeatureConfig,
     SplitConfig,
     _validate_config,
+    get_output_path,
+    handle_convert_image_to_video,
 )
 
 
@@ -83,3 +87,53 @@ class TestOperationTypeParsing:
         cfg = parse_cfg(["--repo_id", "test/repo", "--new_repo_id", "test/merged", "--operation.type", type_name])
         resolved_name = OperationConfig.get_choice_name(type(cfg.operation))
         assert resolved_name == type_name
+
+
+def test_get_output_path_prefers_local_dataset_root(tmp_path):
+    root = tmp_path / "pusht"
+
+    output_repo_id, output_path = get_output_path(
+        repo_id="lerobot/pusht",
+        new_repo_id=None,
+        root=root,
+        new_root=None,
+    )
+
+    assert output_repo_id == "lerobot/pusht"
+    assert output_path == root
+
+
+def test_get_output_path_places_new_local_dataset_next_to_source(tmp_path):
+    root = tmp_path / "pusht"
+
+    output_repo_id, output_path = get_output_path(
+        repo_id="lerobot/pusht",
+        new_repo_id="lerobot/pusht_filtered",
+        root=root,
+        new_root=None,
+    )
+
+    assert output_repo_id == "lerobot/pusht_filtered"
+    assert output_path == tmp_path / "lerobot" / "pusht_filtered"
+
+
+def test_convert_image_to_video_uses_local_root(tmp_path):
+    root = tmp_path / "pusht_image"
+    dataset = MagicMock()
+    dataset.meta.video_keys = []
+    dataset.meta.features = {}
+
+    cfg = EditDatasetConfig(
+        operation=ConvertImageToVideoConfig(),
+        repo_id="pusht_image",
+        root=str(root),
+    )
+
+    with (
+        patch("lerobot.scripts.lerobot_edit_dataset.LeRobotDataset", return_value=dataset),
+        patch("lerobot.scripts.lerobot_edit_dataset.convert_image_to_video_dataset") as mock_convert,
+    ):
+        mock_convert.return_value = dataset
+        handle_convert_image_to_video(cfg)
+
+    assert mock_convert.call_args.kwargs["output_dir"] == tmp_path / "pusht_image_video"

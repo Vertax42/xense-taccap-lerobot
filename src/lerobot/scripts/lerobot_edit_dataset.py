@@ -22,7 +22,9 @@ remove features, modify tasks, and convert image datasets to video format.
 When new_repo_id is specified, creates a new dataset.
 
 Path semantics (v2): --root and --new_root are exact dataset folders containing
-meta/, data/, videos/. When omitted, defaults to $HF_LEROBOT_HOME/{repo_id}.
+meta/, data/, videos/. When --root is omitted, defaults to $HF_LEROBOT_HOME/{repo_id}.
+When --root is provided, local edits stay on that filesystem tree instead of
+being redirected into the HF cache.
 
 Usage Examples:
 
@@ -261,7 +263,12 @@ def get_output_path(
     input_path = Path(root) if root else HF_LEROBOT_HOME / repo_id
 
     output_repo_id = new_repo_id if new_repo_id else repo_id
-    output_path = Path(new_root) if new_root else HF_LEROBOT_HOME / output_repo_id
+    if new_root:
+        output_path = Path(new_root)
+    elif root:
+        output_path = input_path if output_repo_id == repo_id else input_path.parent / output_repo_id
+    else:
+        output_path = HF_LEROBOT_HOME / output_repo_id
 
     # In case of in-place modification, create a backup of the original dataset (if it exists)
     if output_path == input_path:
@@ -476,6 +483,11 @@ def handle_convert_image_to_video(cfg: EditDatasetConfig) -> None:
         output_dir = Path(cfg.new_root)
         output_repo_id = cfg.new_repo_id or f"{cfg.repo_id}_video"
         logging.info(f"Saving to new_root: {output_dir} as {output_repo_id}")
+    elif cfg.root:
+        output_repo_id = cfg.new_repo_id or f"{cfg.repo_id}_video"
+        input_path = Path(cfg.root)
+        output_dir = input_path if output_repo_id == cfg.repo_id else input_path.parent / output_repo_id
+        logging.info(f"Saving next to source dataset: {output_dir} as {output_repo_id}")
     elif cfg.new_repo_id:
         output_repo_id = cfg.new_repo_id
         output_dir = HF_LEROBOT_HOME / cfg.new_repo_id

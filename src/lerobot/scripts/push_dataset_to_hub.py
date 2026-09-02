@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""
+r"""
 Push a local LeRobot dataset to the Hugging Face Hub.
 
 This script is useful when:
@@ -8,38 +8,61 @@ This script is useful when:
 3. You want to re-upload a dataset with different settings
 
 Usage:
-    # Basic usage (requires both --repo-id and --dataset-path)
-    python -m lerobot.scripts.push_dataset_to_hub \\
-        --repo-id Vertax/xense_flare_pick_and_place \\
+    # First login to Hugging Face with a token that can write datasets.
+    huggingface-cli login
+
+    # Basic usage with the installed console command.
+    lerobot-push-dataset-to-hub \
+        --repo-id Vertax/xense_flare_pick_and_place \
         --dataset-path ~/.cache/huggingface/lerobot/Vertax/xense_flare_pick_and_place
 
-    # Use upload_large_folder for large datasets (recommended)
+    # Equivalent module invocation, useful from a source checkout.
     python -m lerobot.scripts.push_dataset_to_hub \
+        --repo-id Vertax/xense_flare_pick_and_place \
+        --dataset-path ~/.cache/huggingface/lerobot/Vertax/xense_flare_pick_and_place
+
+    # Push a dataset stored outside the default HF cache.
+    lerobot-push-dataset-to-hub \
+        --repo-id Xense/local_recording \
+        --dataset-path /data/lerobot/local_recording
+
+    # Limit the upload to selected files with glob patterns.
+    lerobot-push-dataset-to-hub \
+        --repo-id Xense/metadata_only_review \
+        --dataset-path /data/lerobot/metadata_only_review \
+        --allow-patterns "meta/**" "data/**"
+
+    # Use the legacy upload_large_folder API when needed for an older hub setup.
+    lerobot-push-dataset-to-hub \
         --repo-id Xense/forward-06_test \
         --dataset-path ~/.cache/huggingface/lerobot/Xense/forward-06_test \
         --upload-large-folder
 
-    # Push as private dataset
-    python -m lerobot.scripts.push_dataset_to_hub \\
-        --repo-id Vertax/xense_flare_pick_and_place \\
-        --dataset-path ~/.cache/huggingface/lerobot/Vertax/xense_flare_pick_and_place \\
+    # Push as a private dataset.
+    lerobot-push-dataset-to-hub \
+        --repo-id Vertax/xense_flare_pick_and_place \
+        --dataset-path ~/.cache/huggingface/lerobot/Vertax/xense_flare_pick_and_place \
         --private
 
-    # Skip pushing videos (only push metadata and parquet files)
-    python -m lerobot.scripts.push_dataset_to_hub \\
-        --repo-id Vertax/xense_flare_pick_and_place \\
-        --dataset-path ~/.cache/huggingface/lerobot/Vertax/xense_flare_pick_and_place \\
+    # Skip videos and upload only metadata, parquet files and the dataset card.
+    lerobot-push-dataset-to-hub \
+        --repo-id Vertax/xense_flare_pick_and_place \
+        --dataset-path ~/.cache/huggingface/lerobot/Vertax/xense_flare_pick_and_place \
         --no-videos
 
-Examples:
-    # First login to Hugging Face
-    huggingface-cli login
+    # Push to a branch, add card tags and override the dataset license.
+    lerobot-push-dataset-to-hub \
+        --repo-id Xense/experiment_20260902 \
+        --dataset-path /data/lerobot/experiment_20260902 \
+        --branch review \
+        --tags taccap bimanual tactile \
+        --license apache-2.0
 
-    # Push xense_flare dataset with large folder API
-    python -m lerobot.scripts.push_dataset_to_hub \\
-        --repo-id Vertax/xense_flare_pick_and_place_cubes_20260104 \\
-        --dataset-path ~/.cache/huggingface/lerobot/Vertax/xense_flare_pick_and_place_cubes_20260104 \\
-        --upload-large-folder
+    # Re-upload without updating the codebase-version tag.
+    lerobot-push-dataset-to-hub \
+        --repo-id Xense/experiment_20260902 \
+        --dataset-path /data/lerobot/experiment_20260902 \
+        --no-tag-version
 """
 
 import argparse
@@ -120,7 +143,7 @@ def push_dataset_to_hub(
     except Exception as e:
         logging.error(f"Upload failed: {e}")
         logging.info("Tips:")
-        logging.info("  - Try using --upload-large-folder for large datasets")
+        logging.info("  - Try --upload-large-folder only if your installed huggingface_hub needs the legacy uploader")
         logging.info("  - Check your network connection")
         logging.info("  - Make sure you have write access to the repository")
         logging.info("  - Make sure you are logged in with: huggingface-cli login")
@@ -180,7 +203,14 @@ def main():
     parser.add_argument(
         "--upload-large-folder",
         action="store_true",
-        help="Use upload_large_folder API (recommended for large datasets with many files)",
+        help="Use the legacy upload_large_folder API instead of upload_folder",
+    )
+    parser.add_argument(
+        "--allow-patterns",
+        type=str,
+        nargs="*",
+        default=None,
+        help="Only upload files matching these glob patterns (e.g., 'meta/**' 'data/**')",
     )
     parser.add_argument(
         "--no-tag-version",
@@ -202,6 +232,7 @@ def main():
             tag_version=not args.no_tag_version,
             push_videos=not args.no_videos,
             private=args.private,
+            allow_patterns=args.allow_patterns,
             upload_large_folder=args.upload_large_folder,
         )
     except KeyboardInterrupt:
