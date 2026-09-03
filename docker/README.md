@@ -10,7 +10,7 @@ TacCap-Gripper SDK 和 Pico4 绑定的镜像。**从 GHCR 拉取，不需要自�
 **逐条敲,不要整块粘贴** —— `newgrp` 会开一个子 shell，整块粘贴时它后面的命令会被吃掉。
 
 ```bash
-git clone https://github.com/Vertax42/xense-taccap-lerobot.git
+git clone https://github.com/XenseRobotics-AI/xense-taccap-lerobot.git
 cd xense-taccap-lerobot
 ./docker/install_customer.sh          # 装 Docker / NVIDIA Toolkit / udev 规则，并拉镜像
 ```
@@ -74,7 +74,7 @@ LEROBOT_IMAGE_TAG=0.0.8
 | 跑一次性命令             | `docker compose run --rm xense-taccap lerobot-info`                     |
 | 升级镜像                 | 改 `.env` 的 tag，再 `docker compose pull`                              |
 | 确认解析到哪个镜像       | `docker compose config --images`                                        |
-| 看远端有什么（不下载）   | `docker manifest inspect ghcr.io/vertax42/xense-taccap-lerobot:0.0.8`   |
+| 看远端有什么（不下载）   | `docker manifest inspect ghcr.io/xenserobotics-ai/xense-taccap-lerobot:0.0.8`   |
 | 确认本地跑的是哪个       | `docker image inspect --format '{{index .RepoDigests 0}}' <镜像>:<tag>` |
 | 不用 Pico4，关掉随启服务 | `START_XENSEVR_SERVICE=0 docker compose run --rm xense-taccap`          |
 | 查看数据                 | `docker compose run --rm xense-taccap bash -lc 'ls -la /data'`          |

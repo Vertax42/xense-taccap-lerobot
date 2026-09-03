@@ -97,8 +97,8 @@ jobs:
               tag="$(sed -n 's/^version *= *".*+xtac\.\([^"]*\)"/\1/p' pyproject.toml)"
           fi
           [[ -n "${tag}" ]] || { echo "Could not resolve an image tag" >&2; exit 1; }
-          # A registry reference has to be lowercase and the account is
-          # `Vertax42`. metadata-action lowercases its own `images` input, but
+          # A registry reference has to be lowercase and the owner is
+          # `XenseRobotics-AI`. metadata-action lowercases its own `images` input, but
           # the buildcache refs below are passed to buildx verbatim.
           image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/xense-taccap-lerobot"
           {

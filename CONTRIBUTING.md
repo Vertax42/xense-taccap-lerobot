@@ -24,7 +24,7 @@ tracks upstream and intentionally stays slim.
 ## Ways to contribute
 
 - **Report bugs** or request features via the
-  [issue tracker](https://github.com/Vertax42/xense-taccap-lerobot/issues)
+  [issue tracker](https://github.com/XenseRobotics-AI/xense-taccap-lerobot/issues)
   (use the bug-report template).
 - **Improve docs** — the root `README.md`, the device guide
   (`src/lerobot/robots/taccap_gripper/README.md`), and docstrings.
@@ -33,7 +33,7 @@ tracks upstream and intentionally stays slim.
 ## Development setup
 
 ```bash
-git clone --recurse-submodules https://github.com/Vertax42/xense-taccap-lerobot.git
+git clone --recurse-submodules https://github.com/XenseRobotics-AI/xense-taccap-lerobot.git
 cd xense-taccap-lerobot
 bash ./setup_env.sh --mamba xense-taccap
 mamba activate xense-taccap

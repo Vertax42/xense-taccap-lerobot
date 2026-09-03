@@ -77,7 +77,7 @@ derive_tag_from_pyproject() {
   sed -n 's/^version *= *".*+xtac\.\([^"]*\)"/\1/p' "${ROOT_DIR}/pyproject.toml"
 }
 
-# GHCR namespaces are lowercase, but the GitHub account (`Vertax42`) is not, so
+# GHCR namespaces are lowercase, but the GitHub owner (`XenseRobotics-AI`) is not, so
 # a reference built from the remote URL verbatim is rejected at push time.
 resolve_owner() {
   local url owner

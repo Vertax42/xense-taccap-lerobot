@@ -800,7 +800,7 @@ Two consequences worth remembering:
   a proxy for the SDK, it _is_ where the SDK came from — so `pip list` and the
   installed daemon can no longer disagree.
 
-To work on the C SDK itself, clone `Vertax42/XenseVR-PC-Service` separately. Its
+To work on the C SDK itself, clone `XenseRobotics-AI/XenseVR-PC-Service` separately. Its
 Windows and aarch64 trees were pruned; the Linux Unity demo lives as a release
 asset that `SDKDemo/UnityBin/fetch_linux_demo.sh` fetches on demand.
 

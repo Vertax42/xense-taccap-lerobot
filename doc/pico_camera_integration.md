@@ -53,7 +53,7 @@ payload 内部格式：
 ### 1. XenseVR-PC-Service 接收 `0x30`
 
 路径（在
-[`Vertax42/XenseVR-PC-Service`](https://github.com/Vertax42/XenseVR-PC-Service)
+[`XenseRobotics-AI/XenseVR-PC-Service`](https://github.com/XenseRobotics-AI/XenseVR-PC-Service)
 仓库内 —— 它不再是本仓库的 submodule，改动这一侧需要单独 clone）：
 
 ```text

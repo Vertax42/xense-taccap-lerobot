@@ -312,7 +312,7 @@ install_xensevr_service() {
         echo "        no longer a matter of running a script in that repository."
     fi
 
-    DEB_URL="${XENSEVR_DEB_URL:-https://github.com/Vertax42/XenseVR-PC-Service/releases/download/v${DEB_VER}/XenseVR-PC-Service_${DEB_VER}_${ARCH}.deb}"
+    DEB_URL="${XENSEVR_DEB_URL:-https://github.com/XenseRobotics-AI/XenseVR-PC-Service/releases/download/v${DEB_VER}/XenseVR-PC-Service_${DEB_VER}_${ARCH}.deb}"
 
     local WANT INSTALLED STATUS
     # Check the status, not just the version. `dpkg -r` leaves the package in
@@ -366,7 +366,7 @@ install_xensevr_service() {
             if ! curl -fL "${RETRY[@]}" -C - "$DEB_URL" -o "$DEB.part"; then
                 echo "  WARN: download failed — skipping service install."
                 echo "  The partial file is kept at $DEB.part — re-run to resume it."
-                echo "  Or get it from https://github.com/Vertax42/XenseVR-PC-Service/releases"
+                echo "  Or get it from https://github.com/XenseRobotics-AI/XenseVR-PC-Service/releases"
                 echo "  then: sudo dpkg -i XenseVR-PC-Service_*_${ARCH}.deb"
                 return 0
             fi
