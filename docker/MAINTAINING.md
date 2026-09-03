@@ -30,7 +30,7 @@ Dockerfile 已包含 apt/curl 自动重试、CUDA 12.8 构建期覆盖和 flexib
 priority，不再需要使用临时 `sed` 命令修改构建过程。
 
 `docker compose build` 打出来的镜像名和 compose 的默认值一致，也就是
-`ghcr.io/vertax42/xense-taccap-lerobot:latest` —— 和拉下来的镜像同名。想构建成别的
+`ghcr.io/xenserobotics-ai/xense-taccap-lerobot:latest` —— 和拉下来的镜像同名。想构建成别的
 名字或版本，用 `LEROBOT_IMAGE` / `LEROBOT_IMAGE_TAG` 覆盖。
 
 **注意 tag：`docker compose build` 默认打 `latest`。** 要构建一个具体版本，构建时就得
@@ -63,7 +63,7 @@ tag 留空则取 `pyproject.toml` 里 `+xtac.` 之后的版本号，`push_latest
 发布后确认三件事：
 
 ```bash
-R=ghcr.io/vertax42/xense-taccap-lerobot
+R=ghcr.io/xenserobotics-ai/xense-taccap-lerobot
 docker manifest inspect $R:0.0.8 | grep -m1 digest   # 新 tag 存在
 docker manifest inspect $R:latest | grep -m1 digest  # 与上面一致
 ```

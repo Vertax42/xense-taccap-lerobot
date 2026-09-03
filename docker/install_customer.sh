@@ -15,7 +15,7 @@ ARCHIVE_PATH="${1:-${XENSE_IMAGE_ARCHIVE:-}}"
 PROXY_URL="${XENSE_PROXY_URL:-}"
 IMAGE_REPOSITORY="${XENSE_IMAGE_REPOSITORY:-}"
 IMAGE_TAG="${LEROBOT_IMAGE_TAG:-}"
-DEFAULT_IMAGE_REPOSITORY="ghcr.io/vertax42/xense-taccap-lerobot"
+DEFAULT_IMAGE_REPOSITORY="ghcr.io/xenserobotics-ai/xense-taccap-lerobot"
 TEMP_DIR=""
 DOCKER_CMD=(docker)
 

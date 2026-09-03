@@ -8,7 +8,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Matches compose.yaml's default image name, so this packages whatever
 # `docker compose build` just produced.
-IMAGE_REPOSITORY="${XENSE_IMAGE_REPOSITORY:-ghcr.io/vertax42/xense-taccap-lerobot}"
+IMAGE_REPOSITORY="${XENSE_IMAGE_REPOSITORY:-ghcr.io/xenserobotics-ai/xense-taccap-lerobot}"
 IMAGE_TAG="${1:-${LEROBOT_IMAGE_TAG:-latest}}"
 IMAGE_REF="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
 DIST_ROOT="${XENSE_DIST_DIR:-${ROOT_DIR}/dist/customer}"

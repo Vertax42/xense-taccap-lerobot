@@ -13,7 +13,7 @@ services:
     # `docker compose build` tags its output with this same name, which keeps it
     # matching docker/push_ghcr.sh and docker/package_customer_delivery.sh. Set
     # LEROBOT_IMAGE to build or run under a different name.
-    image: ${LEROBOT_IMAGE:-ghcr.io/vertax42/xense-taccap-lerobot}:${LEROBOT_IMAGE_TAG:-latest}
+    image: ${LEROBOT_IMAGE:-ghcr.io/xenserobotics-ai/xense-taccap-lerobot}:${LEROBOT_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.user

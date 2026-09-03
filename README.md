@@ -20,7 +20,7 @@ training scripts) refer to the
 > **Docker users:** a complete GPU + hardware-SDK image and Compose setup are
 > available in [`docker/README.md`](docker/README.md). It is the quickest way to
 > give an end user a reproducible environment. Images are published on
-> `ghcr.io/vertax42/xense-taccap-lerobot` and need no login to pull;
+> `ghcr.io/xenserobotics-ai/xense-taccap-lerobot` and need no login to pull;
 > `docker/install_customer.sh` prepares the host (Docker, NVIDIA Container
 > Toolkit, the udev rules documented below) and pulls one — see
 > [the quickstart](docker/README.md#快速开始). Building the image
@@ -45,7 +45,7 @@ bash Miniforge3-$(uname)-$(uname -m).sh
 ```bash
 git clone \
   --recurse-submodules \
-  https://github.com/Vertax42/xense-taccap-lerobot.git
+  https://github.com/XenseRobotics-AI/xense-taccap-lerobot.git
 cd xense-taccap-lerobot
 ```
 
@@ -104,7 +104,7 @@ main `lerobot` package.
 > likewise shipped as a separate ~110 MB Debian package (installs to
 > `/opt/apps/roboticsservice`). `setup_env.sh --install` installs it
 > automatically by **downloading the matching-arch asset** from the
-> [v0.2.1 release](https://github.com/Vertax42/XenseVR-PC-Service/releases/tag/v0.2.1)
+> [v0.2.1 release](https://github.com/XenseRobotics-AI/XenseVR-PC-Service/releases/tag/v0.2.1)
 > (override the URL with `$XENSEVR_DEB_URL`), then runs `sudo dpkg -i`
 > (idempotent — same version is skipped). It no longer searches repo `dist/`
 > or `~/Downloads/`; set `$XENSEVR_DEB` only when you explicitly need an
@@ -388,7 +388,7 @@ If you use this fork (LeRobot-Xense) specifically, please also cite:
 @misc{xense-taccap-lerobot,
     author = {XenseRobotics Team},
     title = {LeRobot-Xense: LeRobot with Xense Tactile Robotics Support},
-    howpublished = "\url{https://github.com/Vertax42/xense-taccap-lerobot}",
+    howpublished = "\url{https://github.com/XenseRobotics-AI/xense-taccap-lerobot}",
     year = {2026}
 }
 ```

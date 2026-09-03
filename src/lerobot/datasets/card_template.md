@@ -50,7 +50,7 @@ head keys to the headset's stereo eyes.</em></p>
 @misc{xense-taccap-lerobot,
     author = {XenseRobotics Team},
     title = {LeRobot-Xense: LeRobot with Xense Tactile Robotics Support},
-    howpublished = {\url{https://github.com/Vertax42/xense-taccap-lerobot}},
+    howpublished = {\url{https://github.com/XenseRobotics-AI/xense-taccap-lerobot}},
     year = {2026}
 }{% if citation_bibtex is defined and citation_bibtex %}
 
