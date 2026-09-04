@@ -114,11 +114,28 @@ is busy. **Not** a tactile/camera/bandwidth issue. Permanent fix is a udev rule
 ignoring `1a86` (`ID_MM_DEVICE_IGNORE=1`) — see README → "Hardware bring-up
 sequence". (`brltty` grabs `1a86` the same way if installed.)
 
-## Pico headset camera (`--robot.enable_head_camera`, off by default)
+## Pico headset camera (bimanual: `--robot.type=xtac_umi_g1`; single-arm: `--robot.enable_head_camera`)
 
 Records `left_head` / `right_head` (one key per **eye** — on a bimanual rig
 `{side}_wrist` is per-arm, but there is one headset, so the prefix means
 something different) plus `head_camera.*`, the headset pose.
+
+- **On the bimanual rig the head is a robot type, not a flag.** `robot_type` in
+  `meta/info.json` is written from `robot.name`, a class attribute bound to the
+  draccus registry key, so a config field can change what is recorded but never
+  what the recording claims to be. A head-enabled run under `bi_taccap_gripper`
+  wrote 29 state dims and 8 cameras under a label meaning 20 and 6; twelve
+  datasets on disk were mislabelled that way. `XtacUmiG1Config` inherits
+  `BiTaccapGripperConfig` and pins `records_head = True`; the base
+  `__post_init__` refuses any `enable_head_camera` that contradicts the class,
+  in both directions, naming the type to switch to.
+  `taccap_gripper` (single-arm) is unchanged — it keeps the flag, and has no
+  headset variant type, because no single-arm head recording exists.
+- **Removing the head must move the label back.** `convert_8_to_6_cameras`
+  relabels `xtac_umi_g1` → `bi_taccap_gripper`, and `modify_features` does the
+  same when the head image keys are among those removed
+  (`robot_type_without_head` / `robot_type_after_removing` in `dataset_tools.py`).
+  Without that, the same mismatch reappears from the other direction.
 
 - **`head_camera.*` is remapped like the tracker.** Same `PICO_TO_WORLD_R`
   conjugation, same xyzw→wxyz reorder, so it lands in the world frame `tcp.*`

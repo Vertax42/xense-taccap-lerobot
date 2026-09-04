@@ -626,6 +626,13 @@ class TestValidateRobotId:
             ("12", "taccap_gripper", "taccap_12"),
             ("0", "bi_taccap_gripper", "bi_taccap_0"),
             ("3", "bi_taccap_gripper", "bi_taccap_3"),
+            # No ``_gripper`` to strip, so the type is used whole. The headset
+            # rig gets a station label of its own rather than sharing
+            # ``bi_taccap_<n>``: meta/hardware.json keys provenance on
+            # robot_id, and two robot types answering to one station id would
+            # make a run's own manifest unable to say which rig recorded it.
+            ("0", "xtac_umi_g1", "xtac_umi_g1_0"),
+            ("7", "xtac_umi_g1", "xtac_umi_g1_7"),
         ],
     )
     def test_a_bare_number_is_expanded_against_the_type(self, raw, robot_type, expected):

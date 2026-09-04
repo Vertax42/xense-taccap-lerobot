@@ -89,10 +89,12 @@ A pinned side is used verbatim (no enumeration, no rule check); un-pinned sides 
 auto-discover. Other knobs: `--robot.role=follower` (bind follower units), `--robot.gripper_open_rad`,
 `--robot.tactile_fps`, `--robot.wrist_camera_width/height/fps`.
 
-The bimanual rig can add the Pico headset camera with:
+The bimanual rig records the Pico headset by switching robot type — the headset is
+part of the type, not a flag, so the recorded `robot_type` and the recorded shape
+cannot disagree:
 
 ```bash
-    --robot.enable_head_camera=true \
+    --robot.type=xtac_umi_g1 \
     --robot.head_camera_eyes=both \
 ```
 
@@ -268,9 +270,8 @@ suggestion does not apply — leaving it off is deliberate.
 
 ```bash
 lerobot-record \
-    --robot.type=bi_taccap_gripper \
+    --robot.type=xtac_umi_g1 \
     --robot.id=0 \
-    --robot.enable_head_camera=true \
     --dataset.repo_id=Xense/taccap-g1-test-0722 \
     --dataset.single_task="Pick up the cube" \
     --dataset.num_episodes=2 \

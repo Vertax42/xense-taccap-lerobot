@@ -26,7 +26,7 @@ This module provides utilities for:
 import copy
 import logging
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -81,6 +81,41 @@ TACCAP_HEAD_CAMERA_FEATURE_KEYS = frozenset(
 TACCAP_8_CAMERA_FEATURE_KEYS = TACCAP_6_CAMERA_FEATURE_KEYS | TACCAP_HEAD_CAMERA_FEATURE_KEYS
 
 HEAD_CAMERA_STATE_NAME_PREFIX = "head_camera."
+
+HEAD_ROBOT_TYPE = "xtac_umi_g1"
+"""The robot type that records the headset; ``NO_HEAD_ROBOT_TYPE`` is the same
+rig without it. Stripping the head changes which of the two a dataset *is*, so
+the conversion below relabels it — see ``robot_type_without_head``."""
+
+NO_HEAD_ROBOT_TYPE = "bi_taccap_gripper"
+
+
+def robot_type_without_head(robot_type: str | None) -> str | None:
+    """The label a dataset should carry once its head cameras are removed.
+
+    The head is part of the robot type, not a flag: ``robot_type`` is written
+    from ``robot.name``, so a dataset that keeps ``xtac_umi_g1`` after losing its
+    head cameras claims 29 state dims and 8 streams while holding 20 and 6. That
+    is exactly the mismatch the split of these two types was introduced to make
+    impossible, so the conversion must not reintroduce it from the other side.
+
+    Any other robot type is returned untouched — this only knows about the pair
+    it owns.
+    """
+    return NO_HEAD_ROBOT_TYPE if robot_type == HEAD_ROBOT_TYPE else robot_type
+
+
+def robot_type_after_removing(robot_type: str | None, removed_keys: Iterable[str]) -> str | None:
+    """Same relabel, for the general feature-removal path.
+
+    Conditional here because ``modify_features`` removes whatever it is asked to:
+    dropping an unrelated feature must not relabel the robot, and dropping the
+    head cameras must. Deleting the head image keys by hand is one of the ways a
+    dataset on disk ended up carrying head pose dimensions with no head video.
+    """
+    if TACCAP_HEAD_CAMERA_FEATURE_KEYS & set(removed_keys):
+        return robot_type_without_head(robot_type)
+    return robot_type
 
 
 def _load_episode_with_stats(src_dataset: LeRobotDataset, episode_idx: int) -> dict:
@@ -379,7 +414,7 @@ def modify_features(
         repo_id=repo_id,
         fps=dataset.meta.fps,
         features=new_features,
-        robot_type=dataset.meta.robot_type,
+        robot_type=robot_type_after_removing(dataset.meta.robot_type, video_keys_to_remove),
         root=output_dir,
         use_videos=len(remaining_video_keys) > 0,
     )
@@ -564,7 +599,7 @@ def convert_8_to_6_cameras(
         repo_id=repo_id,
         fps=dataset.meta.fps,
         features=new_features,
-        robot_type=dataset.meta.robot_type,
+        robot_type=robot_type_without_head(dataset.meta.robot_type),
         root=output_dir,
         use_videos=len(remaining_video_keys) > 0,
         chunks_size=dataset.meta.chunks_size,

@@ -138,7 +138,8 @@ and/or `--robot.right_tracker_serial=<SN>`. A pinned side uses its serial **verb
 enumeration, no rule check); un-pinned sides still auto-discover by the second-to-last-digit
 rule. Use this for a tracker whose serial does not follow the rule, or when enumeration is flaky.
 
-Enable the head camera with `--robot.enable_head_camera=true`. It records `width=640`,
+The head camera is part of the robot type: record with `--robot.type=xtac_umi_g1`
+rather than a flag on this type (see the note below). It records `width=640`,
 `height=480` at dataset FPS 30 as **two keys, one per eye** — `left_head` and
 `right_head`, each 480x640. `--robot.head_camera_eyes=left` (or `right`) records a
 single eye, halving both the JPEG decoding and the encoder load.
@@ -192,9 +193,8 @@ add `--robot.enable_tracker=false` to record tactile + gripper only:
 
 ```bash
 lerobot-record \
-    --robot.type=bi_taccap_gripper \
+    --robot.type=xtac_umi_g1 \
     --robot.id=0 \
-    --robot.enable_head_camera=true \
     --dataset.repo_id=Xense/<dataset_name> \
     --dataset.single_task="Pick up the cube" \
     --dataset.num_episodes=20 \

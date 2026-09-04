@@ -31,6 +31,8 @@ from lerobot.datasets.dataset_tools import (
     modify_features,
     modify_tasks,
     remove_feature,
+    robot_type_after_removing,
+    robot_type_without_head,
     split_dataset,
 )
 from lerobot.scripts.lerobot_edit_dataset import convert_image_to_video_dataset
@@ -1453,3 +1455,28 @@ def test_convert_image_to_video_dataset_subset_episodes(tmp_path):
 
         if output_dir.exists():
             shutil.rmtree(output_dir)
+
+
+class TestRobotTypeFollowsTheHead:
+    """The head is part of the robot type, so removing the head cameras has to
+    move the label with it. Without this, the split that made a head-enabled
+    recording impossible to mislabel would reintroduce the same mismatch from
+    the other direction: an ``xtac_umi_g1`` dataset holding 20 state dims and 6
+    cameras."""
+
+    def test_stripping_the_head_relabels_the_dataset(self):
+        assert robot_type_without_head("xtac_umi_g1") == "bi_taccap_gripper"
+
+    def test_other_robot_types_are_untouched(self):
+        for robot_type in ("bi_taccap_gripper", "taccap_gripper", "bi_arx5", None):
+            assert robot_type_without_head(robot_type) == robot_type
+
+    def test_removing_the_head_cameras_relabels(self):
+        removed = ["observation.images.left_head", "observation.images.right_head"]
+        assert robot_type_after_removing("xtac_umi_g1", removed) == "bi_taccap_gripper"
+
+    def test_removing_something_else_does_not_relabel(self):
+        """modify_features removes whatever it is asked to; only the head moves
+        the label."""
+        assert robot_type_after_removing("xtac_umi_g1", ["observation.images.left_wrist"]) == "xtac_umi_g1"
+        assert robot_type_after_removing("xtac_umi_g1", []) == "xtac_umi_g1"

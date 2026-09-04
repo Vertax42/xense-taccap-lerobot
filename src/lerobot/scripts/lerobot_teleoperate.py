@@ -55,6 +55,7 @@ from lerobot.robots import (  # noqa: F401
     bi_taccap_gripper,
     make_robot_from_config,
     taccap_gripper,
+    xtac_umi_g1,
 )
 from lerobot.robots.taccap_gripper.visualization import TaccapTrajectoryViz
 from lerobot.teleoperators import (  # noqa: F401
@@ -84,7 +85,7 @@ logger = get_logger("Teleoperate")
 # lerobot-teleoperate just streams get_observation() to Rerun (data-stream + viz).
 # An optional --teleop satisfies the CLI but is never read. Mirrors v0.4.4's
 # xense_flare / bi_xense_flare_grippers data-collection path.
-SELF_DRIVEN_TELEOP_ROBOTS = frozenset({"taccap_gripper", "bi_taccap_gripper"})
+SELF_DRIVEN_TELEOP_ROBOTS = frozenset({"taccap_gripper", "bi_taccap_gripper", "xtac_umi_g1"})
 
 
 @dataclass

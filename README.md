@@ -276,18 +276,30 @@ mmcli -L                                                               # gripper
 Revert by deleting the rule file and reloading. (Alternatively, on a dedicated
 robot PC with no cellular modem: `sudo systemctl disable --now ModemManager`.)
 
-## 🥽 Pico headset camera (optional)
+## 🥽 Pico headset camera
 
-Off by default. `--robot.enable_head_camera=true` records the headset's stereo
-camera as **one key per eye** — `left_head` and `right_head` — plus the headset
-pose under `head_camera.*`. Works on both `taccap_gripper` and
-`bi_taccap_gripper`.
+On a bimanual rig the headset is chosen by **robot type**, not by a flag:
+`--robot.type=xtac_umi_g1` is the same two TacCap grippers *plus* the headset,
+recording its stereo camera as **one key per eye** — `left_head` and
+`right_head` — plus the headset pose under `head_camera.*`. Use
+`--robot.type=bi_taccap_gripper` for the same grippers without it.
 
 ```bash
-lerobot-record --robot.type=bi_taccap_gripper \
-    --robot.enable_head_camera=true \
+lerobot-record --robot.type=xtac_umi_g1 \
     --dataset.repo_id=<org>/<name> --dataset.single_task='...'
 ```
+
+**Why a type and not a flag.** A dataset's `robot_type` is written from
+`robot.name`, a class attribute, so a config flag could change *what was
+recorded* but never *what the recording claimed to be*. A head-enabled run under
+`bi_taccap_gripper` therefore wrote 29 state dims and 8 cameras under a label
+meaning 20 and 6, with nothing at record time able to notice — twelve datasets
+were mislabelled that way before the mismatch was spotted downstream. Passing
+`--robot.enable_head_camera` in a way that contradicts the type is now an error
+that names the type to use instead.
+
+The single-arm `taccap_gripper` keeps `--robot.enable_head_camera=true`; it has
+no headset variant type, and no single-arm head recording exists to migrate.
 
 - **The names are the headset's eyes, not the arms.** On a bimanual rig
   `{side}_wrist` is per-arm, but there is one headset, so the prefix means
