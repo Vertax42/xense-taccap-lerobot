@@ -588,13 +588,24 @@ class XenseTactileCamera(Camera):
             self._stop_read_thread()
 
         if self.sensor is not None:
+            # xensesdk 2.1.2/2.1.3 can close its OpenCV backend while the SDK's
+            # own fetch thread is still reading from it. Suspending joins that
+            # thread before Sensor.release() closes the backend.
+            #
+            # In its own try: this reaches into SDK internals (`ctx.get_handle`)
+            # that only these versions are known to expose, and releasing the
+            # sensor is the part that must not be skipped. Sharing one try with
+            # release() would turn "this SDK has no such handle" into a leaked
+            # camera plus a warning — a worse outcome than the crash this
+            # guards against, and on a version that never had the crash.
             try:
-                # xensesdk 2.1.2/2.1.3 can close its OpenCV backend while the
-                # SDK's own fetch thread is still reading from it. Suspending
-                # joins that thread before Sensor.release() closes the backend.
                 sdk_camera = self.sensor.ctx.get_handle("cam")
                 if sdk_camera is not None:
                     sdk_camera.suspend_stream()
+            except Exception as e:
+                logger.warn(f"Could not suspend the SDK stream for {self} before release: {e}")
+
+            try:
                 self.sensor.release()
             except Exception as e:
                 logger.warn(f"Error releasing {self}: {e}")
