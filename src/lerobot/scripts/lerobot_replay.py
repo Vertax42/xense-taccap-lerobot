@@ -63,6 +63,7 @@ from lerobot.robots import (  # noqa: F401
     bi_taccap_gripper,
     make_robot_from_config,
     taccap_gripper,
+    xtac_umi_g1,
 )
 from lerobot.utils.constants import ACTION
 from lerobot.utils.import_utils import register_third_party_plugins

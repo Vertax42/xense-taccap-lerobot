@@ -71,6 +71,7 @@ from lerobot.robots import (  # noqa: F401
     bi_taccap_gripper,
     make_robot_from_config,
     taccap_gripper,
+    xtac_umi_g1,
 )
 from lerobot.robots.taccap_gripper.common import check_dataset_station, write_hardware_manifest
 from lerobot.robots.taccap_gripper.visualization import TaccapTrajectoryViz
@@ -279,7 +280,7 @@ def _session_lines(cfg: "RecordConfig", robot: Robot, dataset: LeRobotDataset) -
 # logs the device's own demonstrated state (the ``action_features`` subset of
 # the observation) as the action — shifted-frame, so action[t] pairs with
 # obs[t-1] — instead of a separate ``teleop.get_action()``.
-SELF_DRIVEN_RECORD_ROBOTS = frozenset({"taccap_gripper", "bi_taccap_gripper"})
+SELF_DRIVEN_RECORD_ROBOTS = frozenset({"taccap_gripper", "bi_taccap_gripper", "xtac_umi_g1"})
 
 
 @dataclass

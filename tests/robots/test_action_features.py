@@ -28,6 +28,8 @@ from lerobot.robots.bi_taccap_gripper.bi_taccap_gripper import BiTaccapGripper
 from lerobot.robots.bi_taccap_gripper.config_bi_taccap_gripper import BiTaccapGripperConfig
 from lerobot.robots.taccap_gripper.config_taccap_gripper import TaccapGripperConfig
 from lerobot.robots.taccap_gripper.taccap_gripper import TaccapGripper
+from lerobot.robots.xtac_umi_g1.config_xtac_umi_g1 import XtacUmiG1Config
+from lerobot.robots.xtac_umi_g1.xtac_umi_g1 import XtacUmiG1
 
 TACTILES = {
     "left": {"left": "GSPS01A28Z0005", "right": "GSPS01A28Z0006"},
@@ -46,7 +48,10 @@ def build(cls, config, trackers):
     cv2's vendored libtiff), which is why lerobot_record preloads it. Neither
     matters here: nothing below reaches a code path that calls into the SDK.
     """
-    module = cls.__module__
+    # The module that defines ``__init__``, not ``cls.__module__``: a subclass
+    # such as XtacUmiG1 inherits the constructor, so the availability flags it
+    # reads live in its parent's namespace, not its own.
+    module = cls.__init__.__module__
     with (
         patch(f"{module}.TACCAP_SDK_AVAILABLE", True),
         patch(f"{module}.PICO4_TRACKER_AVAILABLE", True),
@@ -146,29 +151,66 @@ class TestEnableTactile:
 
 
 class TestBimanualActionFeatures:
+    """The head is chosen by robot *type*, so these read it off the two types
+    rather than off a flag — ``bi_taccap_gripper`` records no head and
+    ``xtac_umi_g1`` always does."""
+
     def _robot(self, **kwargs):
         return build(BiTaccapGripper, BiTaccapGripperConfig(id="taccap_0", **kwargs), {"left": "PC1", "right": "PC2"})
 
-    def test_head_pose_is_absent_without_the_head_camera(self):
-        assert head_keys(self._robot(enable_head_camera=False).action_features) == set()
+    def _head_robot(self, **kwargs):
+        return build(XtacUmiG1, XtacUmiG1Config(id="taccap_0", **kwargs), {"left": "PC1", "right": "PC2"})
 
-    def test_head_pose_is_an_action_when_the_head_camera_is_on(self):
-        keys = head_keys(self._robot(enable_head_camera=True).action_features)
+    def test_head_pose_is_absent_without_the_head_camera(self):
+        assert head_keys(self._robot().action_features) == set()
+
+    def test_head_pose_is_an_action_on_the_head_type(self):
+        keys = head_keys(self._head_robot().action_features)
         assert keys == {f"head_camera.{s}" for s in POSE_SUFFIXES}
 
     def test_head_pose_is_unprefixed_and_appears_once(self):
         """One headset serves both arms, so it is not per-side — unlike
         {side}_tcp.*, which the same rig reports twice."""
-        features = self._robot(enable_head_camera=True).action_features
+        features = self._head_robot().action_features
         assert not any(k.startswith(("left_head_camera", "right_head_camera")) for k in features)
         assert len(head_keys(features)) == len(POSE_SUFFIXES)
 
     def test_per_side_keys_are_unaffected(self):
-        """Turning the head camera on must not disturb the arm columns."""
-        without = self._robot(enable_head_camera=False).action_features
-        with_head = self._robot(enable_head_camera=True).action_features
+        """The headset must not disturb the arm columns."""
+        without = self._robot().action_features
+        with_head = self._head_robot().action_features
         sided = {k for k in with_head if k.startswith(("left_", "right_"))}
         assert sided == set(without)
+
+
+class TestHeadIsPartOfTheRobotType:
+    """``robot_type`` in a recorded dataset comes from ``robot.name``, a class
+    attribute, so a config flag could change what was recorded but never what
+    the recording claimed to be. Both contradictions are refused at config time,
+    before any device is touched."""
+
+    def test_the_plain_bimanual_type_refuses_the_head(self):
+        with pytest.raises(ValueError, match="--robot.type=xtac_umi_g1"):
+            BiTaccapGripperConfig(id="taccap_0", enable_head_camera=True)
+
+    def test_the_head_type_refuses_to_drop_the_head(self):
+        with pytest.raises(ValueError, match="--robot.type=bi_taccap_gripper"):
+            XtacUmiG1Config(id="taccap_0", enable_head_camera=False)
+
+    def test_the_head_type_needs_no_flag(self):
+        assert XtacUmiG1Config(id="taccap_0").enable_head_camera is True
+
+    def test_the_recorded_label_matches_the_recorded_shape(self):
+        """The bug this type exists to close: 29 state dims and 8 cameras under
+        a name meaning 20 and 6."""
+        robot = build(XtacUmiG1, XtacUmiG1Config(id="taccap_0"), {"left": "PC1", "right": "PC2"})
+        assert robot.name == "xtac_umi_g1"
+        # lerobot_record passes robot.name straight to LeRobotDataset.create.
+        assert robot.robot_type == "xtac_umi_g1"
+        assert head_keys(robot.observation_features) == {f"head_camera.{s}" for s in POSE_SUFFIXES}
+        # The configs the robot decided to open, not ``cameras`` — the camera
+        # factory is stubbed out here, so only the decision is observable.
+        assert {"left_head", "right_head"} <= set(robot._camera_configs)
 
 
 class TestRobotIdIsRequired:
@@ -202,14 +244,14 @@ class TestRobotIdIsRequired:
         assert make(id="  taccap_1 ").id == "taccap_1"
 
 
-@pytest.mark.parametrize("enable_head_camera", [False, True])
-def test_action_features_is_a_subset_of_observation_features(enable_head_camera):
+@pytest.mark.parametrize(
+    ("cls", "config_cls"),
+    [(BiTaccapGripper, BiTaccapGripperConfig), (XtacUmiG1, XtacUmiG1Config)],
+    ids=["no_head", "head"],
+)
+def test_action_features_is_a_subset_of_observation_features(cls, config_cls):
     """The record loop builds the action by selecting action_features out of the
     observation it already sampled, so a key here that the observation does not
     carry would silently drop out of the dataset."""
-    robot = build(
-        BiTaccapGripper,
-        BiTaccapGripperConfig(id="taccap_0", enable_head_camera=enable_head_camera),
-        {"left": "PC1", "right": "PC2"},
-    )
+    robot = build(cls, config_cls(id="taccap_0"), {"left": "PC1", "right": "PC2"})
     assert set(robot.action_features) <= set(robot.observation_features)

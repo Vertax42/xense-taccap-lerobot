@@ -123,6 +123,7 @@ available_policies_per_env: dict[str, list[str]] = {}
 available_robots = [
     "taccap_gripper",
     "bi_taccap_gripper",
+    "xtac_umi_g1",
 ]
 
 # lists all available cameras from `lerobot/cameras`

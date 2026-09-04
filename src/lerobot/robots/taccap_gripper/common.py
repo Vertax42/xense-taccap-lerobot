@@ -344,6 +344,37 @@ def swap_tactile_display_features(
 # ------------------------------------------------------------------ head camera
 
 
+def head_camera_type_mismatch_message(robot_type: str, records_head: bool) -> str:
+    """Explain that the head belongs to the robot type, and name the type to use.
+
+    Shared so both directions read the same way and neither can drift: a type
+    that records the head refusing ``enable_head_camera=false``, and one that
+    does not refusing ``true``.
+
+    The reason this is an error rather than a warning is that the wrong answer
+    is silent and permanent. ``robot_type`` in ``meta/info.json`` comes from
+    ``robot.name`` — a class attribute — so a head-enabled run under a
+    no-head type produced a dataset whose recorded label contradicted its own
+    29 state dims and 8 cameras, with nothing at record time to say so.
+    """
+    if records_head:
+        return (
+            f"{robot_type} always records the headset: its stereo cameras "
+            "(left_head / right_head) and the head_camera.* pose are part of the "
+            "robot type, not a flag, so --robot.enable_head_camera=false is not a "
+            "valid combination. To record the same grippers without the headset, "
+            "use --robot.type=bi_taccap_gripper."
+        )
+    return (
+        f"{robot_type} does not record the headset, so "
+        "--robot.enable_head_camera=true is not a valid combination. Use "
+        "--robot.type=xtac_umi_g1, which records the headset's stereo cameras "
+        "(left_head / right_head) and the head_camera.* pose. Recording the head "
+        f"under {robot_type} is what wrote a robot_type into meta/info.json that "
+        "disagreed with the shape actually recorded."
+    )
+
+
 def build_head_camera_configs(config: Any) -> dict[str, Any]:
     """One ``PicoCameraConfig`` per recorded eye, keyed by observation name.
 

@@ -36,10 +36,12 @@ auto-discover by rule.
 """
 
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 from ..config import RobotConfig
 from ..taccap_gripper.common import (
     build_head_camera_configs,
+    head_camera_type_mismatch_message,
     validate_robot_id,
     validate_wrist_undistort_size,
 )
@@ -249,11 +251,26 @@ class BiTaccapGripperConfig(RobotConfig):
     to OpenCV; ``"YUYV"`` forces the uncompressed stream."""
 
     # ---- Pico head camera ---------------------------------------------------
+    records_head: ClassVar[bool] = False
+    """Whether *this robot type* records the head. Not a field — it is fixed by
+    the class, and ``enable_head_camera`` must agree with it.
+
+    The head used to be a free flag on this type, which meant a head-enabled run
+    recorded 29 state dims and 8 cameras while still writing
+    ``robot_type: bi_taccap_gripper`` into ``meta/info.json`` — ``robot_type``
+    comes from ``robot.name``, a class attribute, so no flag could ever move it.
+    Twelve datasets on disk were mislabelled that way before anyone noticed.
+    Making the head part of the type is what makes the recorded label and the
+    recorded shape unable to disagree; see ``XtacUmiG1Config``."""
+
     enable_head_camera: bool = False
     """Stream the headset's stereo camera as ``left_head`` /
     ``right_head`` (one key per eye), plus the headset
     pose as ``head_camera.*``. Shares the Pico SDK connection with the
-    trackers, so it needs the headset app streaming either way."""
+    trackers, so it needs the headset app streaming either way.
+
+    Derived from the robot type rather than chosen: passing a value that
+    contradicts ``records_head`` is an error naming the type to use instead."""
     head_camera_eyes: str = "both"
     """``"both"`` records the eyes side by side, ``"left"``/``"right"`` one of
     them. Merged frames are ``head_camera_height x (2 * head_camera_width)``."""
@@ -297,6 +314,8 @@ class BiTaccapGripperConfig(RobotConfig):
             "slave",
         ):
             raise ValueError(f"role must be leader or follower, got {self.role!r}.")
+        if self.enable_head_camera != self.records_head:
+            raise ValueError(head_camera_type_mismatch_message(self.type, self.records_head))
         if self.enable_head_camera:
             # Delegate to the camera config so there is one definition of what
             # a valid mode is, rather than a copy here that can drift from it.
