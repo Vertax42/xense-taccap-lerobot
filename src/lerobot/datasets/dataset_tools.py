@@ -58,7 +58,6 @@ from lerobot.utils.constants import (
     HF_LEROBOT_HOME,
     OBS_IMAGE,
     TACCAP_HARDWARE_MANIFEST_PATH,
-    TACCAP_RUNTIME_DIR,
 )
 
 TACCAP_6_CAMERA_FEATURE_KEYS = frozenset(
@@ -640,15 +639,13 @@ def _copy_taccap_local_metadata(src_root: Path, dst_root: Path) -> None:
     helpers above move only data, videos and episode metadata. Anything this fork
     adds under `meta/` is therefore dropped unless copied here.
 
-    Two things live there and both matter:
+    One thing lives there and it matters: `meta/hardware.json` maps each tactile
+    `observation_key` to the **physical sensor serial** that produced it.
 
-    * `meta/hardware.json` maps each tactile `observation_key` to the **physical
-      sensor serial** that produced it.
-    * `meta/runtimes/*.bin` holds those sensors' calibration bundles.
-
-    Losing them is not a cosmetic regression. Deriving depth / force / difference
-    from a tactile stream needs that sensor's own calibration, and solving a
-    stream against **another** unit's bundle does not fail loudly — measured on
+    Losing it is not a cosmetic regression. Deriving depth / force / difference
+    from a tactile stream is solved against that sensor's own reference (its
+    first `rectify` frame), and solving a stream against **another** unit's
+    reference does not fail loudly — measured on
     untouched gels it inflates `Depth` by ~800x and `ForceResultant` by ~1000x
     while reporting no error at all. A converted dataset that lost its manifest
     cannot be reconstructed from the dataset alone; the mapping only exists in
@@ -659,7 +656,7 @@ def _copy_taccap_local_metadata(src_root: Path, dst_root: Path) -> None:
     nothing in it to prune.
     """
     src_root, dst_root = Path(src_root), Path(dst_root)
-    for relative in (TACCAP_HARDWARE_MANIFEST_PATH, TACCAP_RUNTIME_DIR):
+    for relative in (TACCAP_HARDWARE_MANIFEST_PATH,):
         src = src_root / relative
         if not src.exists():
             continue

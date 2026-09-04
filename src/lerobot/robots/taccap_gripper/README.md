@@ -758,14 +758,12 @@ defaults it to `taccap_0`.
             {
               "finger": "left",
               "observation_key": "left_tactile_left",
-              "serial": "GSPS01A25Z0011",
-              "runtime": "meta/runtimes/GSPS01A25Z0011-20260822T160309.bin"
+              "serial": "GSPS01A25Z0011"
             },
             {
               "finger": "right",
               "observation_key": "left_tactile_right",
-              "serial": "GSPS01A25Z0012",
-              "runtime": "meta/runtimes/GSPS01A25Z0012-20260822T160309.bin"
+              "serial": "GSPS01A25Z0012"
             }
           ],
           "wrist_undistort": { "applied": false }
@@ -822,9 +820,9 @@ changed"_ is not _"it didn't"_.
   omitted; `enable_tactile=false` gives it an empty `tactile_sensors`.
 - It is a file of its own, **not** a key in `meta/info.json`: that schema is
   upstream's and a fork-local key in it would collide on the next v5.x sync.
-- `runtime` points at the tactile runtime bundle under `meta/runtimes/` that was
-  current when those episodes were recorded — what the derived channels have to
-  be rebuilt against.
+- Tactile runtime bundles are no longer written (older datasets may still show a
+  `runtime` key per sensor; it is ignored). The derived channels are rebuilt from
+  the stream's own first `rectify` frame plus the serial.
 - `wrist_undistort` says whether that unit's wrist frames were rectified and from
   whose intrinsics (`"unit"` or `"reference"`). Present whenever the unit has a
   wrist camera, including as `{"applied": false}`.

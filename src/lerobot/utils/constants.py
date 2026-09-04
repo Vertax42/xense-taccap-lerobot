@@ -99,4 +99,3 @@ LIBERO_KEY_PIXELS_EYE_IN_HAND = "pixels/robot0_eye_in_hand_image"
 # `datasets/` can name them without importing `robots/` (which would invert the
 # dependency direction). `common.py` re-exports them for its existing callers.
 TACCAP_HARDWARE_MANIFEST_PATH = "meta/hardware.json"
-TACCAP_RUNTIME_DIR = "meta/runtimes"
