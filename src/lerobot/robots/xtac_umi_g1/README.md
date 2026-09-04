@@ -14,11 +14,11 @@ lerobot-record --robot.type=xtac_umi_g1 --robot.id=0 \
 
 Everything `bi_taccap_gripper` records, plus:
 
-| Key                        | Meaning                                                          |
-| -------------------------- | ---------------------------------------------------------------- |
-| `left_head` / `right_head` | headset camera, one key per **eye** (not per arm)                |
-| `head_camera.x/y/z`        | headset position, same world frame as `{side}_tcp.*`             |
-| `head_camera.r1..r6`       | headset orientation, first two rotation-matrix columns           |
+| Key                        | Meaning                                                |
+| -------------------------- | ------------------------------------------------------ |
+| `left_head` / `right_head` | headset camera, one key per **eye** (not per arm)      |
+| `head_camera.x/y/z`        | headset position, same world frame as `{side}_tcp.*`   |
+| `head_camera.r1..r6`       | headset orientation, first two rotation-matrix columns |
 
 So **29 state dimensions** (20 + 9) and **8 camera keys** (6 + 2), against 20 and 6 for
 `bi_taccap_gripper`. The head pose is an action as well as an observation — where the
@@ -31,7 +31,7 @@ Headset knobs (`--robot.head_camera_eyes`, `head_camera_width` / `height` / `fps
 ## Why this is a type and not a flag
 
 `enable_head_camera` used to be an ordinary config field on `bi_taccap_gripper`. It could
-change what was recorded, but never what the recording *claimed* to be: a dataset's
+change what was recorded, but never what the recording _claimed_ to be: a dataset's
 `robot_type` comes from `robot.name`, a class attribute bound to the draccus registry key,
 so `lerobot-record` wrote `bi_taccap_gripper` no matter what the flag said.
 

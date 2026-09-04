@@ -279,7 +279,7 @@ robot PC with no cellular modem: `sudo systemctl disable --now ModemManager`.)
 ## 🥽 Pico headset camera
 
 On a bimanual rig the headset is chosen by **robot type**, not by a flag:
-`--robot.type=xtac_umi_g1` is the same two TacCap grippers *plus* the headset,
+`--robot.type=xtac_umi_g1` is the same two TacCap grippers _plus_ the headset,
 recording its stereo camera as **one key per eye** — `left_head` and
 `right_head` — plus the headset pose under `head_camera.*`. Use
 `--robot.type=bi_taccap_gripper` for the same grippers without it.
@@ -290,8 +290,8 @@ lerobot-record --robot.type=xtac_umi_g1 \
 ```
 
 **Why a type and not a flag.** A dataset's `robot_type` is written from
-`robot.name`, a class attribute, so a config flag could change *what was
-recorded* but never *what the recording claimed to be*. A head-enabled run under
+`robot.name`, a class attribute, so a config flag could change _what was
+recorded_ but never _what the recording claimed to be_. A head-enabled run under
 `bi_taccap_gripper` therefore wrote 29 state dims and 8 cameras under a label
 meaning 20 and 6, with nothing at record time able to notice — twelve datasets
 were mislabelled that way before the mismatch was spotted downstream. Passing
