@@ -4,9 +4,12 @@ Bimanual TacCap-Gripper handheld data-collection rig — two `taccap_gripper` un
 (left + right) driven as one robot. Passive/self-driven: `send_action()` is a no-op
 (jaw motors stay disabled, encoders read-only); pose comes from a per-side Pico4
 Ultra tracker, tactile + wrist cameras go through the standard `cameras` framework.
-An optional Pico headset camera uses the same robot observation path and contributes
-a stereo RGB frame plus the headset pose; no head-to-gripper extrinsic calibration is
-required at capture time.
+The Pico headset is a **separate robot type**, [`xtac_umi_g1`](../xtac_umi_g1/), which
+subclasses this one and always records the headset — a stereo RGB frame plus the headset
+pose, through the same observation path, with no head-to-gripper extrinsic calibration
+required at capture time. It is a type rather than a flag because a dataset's
+`robot_type` is written from `robot.name`, a class attribute, so a flag could change what
+was recorded but never what the recording claimed to be.
 
 Implemented with the **reimplement-with-prefixes** pattern (cf. `bi_elite_cs66_rt`):
 one `Robot` class, per-side handles in dicts keyed `"left"`/`"right"`, and every
@@ -25,13 +28,15 @@ Per side `{s}` ∈ {left, right}:
 | `{s}_wrist`                              | `{s}_enable_wrist_camera`                       | wrist UVC frame                                                                                            |
 | `{s}_tactile_left` / `{s}_tactile_right` | auto-discovered                                 | **recorded** tactile frame from the left / right finger sensor (`rectify`)                                 |
 | `{s}_tactile_{left,right}_difference`    | `tactile_display_output_types='["difference"]'` | **display-only** amplified-deformation view of the same read — Rerun only, never recorded (off by default) |
-| `left_head` / `right_head`               | `enable_head_camera`                            | headset camera, one key per **eye** (not per arm) — `head_camera_eyes` can select one                      |
-| `head_camera.x/y/z`                      | `enable_head_camera`                            | headset position, same world frame as `{s}_tcp.*`                                                          |
-| `head_camera.r1..r6`                     | `enable_head_camera`                            | headset orientation as the first two rotation-matrix columns                                               |
+| `left_head` / `right_head`               | `--robot.type=xtac_umi_g1`                      | headset camera, one key per **eye** (not per arm) — `head_camera_eyes` can select one                      |
+| `head_camera.x/y/z`                      | `--robot.type=xtac_umi_g1`                      | headset position, same world frame as `{s}_tcp.*`                                                          |
+| `head_camera.r1..r6`                     | `--robot.type=xtac_umi_g1`                      | headset orientation as the first two rotation-matrix columns                                               |
 
-`action_features` = the per-side gripper pose + `{s}_gripper.pos` subset; the head
-camera pose and all images remain observation-only. With both Pico4 trackers, both
-grippers and the head camera enabled, `observation.state` has 29 dimensions (20 + 9).
+`action_features` = the per-side gripper pose + `{s}_gripper.pos` subset; all images
+remain observation-only, though the head pose is also an action. With both Pico4 trackers
+and both grippers, `observation.state` has **20 dimensions** under `bi_taccap_gripper` and
+**29** (20 + the 9-component head pose) under `xtac_umi_g1` — the type and the width move
+together, which is the point of the split.
 
 **Recorded and displayed are the same stream by default.** `tactile_output_types` and
 `tactile_display_output_types` both name `rectify`, so each sensor is read once, the
@@ -139,7 +144,7 @@ enumeration, no rule check); un-pinned sides still auto-discover by the second-t
 rule. Use this for a tracker whose serial does not follow the rule, or when enumeration is flaky.
 
 The head camera is part of the robot type: record with `--robot.type=xtac_umi_g1`
-rather than a flag on this type (see the note below). It records `width=640`,
+rather than a flag on this type. It records `width=640`,
 `height=480` at dataset FPS 30 as **two keys, one per eye** — `left_head` and
 `right_head`, each 480x640. `--robot.head_camera_eyes=left` (or `right`) records a
 single eye, halving both the JPEG decoding and the encoder load.
