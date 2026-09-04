@@ -37,6 +37,16 @@ lerobot-info
 lerobot-find-cameras
 ```
 
+语音提示也通过宿主机播放：Compose 把桌面会话的 PipeWire/PulseAudio socket
+和认证 cookie 传入容器，镜像内的 Speech Dispatcher + eSpeak NG 负责合成。
+因此要从登录桌面用户的终端启动 Compose（不要用 `sudo docker compose`）。可在容器里测试：
+
+```bash
+timeout 8s spd-say --wait 'Speech test'
+```
+
+如果这里没有声音，先在宿主机运行 `pactl info`；它也无法连接时，应先修复宿主机音频会话。
+
 `install_customer.sh` 需要几分钟到几十分钟（镜像约 21 GB）。如果本机要走代理就加
 `XENSE_PROXY_URL=http://127.0.0.1:7897`。
 
@@ -233,10 +243,9 @@ dpkg-query -W -f='daemon -> ${Version}\n' xensevr-pc-service
   - **录制不再因为语音提示崩溃。** `--play_sounds` 默认开，而镜像里没有 `spd-say`，
     于是第一集刚开始就 `FileNotFoundError`，清理时又抛一次，最后 `Aborted (core dumped)`。
     现在 TTS 失败只警告不中断。**升级后不再需要 `--play_sounds=false`。**
-    注意**容器里仍然听不到声音** —— 镜像装了 `speech-dispatcher`，但没有语音合成器
-    模块，`spd-say` 会以非零退出，然后被安全忽略。补上合成器反而更糟：容器里没有可用的
-    音频输出，`spd-say --wait` 会**无限挂住**而不是失败，所以这条 blocking 调用现在带
-    10 秒上限。想真正听到提示音，请在宿主机上跑录制，或自己映射音频服务。
+    这个版本当时的容器仍然听不到声音；当前 Docker 源码已经补上 eSpeak NG 合成模块，
+    并通过 Compose 映射宿主机 PipeWire/PulseAudio。blocking 调用仍保留 10 秒上限，防止
+    宿主机音频服务异常时卡住录制退出。
   - **录出来的视频不再是 `-rw------- root`**，改为 `0644`，别的用户/账号读得了。
   - **`LEROBOT_DATA_DIR`** 可以把数据集直接落到宿主机目录，见上面「想直接在宿主机访问
     数据」。这条不需要新镜像，改 `.env` 即可。
@@ -257,6 +266,7 @@ dpkg-query -W -f='daemon -> ${Version}\n' xensevr-pc-service
 | `could not select device driver ... gpu`     | 没装 NVIDIA Container Toolkit,或装完没重启 Docker daemon                                                                                                                                                                                                                        |
 | `/dev/ttyACM*` 存在但 busy                   | 按顶层 README 配置宿主机 ModemManager udev 规则，重新插拔                                                                                                                                                                                                                       |
 | GUI 不显示                                   | 检查 `$DISPLAY`、`/tmp/.X11-unix` 和 `xhost +si:localuser:root`                                                                                                                                                                                                                 |
+| `Speech Dispatcher refused to start`         | 从登录桌面用户的终端启动 Compose，不要加 `sudo`；宿主机先用 `pactl info` 确认音频会话正常，再检查容器里的 `$PULSE_SERVER` 和 `/tmp/pulse/native`                                                                                                                               |
 | Rerun 报 `Failed to create surface`          | 容器没拿到 NVIDIA 的 Vulkan ICD。容器里跑 `vulkaninfo --summary` 看有没有 NVIDIA 设备，没有就看下一行                                                                                                                                                                           |
 | 容器内 `vulkaninfo` 报 `INCOMPATIBLE_DRIVER` | CUDA 正常但图形能力没注入。确认 `docker info --format '{{json .Runtimes}}'` 列出了 `nvidia`；没有就 `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`。**别把 compose 的 `runtime: nvidia` 改回 `gpus: all`** —— 后者只申请 compute+utility |
 | `cuda: False` 但 `nvidia-smi` 正常           | 宿主机 CUDA 状态坏了（挂起/恢复后常见），与容器无关。`sudo rmmod nvidia_uvm && sudo modprobe nvidia_uvm`，或重启                                                                                                                                                                |

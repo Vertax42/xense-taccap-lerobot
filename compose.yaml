@@ -60,6 +60,10 @@ services:
       DISPLAY: ${DISPLAY:-:0}
       START_XENSEVR_SERVICE: ${START_XENSEVR_SERVICE:-1}
       XDG_RUNTIME_DIR: /tmp/xdg-runtime
+      # Ubuntu desktops expose PipeWire through this PulseAudio-compatible
+      # socket. Speech Dispatcher runs inside the container and sends the
+      # synthesized announcements to that host audio session.
+      PULSE_SERVER: unix:/tmp/pulse/native
       WGPU_BACKEND: vulkan
       # VISIBLE_DEVICES replaces what `gpus: all` used to say and is required.
       #
@@ -94,6 +98,8 @@ services:
       - huggingface-cache:/root/.cache/huggingface
       - torch-cache:/root/.cache/torch
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XDG_RUNTIME_DIR:-/run/user/1000}/pulse/native:/tmp/pulse/native
+      - ${HOME}/.config/pulse/cookie:/root/.config/pulse/cookie:ro
     working_dir: /opt/lerobot
 
 volumes:
