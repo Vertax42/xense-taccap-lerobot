@@ -260,30 +260,6 @@ class TaccapGripper(Robot):
         return configs
 
     @property
-    def tactile_runtimes(self) -> dict[str, bytes]:
-        """Each connected tactile sensor's runtime bundle, keyed by serial.
-
-        Recorded into the dataset so the derived channels (depth, force,
-        difference) can be rebuilt from the ``rectify`` stream later without the
-        physical sensor — and without the risk that it has since been
-        recalibrated, which changes the reference image the reconstruction is
-        measured against.
-
-        Sensors that cannot produce one are simply absent: that costs the derived
-        channels for those episodes, which is not a reason to fail a recording.
-        """
-        runtimes: dict[str, bytes] = {}
-        for camera in self.cameras.values():
-            export = getattr(camera, "export_runtime_config", None)
-            serial = getattr(camera, "serial_number", None)
-            if export is None or not serial:
-                continue
-            blob = export()
-            if blob:
-                runtimes[serial] = blob
-        return runtimes
-
-    @property
     def hardware_manifest(self) -> dict[str, Any]:
         """Which physical device this unit is, for the recording to carry along.
 

@@ -34,7 +34,7 @@ from lerobot.datasets.dataset_tools import (
     split_dataset,
 )
 from lerobot.scripts.lerobot_edit_dataset import convert_image_to_video_dataset
-from lerobot.utils.constants import TACCAP_HARDWARE_MANIFEST_PATH, TACCAP_RUNTIME_DIR
+from lerobot.utils.constants import TACCAP_HARDWARE_MANIFEST_PATH
 
 
 def _taccap_8_camera_features() -> dict:
@@ -676,7 +676,7 @@ def test_convert_8_to_6_cameras(empty_lerobot_dataset_factory, tmp_path):
 
 
 def test_convert_8_to_6_cameras_keeps_the_taccap_hardware_metadata(empty_lerobot_dataset_factory, tmp_path):
-    """End-to-end: the sensor manifest and runtime bundles survive a real conversion.
+    """End-to-end: the sensor manifest survives a real conversion.
 
     Checked here rather than only on the copy helper because the loss was never in
     the helper — it was that no one called it. `LeRobotDatasetMetadata.create`
@@ -716,15 +716,11 @@ def test_convert_8_to_6_cameras_keeps_the_taccap_hardware_metadata(empty_lerobot
         }
     )
     (dataset.meta.root / TACCAP_HARDWARE_MANIFEST_PATH).write_text(manifest)
-    bundle = dataset.meta.root / TACCAP_RUNTIME_DIR / "GSPS01A29Z0017-20260824T101500.bin"
-    bundle.parent.mkdir(parents=True, exist_ok=True)
-    bundle.write_bytes(b"encrypted-runtime-bundle")
 
     converted = convert_8_to_6_cameras(dataset, output_dir=tmp_path / "converted_6cam", repo_id="test/6cam_hw")
 
     out = Path(converted.meta.root)
     assert (out / TACCAP_HARDWARE_MANIFEST_PATH).read_text() == manifest
-    assert (out / TACCAP_RUNTIME_DIR / bundle.name).read_bytes() == b"encrypted-runtime-bundle"
     # The manifest names sensors, not cameras — a head-camera removal must not
     # rewrite it, so it has to come through byte-identical.
     assert "GSPS01A29Z0017" in (out / TACCAP_HARDWARE_MANIFEST_PATH).read_text()

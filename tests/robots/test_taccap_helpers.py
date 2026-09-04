@@ -18,9 +18,7 @@ pinning. Nothing below touches hardware or either vendor SDK.
 
 import functools
 import json
-import re
 import time
-from datetime import datetime, timedelta
 
 import numpy as np
 import pytest
@@ -29,12 +27,10 @@ from lerobot.cameras.pico import SUPPORTED_MODES
 from lerobot.robots.bi_taccap_gripper.config_bi_taccap_gripper import BiTaccapGripperConfig
 from lerobot.robots.taccap_gripper.camera_health import CameraReadGuard
 from lerobot.robots.taccap_gripper.common import (
-    CAPTURE_TZ,
     HARDWARE_MANIFEST_PATH,
     HEAD_CAMERA_KEYS,
     HEAD_POSE_KEYS,
     POSE_KEYS,
-    RUNTIME_DIR,
     GripperReadGuard,
     HeadSkewMonitor,
     build_hardware_manifest,
@@ -53,7 +49,6 @@ from lerobot.robots.taccap_gripper.common import (
     swap_tactile_display_features,
     tactile_camera_output_types,
     tactile_display_key,
-    tactile_runtime_for_key,
     tactile_serial_for_key,
     validate_robot_id,
     validate_wrist_undistort_size,
@@ -1076,137 +1071,6 @@ class TestManifestEpochs:
         — which is the failure this whole mechanism exists to prevent."""
         closed = {"epochs": [{"from_episode": 0, "to_episode": 57, "units": self.UNITS_A}]}
         assert epoch_for_episode(closed, 57) is None
-
-
-class TestTactileRuntimes:
-    """The bundles are what actually rebuild depth / force / difference, so the
-    cases that would hand an episode the wrong one are the ones worth pinning."""
-
-    def _manifest(self, serial="GSPS01A25Z0011"):
-        return build_hardware_manifest(
-            robot_type="taccap_gripper",
-            robot_id="taccap_0",
-            role="leader",
-            units=[
-                hardware_manifest_unit(
-                    "left",
-                    endpoints=FakeEndpoints("TCGU01A24Z0001m"),
-                    tactile_serials={"left": serial},
-                    key_prefix="",
-                )
-            ],
-        )
-
-    def test_the_bundle_lands_in_the_dataset_and_the_epoch_points_at_it(self, tmp_path):
-        write_hardware_manifest(tmp_path, self._manifest(), FakeLogger(), runtimes={"GSPS01A25Z0011": b"bundle-v1"})
-        relative = tactile_runtime_for_key(
-            json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text()), 0, "tactile_left"
-        )
-        assert relative.startswith(RUNTIME_DIR)
-        assert (tmp_path / relative).read_bytes() == b"bundle-v1"
-
-    def test_recalibration_keeps_both_bundles_and_splits_the_epoch(self, tmp_path):
-        """Same serial, new reference image. Naming the file by serial alone would
-        have the second run overwrite the first, silently re-deriving the earlier
-        episodes against a calibration they were not recorded with."""
-        write_hardware_manifest(tmp_path, self._manifest(), FakeLogger(), runtimes={"GSPS01A25Z0011": b"bundle-v1"})
-        write_hardware_manifest(
-            tmp_path,
-            self._manifest(),
-            FakeLogger(),
-            episode_index=40,
-            runtimes={"GSPS01A25Z0011": b"bundle-v2-after-maintenance"},
-        )
-
-        manifest = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())
-        early = tactile_runtime_for_key(manifest, 39, "tactile_left")
-        late = tactile_runtime_for_key(manifest, 40, "tactile_left")
-        assert early != late
-        assert (tmp_path / early).read_bytes() == b"bundle-v1"
-        assert (tmp_path / late).read_bytes() == b"bundle-v2-after-maintenance"
-
-    def test_resuming_on_the_same_rig_is_not_reported_as_a_hardware_change(self, tmp_path):
-        """Every session exports different bytes even when nothing was touched:
-        the reference image is re-captured at ``Sensor.create()`` and the bundle
-        is freshly AES-GCM encrypted with a random salt and IV. So each resume
-        legitimately gets its own epoch and its own file — but calling that a
-        hardware change would send someone hunting for a swap that never
-        happened.
-
-        Measured on an untouched unit, the two sessions' bundles move ``Depth``
-        by 2.9e-4 and ``ForceResultant`` by 7.3e-3 — the noise floor, and ~1000x
-        smaller than using another *unit's* bundle. Keeping both is still right:
-        the correct one costs 841 KB.
-        """
-        logger = FakeLogger()
-        for episode, blob in ((0, b"session-1"), (20, b"session-2"), (40, b"session-3")):
-            write_hardware_manifest(
-                tmp_path,
-                self._manifest(),
-                logger,
-                episode_index=episode,
-                runtimes={"GSPS01A25Z0011": blob},
-            )
-        manifest = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())
-        assert len(manifest["epochs"]) == 3
-        assert len(list((tmp_path / RUNTIME_DIR).iterdir())) == 3
-        bundles = [tactile_runtime_for_key(manifest, ep, "tactile_left") for ep in (0, 20, 40)]
-        assert len(set(bundles)) == 3
-        assert [(tmp_path / b).read_bytes() for b in bundles] == [b"session-1", b"session-2", b"session-3"]
-        assert not any("Hardware changed" in message for message in logger.infos)
-        assert all("same hardware" in message for message in logger.infos[1:])
-
-    def test_two_bundles_exported_in_the_same_second_do_not_collide(self, tmp_path):
-        """The name carries a whole-second timestamp, so a fast re-export would
-        otherwise land on one file and the second would win — leaving an epoch
-        pointing at a bundle that is not its own."""
-        for episode, blob in ((0, b"first"), (1, b"second")):
-            write_hardware_manifest(
-                tmp_path, self._manifest(), FakeLogger(), episode_index=episode, runtimes={"GSPS01A25Z0011": blob}
-            )
-        manifest = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())
-        assert (tmp_path / tactile_runtime_for_key(manifest, 0, "tactile_left")).read_bytes() == b"first"
-        assert (tmp_path / tactile_runtime_for_key(manifest, 1, "tactile_left")).read_bytes() == b"second"
-
-    def test_the_filename_reads_as_bench_local_time(self, tmp_path):
-        """A content hash would never collapse duplicates (random salt) while
-        telling a reader nothing. The time is what the file actually is — and in
-        the timezone of the bench it was taken at, so it reads without arithmetic.
-        """
-        write_hardware_manifest(tmp_path, self._manifest(), FakeLogger(), runtimes={"GSPS01A25Z0011": b"b"})
-        (name,) = (p.name for p in (tmp_path / RUNTIME_DIR).iterdir())
-        assert re.fullmatch(r"GSPS01A25Z0011-\d{8}T\d{6}\.bin", name), name
-        stamped = datetime.strptime(name.split("-")[1][: -len(".bin")], "%Y%m%dT%H%M%S")
-        assert abs(stamped - datetime.now(CAPTURE_TZ).replace(tzinfo=None)) < timedelta(minutes=1)
-
-    def test_the_epoch_carries_the_unambiguous_time(self, tmp_path):
-        """The filename is a label a human reads; anything that computes with the
-        time uses this, which carries its offset."""
-        write_hardware_manifest(tmp_path, self._manifest(), FakeLogger(), runtimes={"GSPS01A25Z0011": b"b"})
-        (epoch,) = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())["epochs"]
-        recorded = datetime.fromisoformat(epoch["recorded_at"])
-        assert recorded.utcoffset() == timedelta(hours=8)
-        assert abs(recorded - datetime.now(CAPTURE_TZ)) < timedelta(minutes=1)
-
-    def test_the_clock_alone_does_not_open_an_epoch(self, tmp_path):
-        """``recorded_at`` differs on every run by construction. If it were part
-        of the rig comparison, every resume would look like a hardware change."""
-        for episode in (0, 20):
-            write_hardware_manifest(tmp_path, self._manifest(), FakeLogger(), episode_index=episode)
-        assert len(json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())["epochs"]) == 1
-
-    def test_a_sensor_without_a_bundle_is_absent_not_null(self, tmp_path):
-        """Absent means "not recorded"; a null would read like "recorded as
-        nothing". Consumers check for the key."""
-        write_hardware_manifest(tmp_path, self._manifest(), FakeLogger(), runtimes={})
-        manifest = json.loads((tmp_path / HARDWARE_MANIFEST_PATH).read_text())
-        sensor = manifest["epochs"][0]["units"][0]["tactile_sensors"][0]
-        assert "runtime" not in sensor
-        assert tactile_runtime_for_key(manifest, 0, "tactile_left") is None
-
-    def test_a_pre_bundle_dataset_reports_none_rather_than_guessing(self):
-        legacy = {"robot_type": "taccap_gripper", "units": self._manifest()["units"]}
-        assert tactile_runtime_for_key(legacy, 0, "tactile_left") is None
 
 
 class TestTactileSerialForKey:

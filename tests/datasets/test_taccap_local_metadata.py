@@ -32,17 +32,13 @@ from lerobot.datasets.dataset_tools import (
     _copy_taccap_local_metadata,
     _reject_merge_of_taccap_hardware_metadata,
 )
-from lerobot.utils.constants import TACCAP_HARDWARE_MANIFEST_PATH, TACCAP_RUNTIME_DIR
+from lerobot.utils.constants import TACCAP_HARDWARE_MANIFEST_PATH
 
 
-def make_source(root: Path, *, manifest: bool = True, runtimes: int = 0) -> Path:
+def make_source(root: Path, *, manifest: bool = True) -> Path:
     (root / "meta").mkdir(parents=True, exist_ok=True)
     if manifest:
         (root / TACCAP_HARDWARE_MANIFEST_PATH).write_text('{"robot_type": "bi_taccap_gripper"}')
-    for i in range(runtimes):
-        bundle = root / TACCAP_RUNTIME_DIR / f"GSPS01A29Z{i:04d}-20260824T101500.bin"
-        bundle.parent.mkdir(parents=True, exist_ok=True)
-        bundle.write_bytes(b"runtime-%d" % i)
     return root
 
 
@@ -53,18 +49,8 @@ class TestCopy:
         _copy_taccap_local_metadata(src, dst)
         assert (dst / TACCAP_HARDWARE_MANIFEST_PATH).read_text() == (src / TACCAP_HARDWARE_MANIFEST_PATH).read_text()
 
-    def test_the_runtime_bundles_survive(self, tmp_path):
-        """The manifest names the sensors; the bundles are what actually lets a
-        stream be re-solved. Carrying one without the other is half a record."""
-        src = make_source(tmp_path / "src", runtimes=3)
-        dst = tmp_path / "dst"
-        _copy_taccap_local_metadata(src, dst)
-        assert sorted(p.name for p in (dst / TACCAP_RUNTIME_DIR).iterdir()) == sorted(
-            p.name for p in (src / TACCAP_RUNTIME_DIR).iterdir()
-        )
-
     def test_a_source_without_them_is_not_an_error(self, tmp_path):
-        """Upstream datasets have neither. The copy is additive, never required."""
+        """Upstream datasets have no manifest. The copy is additive, never required."""
         src = make_source(tmp_path / "src", manifest=False)
         dst = tmp_path / "dst"
         _copy_taccap_local_metadata(src, dst)

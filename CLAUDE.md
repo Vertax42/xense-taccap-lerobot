@@ -88,16 +88,13 @@ repeated per epoch so readers of older files keep working; `manifest_robot_ids`
 reads both. An unlabelled dataset (recorded before `--robot.id` was required) is
 not a mismatch — same reading as the open epoch above.
 
-Each tactile sensor's **runtime bundle** goes in beside it, at
-`meta/runtimes/<serial>-<local time>.bin` (`RUNTIME_DIR`), with the epoch's
-sensors pointing at their own. Deriving depth / force / difference from the
-recorded `rectify` stream needs the bundle that was current **when the episodes
-were recorded** — it carries the reference image captured at `Sensor.create()`,
-and a sensor that comes back from maintenance keeps its serial but produces a
-different bundle, which is why the name is timestamped and why a new bundle
-opens its own epoch. Solving against the wrong one does not fail: an untouched
-gel returns plausible depth and force. So `tactile_runtime_for_key` returning
-`None` means **skip derivation**, never "use whichever bundle is nearest".
+Tactile **runtime bundles are no longer recorded** (they used to sit at
+`meta/runtimes/<serial>-<time>.bin` with a `runtime` key per sensor). The only
+per-sensor part of a bundle is the reference image, and the dataset already
+carries it — the first `rectify` frame of each episode; everything else in the
+solver is fixed per sensor _model_. Downstream (TacFlow) rebuilds depth / force /
+difference from the stream plus the serial in this manifest, so the manifest is
+still the one thing that must survive every conversion.
 
 ### On mis-burned / mis-installed hardware
 
