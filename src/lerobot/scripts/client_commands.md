@@ -29,8 +29,8 @@ camera shares that same connection, so it needs the headset app streaming too.
 
 ## Teleoperate (live Rerun visualization)
 
-`taccap_gripper` / `bi_taccap_gripper` are **self-driven** (sensors only) — there is no
-taccap teleoperator, so **no `--teleop` is required**. `lerobot-teleoperate` just streams
+`taccap_gripper` / `bi_taccap_gripper` / `xtac_umi_g1` are all **self-driven** (sensors
+only) — there is no taccap teleoperator, so **no `--teleop` is required**. `lerobot-teleoperate` just streams
 `get_observation()` to Rerun.
 
 `--display_data=true` applies a blueprint rather than letting Rerun auto-lay-out, which
@@ -51,17 +51,43 @@ live Pico4 pose, trailing the path it has swept — the same effect as the SDK's
 drops that view only, leaving the rest of the layout in place, and it auto-skips when
 `--robot.enable_tracker=false` since there is no pose to draw. Same flag on `lerobot-record`.
 
-### Bimanual (`bi_taccap_gripper`)
+### Bimanual, no headset (`bi_taccap_gripper`)
 
 ```bash
 lerobot-teleoperate \
     --robot.type=bi_taccap_gripper \
     --robot.id=0 \
     --fps=30 \
-    --display_data=true \
-    --robot.enable_tracker=false \
-    --robot.enable_head_camera=false
+    --display_data=true
 ```
+
+Two grippers, four tactile pads, two wrist cameras, two Pico4 trackers — 20 state
+dimensions and 6 camera keys.
+
+### Bimanual + headset (`xtac_umi_g1`)
+
+```bash
+lerobot-teleoperate \
+    --robot.type=xtac_umi_g1 \
+    --robot.id=0 \
+    --fps=30 \
+    --display_data=true
+```
+
+The same rig plus the Pico headset: 29 state dimensions (20 + the 9-component
+`head_camera.*` pose) and 8 camera keys (6 + `left_head` / `right_head`). The 3D view
+gains the headset marker.
+
+**The headset is the robot type, not a flag.** `--robot.enable_head_camera` is no longer
+something you set — passing a value that contradicts the type is an error naming the type
+to use instead. It reads as bureaucracy until you see what it prevents: `robot_type` in a
+recorded dataset is written from `robot.name`, a class attribute, so a head-enabled run
+under `bi_taccap_gripper` recorded 29 dimensions and 8 cameras under a label meaning 20
+and 6, and nothing at record time could notice. Twelve datasets were mislabelled that way
+before it was caught downstream.
+
+The single-arm `taccap_gripper` still takes `--robot.enable_head_camera=true`; it has no
+headset variant type.
 
 ['PC2310MLL4150713G', 'PC2310MLL4150387G']
 
@@ -89,15 +115,8 @@ A pinned side is used verbatim (no enumeration, no rule check); un-pinned sides 
 auto-discover. Other knobs: `--robot.role=follower` (bind follower units), `--robot.gripper_open_rad`,
 `--robot.tactile_fps`, `--robot.wrist_camera_width/height/fps`.
 
-The bimanual rig records the Pico headset by switching robot type — the headset is
-part of the type, not a flag, so the recorded `robot_type` and the recorded shape
-cannot disagree:
-
-```bash
-    --robot.type=xtac_umi_g1 \
-    --robot.head_camera_eyes=both \
-```
-
+Headset options apply to `--robot.type=xtac_umi_g1` (and to `taccap_gripper` with
+`--robot.enable_head_camera=true`). `--robot.head_camera_eyes=both` is the default;
 `head_camera_width`/`height` are **per eye** and default to 640x480, the headset app's
 own default. Only that, 1024x768 and 1280x960 are accepted — all 4:3, matching the sensor
 — and an unlisted size is an error rather than a silent resize, as is a first frame whose
@@ -133,11 +152,15 @@ Recording is self-driven (`self_driven_record_loop`, shifted-frame: `action[t]` 
 `--robot.id` is a **required station label** — one per rig, and a bimanual rig is
 one rig. It names the seat, not the hardware in it, so it survives a gripper swap.
 
-**Pass a number.** `--robot.id=0` is stored as `taccap_0` on a single rig and
-`bi_taccap_0` on a bimanual one: a bare number is expanded against `--robot.type`
-minus its `_gripper` suffix, so the label cannot disagree with the rig it names.
-Anything not all digits is taken verbatim, so an existing `--robot.id=taccap_0`
-keeps working.
+**Pass a number.** `--robot.id=0` is stored as `taccap_0` on a single rig,
+`bi_taccap_0` on a bimanual one and `xtac_umi_g1_0` on the headset rig: a bare number is
+expanded against `--robot.type` minus any `_gripper` suffix, so the label cannot disagree
+with the rig it names. Anything not all digits is taken verbatim, so an existing
+`--robot.id=taccap_0` keeps working.
+
+The headset rig gets a station label of its own rather than sharing `bi_taccap_<n>`,
+because the manifest below keys provenance on `robot_id` — two robot types answering to
+one station id would leave a run's own manifest unable to say which rig recorded it.
 
 Upstream leaves it optional; both TacCap configs reject a
 missing or blank one in `__post_init__`, so the run stops at CLI-parse time rather
@@ -266,7 +289,30 @@ many-core server:
 turn it back on if the hardware is capable. On a GPU-less host it is not, so the
 suggestion does not apply — leaving it off is deliberate.
 
-### Bimanual (`bi_taccap_gripper`)
+### Bimanual, no headset (`bi_taccap_gripper`)
+
+Records 20 state dimensions and 6 camera keys.
+
+```bash
+lerobot-record \
+    --robot.type=bi_taccap_gripper \
+    --robot.id=0 \
+    --dataset.repo_id=Xense/taccap-g1-test-0722 \
+    --dataset.single_task="Pick up the cube" \
+    --dataset.num_episodes=2 \
+    --dataset.fps=30 \
+    --dataset.episode_time_s=60 \
+    --dataset.reset_time_s=30 \
+    --dataset.streaming_encoding=true \
+    --dataset.push_to_hub=false \
+    --display_data=false
+```
+
+### Bimanual + headset (`xtac_umi_g1`)
+
+Same command with the type swapped. Records 29 state dimensions and 8 camera keys, and
+`meta/info.json` says `xtac_umi_g1` — the label and the shape move together, which is the
+whole reason this is a type rather than a flag.
 
 ```bash
 lerobot-record \
@@ -293,9 +339,10 @@ lerobot-record \
 One gripper, its two tactile pads and its wrist camera, recorded through the same
 `self_driven_record_loop`. Keys are **unprefixed** (`tcp.*`, `gripper.pos`,
 `tactile_left` / `tactile_right`, `wrist_cam`), so a single-arm dataset is not a
-column subset of a bimanual one. `--robot.enable_head_camera` works here too, and the
-head keys are unprefixed the same way on both robots (`left_head` / `right_head` name the
-headset's eyes, not the arms).
+column subset of a bimanual one. `--robot.enable_head_camera=true` still works **here**
+— the single arm has no headset variant type — and the head keys are unprefixed the same
+way on both robots (`left_head` / `right_head` name the headset's eyes, not the arms).
+On the bimanual rig the equivalent is `--robot.type=xtac_umi_g1`.
 
 `--robot.side` is only needed when both grippers are plugged in; a lone unit
 auto-resolves, and so does its Pico4 tracker (side from the serial's 2nd-to-last

@@ -679,7 +679,11 @@ decision instead of drifting apart.
   per eye**. `--robot.head_camera_width/_height` accept `640x480` (default), `1024x768` or
   `1280x960`, and must match the headset app's Resolution setting;
   `--robot.head_camera_eyes=left` (or `right`) records a single eye. It shares the
-  XenseVR SDK connection with the tracker, so the headset app must be streaming. There is
+  XenseVR SDK connection with the tracker, so the headset app must be streaming.
+  **This flag survives only on the single arm.** The bimanual rig records the headset by
+  robot type instead — `--robot.type=xtac_umi_g1` — so that the recorded `robot_type`
+  and the recorded shape cannot disagree; see [`xtac_umi_g1`](../xtac_umi_g1/README.md).
+  There is
   **one headset**, so this is the same view the bimanual robot records — running two
   single-arm processes does not give two independent head views. Details:
   [`bi_taccap_gripper`](../bi_taccap_gripper/README.md).
